@@ -1,0 +1,35 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-added-large-files
+        args: ['--maxkb=500']
+      - id: no-commit-to-branch
+        args: ['--branch', 'main']
+
+  - repo: local
+    hooks:
+      - id: ruff
+        name: ruff (lint)
+        entry: bash -c 'cd backend && poetry run ruff check --fix .'
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: black
+        name: black (format)
+        entry: bash -c 'cd backend && poetry run black --check .'
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: mypy
+        name: mypy (typecheck)
+        entry: bash -c 'cd backend && poetry run mypy app/'
+        language: system
+        types: [python]
+        pass_filenames: false
