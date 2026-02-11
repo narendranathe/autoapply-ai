@@ -82,8 +82,8 @@ class ResumeValidator:
 
     # Patterns for detecting invented metrics
     METRIC_PATTERN = re.compile(
-    r"\b(\d+(?:\.\d+)?[%+]|\$[\d,]+[KMB]?|\d+(?:\.\d+)?x|\d+(?:\.\d+)?\+?\s*(?:users?|customers?|clients?|team|people|engineers?)|\d+(?:\.\d+)?[KMB])\b",
-    re.IGNORECASE,
+        r"(?:\b|^)(?:\d+(?:\.\d+)?[%+]|\$[\d,]+[KMB]?|\d+(?:\.\d+)?x|\d+(?:\.\d+)?\+?\s*(?:users?|customers?|clients?|team|people|engineers?)|\d+(?:\.\d+)?[KMB])(?=\s|$|[.,;!?])",
+        re.IGNORECASE,
     )
 
     def validate(
@@ -271,8 +271,8 @@ class ResumeValidator:
         result: ValidationResult,
     ) -> None:
         """Rule 6: No invented numbers or metrics."""
-        original_metrics = set(self.METRIC_PATTERN.findall(original_text.lower()))
-        rewritten_metrics = set(self.METRIC_PATTERN.findall(rewritten.lower()))
+        original_metrics = set(m.strip() for m in self.METRIC_PATTERN.findall(original_text.lower()))
+        rewritten_metrics = set(m.strip() for m in self.METRIC_PATTERN.findall(rewritten.lower()))
 
         new_metrics = rewritten_metrics - original_metrics
         if new_metrics:

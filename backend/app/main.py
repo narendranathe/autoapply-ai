@@ -16,6 +16,7 @@ from app.middleware.rate_limit import RateLimitMiddleware
 from app.middleware.request_id import RequestIDMiddleware
 from app.routers import health
 from app.routers import resume
+from app.routers import applications
 
 
 @asynccontextmanager
@@ -71,6 +72,9 @@ def create_app() -> FastAPI:
     # Routers
     app.include_router(health.router, tags=["Health"])
     app.include_router(resume.router, prefix = "/api/v1/resume", tags = ["Resume"])
+    app.include_router(applications.router, prefix="/api/v1/applications", tags=["Applications"])
 
     return app
+
+
 
