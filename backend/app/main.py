@@ -1,5 +1,5 @@
-"""
-AutoApply AI — FastAPI Application Factory.
+﻿"""
+AutoApply AI â€” FastAPI Application Factory.
 """
 
 from contextlib import asynccontextmanager
@@ -15,6 +15,7 @@ from app.middleware.logging_middleware import StructuredLoggingMiddleware
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.middleware.request_id import RequestIDMiddleware
 from app.routers import health
+from app.routers import resume
 
 
 @asynccontextmanager
@@ -69,5 +70,7 @@ def create_app() -> FastAPI:
 
     # Routers
     app.include_router(health.router, tags=["Health"])
+    app.include_router(resume.router, prefix = "/api/v1/resume", tags = ["Resume"])
 
     return app
+
