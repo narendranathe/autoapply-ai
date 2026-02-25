@@ -1,8 +1,25 @@
-// Typed API client — talks to the FastAPI backend at localhost:8000
+// Typed API client — talks to the FastAPI backend (URL configurable via options page)
 
 import type { ATSScoreResult, ResumeCard } from "./types";
 
-const API_BASE = "http://localhost:8000/api/v1";
+const API_DEFAULT = "http://localhost:8000/api/v1";
+
+// Resolved at startup from chrome.storage; falls back to localhost for dev.
+let _apiBase = API_DEFAULT;
+
+// Read once on module load, then keep in sync with storage changes.
+chrome.storage.local.get("apiBaseUrl").then((data) => {
+  if (data.apiBaseUrl) _apiBase = data.apiBaseUrl as string;
+});
+
+chrome.storage.onChanged.addListener((changes) => {
+  if (changes.apiBaseUrl?.newValue) _apiBase = changes.apiBaseUrl.newValue as string;
+  if (changes.apiBaseUrl && !changes.apiBaseUrl.newValue) _apiBase = API_DEFAULT;
+});
+
+function getApiBase(): string {
+  return _apiBase;
+}
 
 // ── Auth token ─────────────────────────────────────────────────────────────
 // Set once when the user signs in via Clerk. Sent on every request so the
@@ -33,7 +50,7 @@ function authHeaders(): Record<string, string> {
 
 async function post<T>(path: string, body: FormData | Record<string, unknown>): Promise<T> {
   const isForm = body instanceof FormData;
-  const resp = await fetch(`${API_BASE}${path}`, {
+  const resp = await fetch(`${getApiBase()}${path}`, {
     method: "POST",
     headers: isForm
       ? authHeaders()
@@ -48,7 +65,7 @@ async function post<T>(path: string, body: FormData | Record<string, unknown>): 
 }
 
 async function get<T>(path: string, params?: Record<string, string>): Promise<T> {
-  const url = new URL(`${API_BASE}${path}`);
+  const url = new URL(`${getApiBase()}${path}`);
   if (params) Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
   const resp = await fetch(url.toString(), { headers: authHeaders() });
   if (!resp.ok) throw new Error(`API GET ${path} failed (${resp.status})`);
