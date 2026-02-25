@@ -145,10 +145,24 @@ jobs:
   docker:
     name: Docker build
     runs-on: ubuntu-latest
+    # continue-on-error: transient Docker Hub 522/429 errors must not fail
+    # the critical backend + extension jobs. This job is a build-validity check only.
+    continue-on-error: true
     if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Log in to Docker Hub
+        # Authenticated pulls: 200/6h per account vs ~100/6h shared for anonymous.
+        # Eliminates 522/429 rate-limit errors on shared GitHub Actions IP ranges.
+        # Requires DOCKERHUB_USERNAME + DOCKERHUB_TOKEN repo secrets (Settings → Secrets).
+        # If secrets are absent the step is skipped (no failure).
+        if: ${{ secrets.DOCKERHUB_USERNAME != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

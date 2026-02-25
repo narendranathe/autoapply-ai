@@ -175,6 +175,32 @@ Extension sends `X-Clerk-User-Id` from `chrome.storage.local` (set once at optio
 ### Docker Desktop context
 On Windows, Docker Desktop uses `//./pipe/dockerDesktopLinuxEngine` but the default context uses `//./pipe/docker_engine`. Switching context to `default` after ensuring Docker Desktop is running resolves this.
 
+### Docker build CI — HTTP 522 from Docker Hub
+```
+ERROR: failed to fetch oauth token: unexpected status ... 522
+```
+HTTP 522 is a Cloudflare "origin connection timed out" error. GitHub Actions runners share IP ranges that hit Docker Hub's anonymous pull rate limits (~100 pulls/6h per shared IP block). Under load, Docker Hub returns 522/429 even before reaching the rate limit.
+
+**Fix 1 — Docker Hub login** (preferred): Authenticated pulls get 200/6h *per account*, isolating you from shared-IP exhaustion. Add two repo secrets to GitHub (`Settings → Secrets and variables → Actions`):
+- `DOCKERHUB_USERNAME` — your Docker Hub username (free account)
+- `DOCKERHUB_TOKEN` — a Docker Hub access token (hub.docker.com → Account Settings → Personal Access Tokens → `Read-only`)
+
+The CI `docker/login-action@v3` step is conditioned on `secrets.DOCKERHUB_USERNAME != ''` — it's skipped gracefully if secrets are absent.
+
+**Fix 2 — `continue-on-error: true`** (defence in depth): The Docker job is a build-validity check only, not a deployment gate. A transient Docker Hub outage should not block the critical `backend` and `extension` CI jobs from completing. The job still shows as failed/neutral in the UI so you know it happened.
+
+### Dockerfile `COPY docs/ ./docs/` error
+```
+ERROR: "/docs": not found
+```
+`docs/` lives at the project root but the Docker build context is `./backend`. Docker cannot reach outside its build context. The fix is to remove `COPY docs/ ./docs/` — `_load_doc()` in `resume_generator.py` already returns `""` gracefully when files are missing. Resume generation in Docker works without the personal config markdown (which is a local-dev concern anyway).
+
+### `python-magic-bin` fails on Linux
+```
+RuntimeError: Unable to find installation candidates for python-magic-bin (0.4.14)
+```
+`python-magic-bin` is a Windows-only package that bundles `libmagic.dll`. It has no Linux build and was never imported anywhere in the codebase. Removed from `pyproject.toml` and regenerated `poetry.lock`.
+
 ---
 
 ## Architectural Decisions
