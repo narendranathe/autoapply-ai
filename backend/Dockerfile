@@ -26,7 +26,6 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 COPY app/ ./app/
 COPY alembic/ ./alembic/
 COPY alembic.ini ./
-COPY docs/ ./docs/
 
 # Startup script
 COPY start.sh ./
