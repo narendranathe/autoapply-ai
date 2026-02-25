@@ -1,9 +1,10 @@
-version: "3.9"
+# Local development — starts PostgreSQL + Redis
+# Usage: docker compose up -d
+# Then: cd backend && poetry run uvicorn app.main:create_app --factory --reload
 
 services:
   db:
-    image: postgres:15-alpine
-    container_name: autoapply-db
+    image: postgres:16-alpine
     environment:
       POSTGRES_DB: autoapply
       POSTGRES_USER: autoapply
@@ -11,38 +12,48 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U autoapply -d autoapply"]
+      test: ["CMD-SHELL", "pg_isready -U autoapply"]
       interval: 5s
       timeout: 5s
       retries: 5
 
-  db-test:
-    image: postgres:15-alpine
-    container_name: autoapply-db-test
+  db_test:
+    image: postgres:16-alpine
     environment:
       POSTGRES_DB: autoapply_test
       POSTGRES_USER: autoapply
       POSTGRES_PASSWORD: testpassword
     ports:
       - "5433:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U autoapply -d autoapply_test"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+    volumes:
+      - postgres_test_data:/var/lib/postgresql/data
 
   redis:
     image: redis:7-alpine
-    container_name: autoapply-redis
     ports:
       - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --save 60 1 --loglevel warning
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
-      timeout: 5s
+      timeout: 3s
       retries: 5
 
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    profiles:
+      - ollama  # Only start with: docker compose --profile ollama up
+
 volumes:
-  pgdata:
+  postgres_data:
+  postgres_test_data:
+  redis_data:
+  ollama_data:

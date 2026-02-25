@@ -605,6 +605,54 @@ def _ats_to_dict(r: ATSResult) -> dict:
     }
 
 
+# ── Download ────────────────────────────────────────────────────────────────
+
+
+@router.get("/download/{resume_id}")
+async def download_resume_file(
+    resume_id: uuid.UUID,
+    fmt: str = "tex",  # "tex" | "markdown"
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Download a resume file from the vault.
+
+    fmt=tex       → returns the LaTeX source (.tex)
+    fmt=markdown  → returns the markdown preview (.md)
+    """
+    from fastapi.responses import Response
+
+    result = await db.execute(
+        select(Resume).where(Resume.id == resume_id, Resume.user_id == user.id)
+    )
+    resume = result.scalar_one_or_none()
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found")
+
+    if fmt == "markdown":
+        content = resume.markdown_content or ""
+        media_type = "text/markdown"
+        ext = "md"
+    else:
+        content = resume.latex_content or resume.raw_text or ""
+        media_type = "application/x-tex"
+        ext = "tex"
+
+    if not content:
+        raise HTTPException(status_code=404, detail=f"No {fmt} content available for this resume")
+
+    filename = resume.recruiter_filename or f"{resume.version_tag or resume.id}.{ext}"
+    if not filename.endswith(f".{ext}"):
+        filename = f"{filename.rsplit('.', 1)[0]}.{ext}"
+
+    return Response(
+        content=content.encode("utf-8"),
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 # ── Sync markdown (offline edit drain) ─────────────────────────────────────
 
 

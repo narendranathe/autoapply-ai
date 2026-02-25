@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AutoApply AI — Settings</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body {
+        font-family: system-ui, -apple-system, sans-serif;
+        background: #0f0f1a;
+        color: #e2e8f0;
+        min-height: 100vh;
+        display: flex;
+        justify-content: center;
+        padding: 40px 20px;
+      }
+      .container { max-width: 520px; width: 100%; }
+      .header { display: flex; align-items: center; gap: 12px; margin-bottom: 32px; }
+      .logo { font-size: 28px; }
+      .title { font-size: 20px; font-weight: 700; color: #a78bfa; }
+      .card {
+        background: #13131f;
+        border: 1px solid #1e1e3a;
+        border-radius: 12px;
+        padding: 24px;
+        margin-bottom: 20px;
+      }
+      .card h2 { font-size: 14px; font-weight: 700; color: #c4b5fd; margin-bottom: 16px; letter-spacing: 0.05em; text-transform: uppercase; }
+      label { display: block; font-size: 13px; color: #9ca3af; margin-bottom: 6px; }
+      input[type="text"], input[type="password"] {
+        width: 100%;
+        padding: 10px 12px;
+        background: #0f0f1a;
+        border: 1px solid #1e1e3a;
+        border-radius: 8px;
+        color: #f1f5f9;
+        font-size: 13px;
+        outline: none;
+        transition: border-color 0.15s;
+      }
+      input:focus { border-color: #4f46e5; }
+      .hint { font-size: 11px; color: #4b5563; margin-top: 6px; line-height: 1.4; }
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 10px 20px;
+        border-radius: 8px;
+        border: none;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: opacity 0.15s;
+        margin-top: 16px;
+      }
+      .btn:hover { opacity: 0.85; }
+      .btn-primary { background: #4f46e5; color: #fff; }
+      .btn-secondary { background: #1e1e3a; color: #a78bfa; }
+      .status {
+        font-size: 12px;
+        margin-top: 12px;
+        padding: 8px 12px;
+        border-radius: 6px;
+        display: none;
+      }
+      .status.ok { background: #064e3b; color: #6ee7b7; display: block; }
+      .status.err { background: #450a0a; color: #fca5a5; display: block; }
+      .status.info { background: #1e1e3a; color: #a78bfa; display: block; }
+      .row { display: flex; gap: 10px; margin-top: 8px; }
+      .tag { background: #1e1e3a; color: #a78bfa; border-radius: 99px; padding: 2px 10px; font-size: 11px; }
+      .sep { height: 1px; background: #1e1e3a; margin: 16px 0; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <span class="logo">🎯</span>
+        <span class="title">AutoApply AI — Settings</span>
+      </div>
+
+      <!-- Auth -->
+      <div class="card" id="auth-card">
+        <h2>Authentication</h2>
+        <label for="clerk-user-id">Clerk User ID</label>
+        <input type="text" id="clerk-user-id" placeholder="user_2abc..." />
+        <p class="hint">
+          Find your user ID at <strong>your-app.clerk.com → Users</strong>, or from the
+          backend: <code>GET /api/v1/auth/me</code> after signing in via the web app.
+        </p>
+        <div id="auth-status" class="status"></div>
+        <button class="btn btn-primary" id="save-auth">Save &amp; Verify</button>
+      </div>
+
+      <!-- API -->
+      <div class="card" id="api-card">
+        <h2>Backend API</h2>
+        <label for="api-base">API Base URL</label>
+        <input type="text" id="api-base" placeholder="https://autoapply-ai-api.onrender.com" />
+        <p class="hint">Leave blank to use default (http://localhost:8000).</p>
+        <div id="api-status" class="status"></div>
+        <button class="btn btn-secondary" id="test-api">Test Connection</button>
+        <button class="btn btn-primary" id="save-api" style="margin-left: 8px;">Save</button>
+      </div>
+
+      <!-- LLM Key -->
+      <div class="card">
+        <h2>LLM API Key (optional)</h2>
+        <label for="llm-key">Anthropic / OpenAI / Kimi API Key</label>
+        <input type="password" id="llm-key" placeholder="sk-ant-..." />
+        <p class="hint">Used for resume generation. If blank, the backend falls back to Ollama (if configured) or keyword mode.</p>
+        <div>
+          <label style="margin-top:12px">Provider</label>
+          <select id="llm-provider" style="width:100%;padding:10px 12px;background:#0f0f1a;border:1px solid #1e1e3a;border-radius:8px;color:#f1f5f9;font-size:13px;outline:none;">
+            <option value="anthropic">Anthropic (claude-sonnet-4-6)</option>
+            <option value="openai">OpenAI (gpt-4o)</option>
+            <option value="kimi">Kimi / Moonshot (moonshot-v1-32k)</option>
+            <option value="ollama">Ollama (local)</option>
+          </select>
+        </div>
+        <button class="btn btn-primary" id="save-llm" style="margin-top:16px">Save LLM Settings</button>
+        <div id="llm-status" class="status"></div>
+      </div>
+
+      <!-- Status -->
+      <div class="card">
+        <h2>Status</h2>
+        <div id="status-info" class="status info">Loading...</div>
+      </div>
+    </div>
+
+    <script type="module" src="./options.ts"></script>
+  </body>
+</html>

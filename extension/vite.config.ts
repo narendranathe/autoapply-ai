@@ -34,6 +34,8 @@ export default defineConfig({
         "content/detector": resolve(__dirname, "src/content/detector.ts"),
         // Side panel React app
         "sidepanel/index": resolve(__dirname, "src/sidepanel/index.html"),
+        // Options / settings page
+        "src/options/index": resolve(__dirname, "src/options/index.html"),
       },
       output: {
         entryFileNames: "[name].js",

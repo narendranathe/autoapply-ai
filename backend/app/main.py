@@ -14,7 +14,7 @@ from app.config import settings
 from app.middleware.logging_middleware import StructuredLoggingMiddleware
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.middleware.request_id import RequestIDMiddleware
-from app.routers import applications, health, resume, vault
+from app.routers import applications, auth, health, resume, vault
 
 
 @asynccontextmanager
@@ -50,7 +50,7 @@ def create_app() -> FastAPI:
     # Middleware
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.ALLOWED_ORIGINS,
+        allow_origins=settings.cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -72,5 +72,6 @@ def create_app() -> FastAPI:
     app.include_router(resume.router, prefix="/api/v1/resume", tags=["Resume"])
     app.include_router(applications.router, prefix="/api/v1/applications", tags=["Applications"])
     app.include_router(vault.router, prefix="/api/v1/vault", tags=["Vault"])
+    app.include_router(auth.router, prefix="/api/v1/auth", tags=["Auth"])
 
     return app

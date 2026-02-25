@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import type { Message, PageContext } from "../shared/types";
+import { restoreClerkUserId } from "../shared/api";
 import ApplyMode from "./pages/ApplyMode";
 import JobScout from "./pages/JobScout";
 
@@ -46,6 +47,11 @@ const S = {
 
 export default function App() {
   const [context, setContext] = useState<PageContext | null>(null);
+
+  // Restore auth state from storage on mount
+  useEffect(() => {
+    restoreClerkUserId().catch(console.error);
+  }, []);
 
   // Ask background for current context on mount
   useEffect(() => {

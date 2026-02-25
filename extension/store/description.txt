@@ -1,0 +1,34 @@
+AutoApply AI — Smart Resume Assistant for Job Applications
+
+AutoApply AI is your intelligent job application co-pilot. It automatically detects when you're on a job application page, retrieves your best-matching resume from your personal vault, scores it against the job description in real-time, and helps you fill application forms and answer open-ended questions — all without leaving the page.
+
+KEY FEATURES:
+
+🎯 Smart Resume Vault
+Upload all your past resumes once. AutoApply AI indexes them with TF-IDF similarity so it always retrieves the right one for each company and role.
+
+📊 ATS Score in Real-Time
+See exactly how well your resume matches any job description — keyword coverage, skills gap, quantification score, and actionable suggestions to improve your match rate.
+
+✍️ AI-Powered Q&A Drafts
+For open-ended application questions ("Why do you want to work here?", "Tell us about a challenge"), AutoApply AI generates 3 tailored drafts based on your real work history. Pick the best one and save it for future callback reference.
+
+📋 Form Auto-Fill
+Detected form fields (name, email, phone, LinkedIn) are highlighted with suggested values. Click Fill to populate them instantly.
+
+🔍 Job Scout Mode
+On LinkedIn, Indeed, and Glassdoor job listing pages, see your resume match score for every job on the page — before you even click apply.
+
+📎 Resume Attachment
+Attach your tailored resume PDF directly to the file upload field with one click.
+
+🔒 Privacy First
+All your data stays in your own private GitHub repository and personal database. No third-party data sharing.
+
+SUPPORTED JOB PLATFORMS:
+Greenhouse, Lever, Workday, iCIMS, Taleo, SmartRecruiters, LinkedIn, Indeed, Glassdoor, Ashby, Jobvite, and most careers pages.
+
+REQUIREMENTS:
+- AutoApply AI backend running (self-hosted or Render free tier)
+- Clerk account for authentication (free)
+- Optional: Anthropic/OpenAI API key for AI resume generation

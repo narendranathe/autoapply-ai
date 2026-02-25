@@ -50,6 +50,12 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRATION_MINUTES: int = 60
 
+    # ── Clerk ─────────────────────────────────────────────
+    # CLERK_FRONTEND_API_URL example: https://your-app.clerk.accounts.dev
+    CLERK_FRONTEND_API_URL: str = ""
+    # JWT audience — set to your backend API domain in production
+    CLERK_JWT_AUDIENCE: str = ""
+
     # ── Encryption (for storing user API keys) ────────────
     FERNET_KEY: str = ""
 
