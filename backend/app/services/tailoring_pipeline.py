@@ -10,22 +10,26 @@ This is the main service that ties everything together:
 
 This function is what the API endpoint calls.
 """
+
 import time
 from dataclasses import dataclass
 
 from loguru import logger
 
-from app.services.resume_parser import ResumeParser, ResumeAST
-from app.services.resume_validator import ResumeValidator, ValidationResult
 from app.services.llm_service import (
-    tailor_resume as llm_tailor,
     RewriteStrategy,
 )
+from app.services.llm_service import (
+    tailor_resume as llm_tailor,
+)
+from app.services.resume_parser import ResumeAST, ResumeParser
+from app.services.resume_validator import ResumeValidator, ValidationResult
 
 
 @dataclass
 class TailoringResult:
     """Complete result of the tailoring pipeline."""
+
     # The final bullets (either rewritten or original if rejected)
     bullets: list[str]
     # Was the LLM rewrite accepted by the validator?
@@ -119,7 +123,7 @@ class TailoringPipeline:
                 rewrite_accepted=False,
                 used_fallback=False,
                 summary="Could not parse any bullet points from the resume. "
-                        "Please ensure your resume uses bullet points (•, -, *).",
+                "Please ensure your resume uses bullet points (•, -, *).",
                 validation=None,
                 resume_ast=resume_ast,
                 total_duration_ms=int((time.perf_counter() - total_start) * 1000),

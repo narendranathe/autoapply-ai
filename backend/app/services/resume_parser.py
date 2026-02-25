@@ -19,23 +19,24 @@ USAGE:
     print(ast.skills)        # Extracted skill keywords
     print(ast.to_prompt())   # Formatted for LLM consumption
 """
-import re
+
 import io
+import re
 from dataclasses import dataclass, field
 from enum import Enum
-from pathlib import Path
 
 import docx
 import pdfplumber
 from loguru import logger
 
-
 # ══════════════════════════════════════════════════════════════
 # DATA STRUCTURES
 # ══════════════════════════════════════════════════════════════
 
+
 class ResumeSection(str, Enum):
     """Standard resume sections we detect."""
+
     EXPERIENCE = "experience"
     EDUCATION = "education"
     SKILLS = "skills"
@@ -54,13 +55,14 @@ class ResumeBullet:
     The LLM operates on these individually — it can rephrase the text
     but cannot change the section, company, dates, or add new bullets.
     """
-    text: str                          # The actual bullet text
-    section: ResumeSection             # Which section this belongs to
-    company: str | None = None         # Company/school this belongs to
-    role: str | None = None            # Job title if detected
-    dates: str | None = None           # Date range (e.g., "Jan 2023 - Present")
-    original_index: int = 0            # Position in original resume
-    char_count: int = 0                # Length of original text
+
+    text: str  # The actual bullet text
+    section: ResumeSection  # Which section this belongs to
+    company: str | None = None  # Company/school this belongs to
+    role: str | None = None  # Job title if detected
+    dates: str | None = None  # Date range (e.g., "Jan 2023 - Present")
+    original_index: int = 0  # Position in original resume
+    char_count: int = 0  # Length of original text
 
     def __post_init__(self):
         self.char_count = len(self.text)
@@ -76,6 +78,7 @@ class ResumeAST:
     2. Smart reuse (compare ASTs across applications)
     3. Skill gap analysis (compare skills against JD requirements)
     """
+
     bullets: list[ResumeBullet] = field(default_factory=list)
     skills: set[str] = field(default_factory=set)
     companies: set[str] = field(default_factory=set)
@@ -83,7 +86,7 @@ class ResumeAST:
     dates: set[str] = field(default_factory=set)
     education: list[dict] = field(default_factory=list)
     raw_text: str = ""
-    source_format: str = ""           # "docx" or "pdf"
+    source_format: str = ""  # "docx" or "pdf"
     parse_warnings: list[str] = field(default_factory=list)
 
     @property
@@ -152,6 +155,7 @@ class ResumeAST:
 # PARSER
 # ══════════════════════════════════════════════════════════════
 
+
 class ResumeParser:
     """
     Deterministic resume parser. No LLM involved.
@@ -173,28 +177,20 @@ class ResumeParser:
         ResumeSection.EXPERIENCE: re.compile(
             r"(?i)^(professional\s+)?experience|work\s*history|employment(\s*history)?$"
         ),
-        ResumeSection.EDUCATION: re.compile(
-            r"(?i)^education(al\s*background)?|academic|degrees?$"
-        ),
+        ResumeSection.EDUCATION: re.compile(r"(?i)^education(al\s*background)?|academic|degrees?$"),
         ResumeSection.SKILLS: re.compile(
             r"(?i)^(technical\s+)?skills|technologies|tech\s*stack|competenc(ies|e)|proficienc(ies|y)$"
         ),
-        ResumeSection.PROJECTS: re.compile(
-            r"(?i)^(personal\s+|side\s+)?projects|portfolio$"
-        ),
+        ResumeSection.PROJECTS: re.compile(r"(?i)^(personal\s+|side\s+)?projects|portfolio$"),
         ResumeSection.SUMMARY: re.compile(
             r"(?i)^(professional\s+)?summary|objective|profile|about(\s*me)?$"
         ),
-        ResumeSection.CERTIFICATIONS: re.compile(
-            r"(?i)^certifications?|licenses?|credentials?$"
-        ),
-        ResumeSection.AWARDS: re.compile(
-            r"(?i)^awards?|honors?|achievements?|recognition$"
-        ),
+        ResumeSection.CERTIFICATIONS: re.compile(r"(?i)^certifications?|licenses?|credentials?$"),
+        ResumeSection.AWARDS: re.compile(r"(?i)^awards?|honors?|achievements?|recognition$"),
     }
 
     # ── Date Patterns ─────────────────────────────────────
-    MONTH_PATTERN = r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
+    MONTH_PATTERN = r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"  # noqa: E501
     DATE_RANGE_PATTERN = re.compile(
         rf"({MONTH_PATTERN}\s*\.?\s*\d{{4}})\s*[-–—to]+\s*({MONTH_PATTERN}\s*\.?\s*\d{{4}}|Present|Current)",
         re.IGNORECASE,
@@ -211,17 +207,68 @@ class ResumeParser:
     # ── Common Skills (for extraction from skills sections) ─
     # This is a seed list — extend based on your domain
     COMMON_SKILLS = {
-        "python", "java", "javascript", "typescript", "c++", "c#", "go", "rust",
-        "sql", "nosql", "react", "angular", "vue", "node.js", "express",
-        "django", "flask", "fastapi", "spring", "docker", "kubernetes",
-        "aws", "azure", "gcp", "terraform", "jenkins", "git", "ci/cd",
-        "postgresql", "mysql", "mongodb", "redis", "elasticsearch",
-        "machine learning", "deep learning", "nlp", "computer vision",
-        "pytorch", "tensorflow", "scikit-learn", "pandas", "numpy",
-        "agile", "scrum", "jira", "confluence", "figma",
-        "rest", "graphql", "grpc", "microservices", "api",
-        "linux", "bash", "powershell", "networking",
-        "data engineering", "etl", "spark", "airflow", "kafka", "dbt",
+        "python",
+        "java",
+        "javascript",
+        "typescript",
+        "c++",
+        "c#",
+        "go",
+        "rust",
+        "sql",
+        "nosql",
+        "react",
+        "angular",
+        "vue",
+        "node.js",
+        "express",
+        "django",
+        "flask",
+        "fastapi",
+        "spring",
+        "docker",
+        "kubernetes",
+        "aws",
+        "azure",
+        "gcp",
+        "terraform",
+        "jenkins",
+        "git",
+        "ci/cd",
+        "postgresql",
+        "mysql",
+        "mongodb",
+        "redis",
+        "elasticsearch",
+        "machine learning",
+        "deep learning",
+        "nlp",
+        "computer vision",
+        "pytorch",
+        "tensorflow",
+        "scikit-learn",
+        "pandas",
+        "numpy",
+        "agile",
+        "scrum",
+        "jira",
+        "confluence",
+        "figma",
+        "rest",
+        "graphql",
+        "grpc",
+        "microservices",
+        "api",
+        "linux",
+        "bash",
+        "powershell",
+        "networking",
+        "data engineering",
+        "etl",
+        "spark",
+        "airflow",
+        "kafka",
+        "dbt",
     }
 
     def parse_docx(self, file_bytes: bytes) -> ResumeAST:
@@ -327,9 +374,7 @@ class ResumeParser:
                 ast.dates.add(single_date)
 
             # ── Detect bullet points ──────────────────────
-            is_bullet = bool(
-                self.BULLET_CHARS.match(line) or self.NUMBERED_BULLET.match(line)
-            )
+            is_bullet = bool(self.BULLET_CHARS.match(line) or self.NUMBERED_BULLET.match(line))
 
             if is_bullet:
                 # Clean the bullet character prefix

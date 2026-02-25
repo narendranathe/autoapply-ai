@@ -11,7 +11,7 @@ STRATEGIES (in priority order):
 We don't use LaTeX because 95% of users have DOCX/PDF resumes.
 LaTeX support can be added later as a power-user option.
 """
-import io
+
 import subprocess
 import tempfile
 from pathlib import Path
@@ -23,6 +23,7 @@ from app.middleware.circuit_breaker import pdf_circuit
 
 class PDFGenerationError(Exception):
     """Raised when PDF generation fails."""
+
     pass
 
 
@@ -78,8 +79,10 @@ class PDFService:
                     [
                         lo_binary,
                         "--headless",
-                        "--convert-to", "pdf",
-                        "--outdir", tmpdir,
+                        "--convert-to",
+                        "pdf",
+                        "--outdir",
+                        tmpdir,
                         str(input_path),
                     ],
                     capture_output=True,

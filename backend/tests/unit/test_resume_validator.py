@@ -11,9 +11,10 @@ These tests verify that the validator catches:
 IMPORTANT: These are the most critical tests in the project.
 If the validator fails, hallucinated resumes reach users.
 """
+
 import pytest
 
-from app.services.resume_parser import ResumeParser, ResumeAST, ResumeBullet, ResumeSection
+from app.services.resume_parser import ResumeAST, ResumeBullet, ResumeSection
 from app.services.resume_validator import ResumeValidator
 
 
@@ -61,7 +62,7 @@ class TestResumeValidator:
     def test_valid_rewrite_passes(self, validator, sample_ast):
         """A good rewrite should pass validation."""
         rewritten = [
-            "Spearheaded development of distributed caching infrastructure serving 10M requests/day",
+            "Spearheaded development of distributed caching infrastructure serving 10M requests/day",  # noqa: E501
             "Optimized API latency by 40% through query tuning and connection pooling improvements",
             "Engineered real-time inventory tracking pipeline processing 500K events/hour",
         ]
@@ -100,7 +101,9 @@ class TestResumeValidator:
         ]
         result = validator.validate(sample_ast, rewritten)
         # Should flag "March 2020" as invented
-        has_date_violation = any("DATE" in v.upper() or "date" in v.lower() for v in result.violations)
+        has_date_violation = any(
+            "DATE" in v.upper() or "date" in v.lower() for v in result.violations
+        )
         assert has_date_violation or len(result.violations) > 0
 
     def test_invented_metrics_fails(self, validator, sample_ast):

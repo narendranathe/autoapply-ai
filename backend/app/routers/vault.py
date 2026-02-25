@@ -1,0 +1,703 @@
+"""
+Vault Router — Resume vault CRUD, semantic retrieval, ATS scoring, and resume generation.
+
+Endpoints:
+  POST   /api/v1/vault/upload              Upload resume file → parse → embed → store
+  GET    /api/v1/vault/resumes             List all user resumes (paginated)
+  DELETE /api/v1/vault/resumes/{id}        Delete a resume
+  POST   /api/v1/vault/retrieve            Semantic retrieval by company + optional JD
+  POST   /api/v1/vault/ats-score           Score a stored resume against a JD
+  POST   /api/v1/vault/generate            Generate full LaTeX resume
+  POST   /api/v1/vault/generate/summary    Generate professional summary only
+  POST   /api/v1/vault/generate/bullets    Generate tailored bullets only
+  POST   /api/v1/vault/generate/answers    Generate open-ended Q&A drafts
+  GET    /api/v1/vault/history/{company}   All resumes ever used for a company
+  GET    /api/v1/vault/answers/{company}   Previously saved answers for a company
+  POST   /api/v1/vault/answers/save        Save accepted answer to DB
+  GET    /api/v1/vault/github/versions     List versions/ directory on GitHub
+"""
+
+import hashlib
+import uuid
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from loguru import logger
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.dependencies import get_db
+from app.models.resume import ApplicationAnswer, Resume
+from app.models.user import User
+from app.services.ats_service import ATSResult, score_resume
+from app.services.embedding_service import build_tfidf_vector
+from app.services.github_service import GitHubService
+from app.services.resume_generator import (
+    PersonalProfile,
+    generate_answer_drafts,
+    generate_full_latex_resume,
+)
+from app.services.resume_parser import ResumeParser
+from app.services.retrieval_agent import ResumeWithScore, RetrievalAgent
+
+router = APIRouter()
+_retrieval_agent = RetrievalAgent()
+_resume_parser = ResumeParser()
+_github_service = GitHubService()
+
+
+# ── Placeholder user resolution ────────────────────────────────────────────
+# TODO: Replace with real Clerk auth once auth is wired up.
+
+
+async def _get_placeholder_user(db: AsyncSession) -> User:
+    """Temporary: return the first user in DB for development."""
+    result = await db.execute(select(User).limit(1))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="No user found. Create a user first via /api/v1/users.",
+        )
+    return user
+
+
+# ── Upload ─────────────────────────────────────────────────────────────────
+
+
+@router.post("/upload", status_code=status.HTTP_201_CREATED)
+async def upload_resume(
+    file: UploadFile = File(...),
+    version_tag: str | None = Form(None),
+    target_company: str | None = Form(None),
+    target_role: str | None = Form(None),
+    is_base_template: bool = Form(False),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Upload a resume file (PDF, DOCX, or .tex) to the vault.
+
+    Parses content, builds TF-IDF vector, stores in DB.
+    Personal data stored here is for retrieval/ATS only — canonical source
+    is the user's private GitHub vault.
+    """
+    user = await _get_placeholder_user(db)
+
+    file_bytes = await file.read()
+    filename = file.filename or "resume"
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "unknown"
+
+    if ext not in {"pdf", "docx", "tex", "txt"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported file type: {ext}. Supported: pdf, docx, tex, txt",
+        )
+
+    # Parse content
+    raw_text = ""
+    latex_content = None
+    parse_result = None
+
+    try:
+        if ext == "pdf":
+            parse_result = _resume_parser.parse_pdf(file_bytes)
+        elif ext == "docx":
+            parse_result = _resume_parser.parse_docx(file_bytes)
+        elif ext == "tex":
+            raw_text = file_bytes.decode("utf-8", errors="replace")
+            latex_content = raw_text
+        else:
+            raw_text = file_bytes.decode("utf-8", errors="replace")
+
+        if parse_result:
+            raw_text = " ".join(b.text for b in parse_result.bullets)
+    except Exception as e:
+        logger.warning(f"Parse error for {filename}: {e}")
+        raw_text = file_bytes.decode("utf-8", errors="replace")
+
+    # Build TF-IDF vector
+    tfidf_vec = build_tfidf_vector(raw_text) if raw_text else {}
+
+    # Extract structured data from parse result
+    skills = list(parse_result.skills) if parse_result else []
+    companies = list(parse_result.companies) if parse_result else []
+    bullet_count = len(parse_result.bullets) if parse_result else 0
+
+    # Compute ATS score if we have a target company/role context
+    ats_score_val = None
+
+    # Build resume row
+    resume = Resume(
+        user_id=user.id,
+        filename=filename,
+        file_type=ext,
+        raw_text=raw_text[:50000],  # cap at 50K chars
+        latex_content=latex_content,
+        bullet_count=bullet_count,
+        skills_detected=skills,
+        companies_found=companies,
+        tfidf_vector=tfidf_vec,
+        version_tag=version_tag,
+        recruiter_filename=f"{user.email_hash[:8]}.pdf",  # placeholder; overridden on generate
+        is_base_template=is_base_template,
+        is_generated=False,
+        target_company=target_company,
+        target_role=target_role,
+        ats_score=ats_score_val,
+    )
+
+    db.add(resume)
+    await db.commit()
+    await db.refresh(resume)
+
+    logger.info(f"Uploaded resume {filename} for user {user.id} (id={resume.id})")
+
+    return {
+        "resume_id": str(resume.id),
+        "filename": filename,
+        "file_type": ext,
+        "bullet_count": bullet_count,
+        "skills_detected": skills[:10],
+        "version_tag": version_tag,
+        "parse_warnings": parse_result.parse_warnings if parse_result else [],
+    }
+
+
+# ── List ───────────────────────────────────────────────────────────────────
+
+
+@router.get("/resumes")
+async def list_resumes(
+    page: int = 1,
+    per_page: int = 20,
+    company: str | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """List all resumes in the user's vault, newest first."""
+    user = await _get_placeholder_user(db)
+
+    stmt = select(Resume).where(Resume.user_id == user.id)
+    if company:
+        stmt = stmt.where(Resume.target_company.ilike(f"%{company}%"))
+    stmt = stmt.order_by(Resume.created_at.desc()).offset((page - 1) * per_page).limit(per_page)
+
+    result = await db.execute(stmt)
+    resumes = result.scalars().all()
+
+    return {
+        "items": [
+            {
+                "resume_id": str(r.id),
+                "filename": r.filename,
+                "version_tag": r.version_tag,
+                "target_company": r.target_company,
+                "target_role": r.target_role,
+                "ats_score": r.ats_score,
+                "bullet_count": r.bullet_count,
+                "is_base_template": r.is_base_template,
+                "is_generated": r.is_generated,
+                "github_path": r.github_path,
+                "created_at": r.created_at.isoformat(),
+            }
+            for r in resumes
+        ],
+        "page": page,
+        "per_page": per_page,
+    }
+
+
+# ── Delete ─────────────────────────────────────────────────────────────────
+
+
+@router.delete("/resumes/{resume_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_resume(
+    resume_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    user = await _get_placeholder_user(db)
+    result = await db.execute(
+        select(Resume).where(Resume.id == resume_id, Resume.user_id == user.id)
+    )
+    resume = result.scalar_one_or_none()
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found")
+
+    await db.delete(resume)
+    await db.commit()
+
+
+# ── Retrieve ───────────────────────────────────────────────────────────────
+
+
+@router.post("/retrieve")
+async def retrieve_resumes(
+    company_name: str = Form(...),
+    jd_text: str | None = Form(None),
+    top_k: int = Form(5),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Semantic retrieval: returns the most relevant resumes for a company + JD.
+
+    - Company name alone → exact/fuzzy match on usage history
+    - Company + JD text → TF-IDF similarity ranked results
+    Returns positioning advice alongside the resume list.
+    """
+    user = await _get_placeholder_user(db)
+
+    if jd_text:
+        advice = await _retrieval_agent.get_positioning_advice(db, user.id, jd_text, company_name)
+        return {
+            "company_history": [_resume_to_dict(r) for r in advice.company_history],
+            "jd_matches": [],  # embedded in advice.best_resume
+            "best_match": _resume_to_dict(advice.best_resume) if advice.best_resume else None,
+            "positioning_summary": advice.positioning_summary,
+            "reuse_recommendation": advice.reuse_recommendation,
+            "ats_result": _ats_to_dict(advice.ats_result) if advice.ats_result else None,
+        }
+    else:
+        history = await _retrieval_agent.retrieve_by_company(db, user.id, company_name)
+        return {
+            "company_history": [_resume_to_dict(r) for r in history],
+            "best_match": _resume_to_dict(history[0]) if history else None,
+            "positioning_summary": None,
+            "reuse_recommendation": "generate_new" if not history else "tweak",
+            "ats_result": None,
+        }
+
+
+# ── ATS Score ──────────────────────────────────────────────────────────────
+
+
+@router.post("/ats-score")
+async def ats_score(
+    jd_text: str = Form(...),
+    resume_id: str | None = Form(None),
+    resume_text: str | None = Form(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Score a resume against a job description.
+    Provide either resume_id (to score a stored resume) or raw resume_text.
+    """
+    user = await _get_placeholder_user(db)
+
+    raw_text = resume_text
+    if resume_id and not raw_text:
+        result = await db.execute(
+            select(Resume.raw_text).where(
+                Resume.id == uuid.UUID(resume_id),
+                Resume.user_id == user.id,
+            )
+        )
+        raw_text = result.scalar_one_or_none()
+        if not raw_text:
+            raise HTTPException(status_code=404, detail="Resume not found or has no text content")
+
+    if not raw_text:
+        raise HTTPException(status_code=400, detail="Provide either resume_id or resume_text")
+
+    ats = score_resume(jd_text, raw_text)
+    return _ats_to_dict(ats)
+
+
+# ── Generate ───────────────────────────────────────────────────────────────
+
+
+@router.post("/generate")
+async def generate_resume(
+    company_name: str = Form(...),
+    role_title: str = Form(...),
+    jd_text: str = Form(...),
+    job_id: str | None = Form(None),
+    # Personal profile (injected by extension from private vault)
+    name: str = Form(...),
+    phone: str = Form(...),
+    email: str = Form(...),
+    linkedin_url: str = Form(...),
+    linkedin_label: str = Form(...),
+    portfolio_url: str = Form(""),
+    portfolio_label: str = Form(""),
+    work_history_text: str = Form(...),
+    education_text: str = Form(""),
+    # LLM config
+    llm_provider: str = Form("anthropic"),
+    llm_api_key: str | None = Form(None),
+    ollama_model: str = Form("llama3.1:8b"),
+    # Base resume for ATS pre-scoring
+    base_resume_id: str | None = Form(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Generate a complete LaTeX resume tailored to the JD.
+
+    Returns: latex_content, markdown_preview, version_tag, recruiter_filename,
+             ats_score_estimate, skills_gap, changes_summary, llm_provider_used
+    """
+    user = await _get_placeholder_user(db)
+
+    # Pre-score with base resume if available
+    ats_result: ATSResult | None = None
+    if base_resume_id:
+        res = await db.execute(
+            select(Resume.raw_text).where(
+                Resume.id == uuid.UUID(base_resume_id),
+                Resume.user_id == user.id,
+            )
+        )
+        raw = res.scalar_one_or_none()
+        if raw:
+            ats_result = score_resume(jd_text, raw)
+
+    profile = PersonalProfile(
+        name=name,
+        phone=phone,
+        email=email,
+        linkedin_url=linkedin_url,
+        linkedin_label=linkedin_label,
+        portfolio_url=portfolio_url,
+        portfolio_label=portfolio_label,
+        work_history_text=work_history_text,
+        education_text=education_text,
+    )
+
+    generated = await generate_full_latex_resume(
+        profile=profile,
+        jd_text=jd_text,
+        company_name=company_name,
+        role_title=role_title,
+        job_id=job_id,
+        ats_result=ats_result,
+        provider=llm_provider,
+        api_key=llm_api_key or "",
+        ollama_model=ollama_model,
+    )
+
+    # Store generated resume in vault
+    tfidf = build_tfidf_vector(work_history_text)
+    new_resume = Resume(
+        user_id=user.id,
+        filename=f"{generated.version_tag}.tex",
+        file_type="tex",
+        raw_text=work_history_text[:50000],
+        latex_content=generated.latex_content,
+        markdown_content=generated.markdown_preview,
+        tfidf_vector=tfidf,
+        version_tag=generated.version_tag,
+        recruiter_filename=generated.recruiter_filename,
+        is_generated=True,
+        target_company=company_name,
+        target_role=role_title,
+        target_jd_hash=hashlib.sha256(jd_text.encode()).hexdigest(),
+        ats_score=generated.ats_score_estimate,
+    )
+    db.add(new_resume)
+    await db.commit()
+    await db.refresh(new_resume)
+
+    logger.info(f"Generated resume {generated.version_tag} for {company_name} / {role_title}")
+
+    return {
+        "resume_id": str(new_resume.id),
+        "version_tag": generated.version_tag,
+        "recruiter_filename": generated.recruiter_filename,
+        "latex_content": generated.latex_content,
+        "markdown_preview": generated.markdown_preview,
+        "ats_score_estimate": generated.ats_score_estimate,
+        "skills_gap": generated.skills_gap,
+        "changes_summary": generated.changes_summary,
+        "llm_provider_used": generated.llm_provider_used,
+        "warnings": generated.generation_warnings,
+    }
+
+
+# ── Generate answers ───────────────────────────────────────────────────────
+
+
+@router.post("/generate/answers")
+async def generate_answers(
+    question_text: str = Form(...),
+    question_category: str = Form("custom"),
+    company_name: str = Form(...),
+    role_title: str = Form(""),
+    jd_text: str = Form(""),
+    work_history_text: str = Form(...),
+    llm_provider: str = Form("anthropic"),
+    llm_api_key: str | None = Form(None),
+    ollama_model: str = Form("llama3.1:8b"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Generate 3 draft answers to an open-ended application question.
+    Each draft is ≤ 250 words, grounded in the user's real work history.
+    """
+    user = await _get_placeholder_user(db)
+
+    # Check for a previously used answer first
+    prev = await _retrieval_agent.get_previous_answer(db, user.id, question_text, company_name)
+
+    drafts = await generate_answer_drafts(
+        question_text=question_text,
+        question_category=question_category,
+        company_name=company_name,
+        role_title=role_title,
+        jd_text=jd_text,
+        work_history_text=work_history_text,
+        provider=llm_provider,
+        api_key=llm_api_key or "",
+        ollama_model=ollama_model,
+    )
+
+    return {
+        "drafts": drafts,
+        "previously_used": prev.answer_text if prev else None,
+        "previously_used_at": prev.created_at.isoformat() if prev else None,
+        "question_category": question_category,
+    }
+
+
+# ── Save answer ────────────────────────────────────────────────────────────
+
+
+@router.post("/answers/save", status_code=status.HTTP_201_CREATED)
+async def save_answer(
+    question_text: str = Form(...),
+    question_category: str = Form("custom"),
+    answer_text: str = Form(...),
+    company_name: str = Form(...),
+    role_title: str = Form(""),
+    job_id: str | None = Form(None),
+    application_id: str | None = Form(None),
+    was_default: bool = Form(False),
+    llm_provider_used: str = Form(""),
+    db: AsyncSession = Depends(get_db),
+):
+    """Save a user-accepted answer to the DB for future reuse and callback reference."""
+    user = await _get_placeholder_user(db)
+
+    q_hash = hashlib.sha256(" ".join(question_text.lower().split()).encode()).hexdigest()
+
+    word_count = len(answer_text.split())
+
+    answer = ApplicationAnswer(
+        user_id=user.id,
+        application_id=uuid.UUID(application_id) if application_id else None,
+        question_hash=q_hash,
+        question_text=question_text,
+        question_category=question_category,
+        answer_text=answer_text,
+        word_count=word_count,
+        was_default=was_default,
+        llm_provider_used=llm_provider_used or None,
+        company_name=company_name,
+        role_title=role_title,
+        job_id=job_id,
+    )
+    db.add(answer)
+    await db.commit()
+    await db.refresh(answer)
+
+    return {
+        "answer_id": str(answer.id),
+        "word_count": word_count,
+        "question_hash": q_hash,
+        "saved": True,
+    }
+
+
+# ── History ────────────────────────────────────────────────────────────────
+
+
+@router.get("/history/{company_name}")
+async def company_history(
+    company_name: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """All resumes and answers ever used for a company — recruiter callback reference."""
+    user = await _get_placeholder_user(db)
+
+    resumes = await _retrieval_agent.retrieve_by_company(db, user.id, company_name)
+
+    # Fetch saved answers for this company
+    ans_stmt = (
+        select(ApplicationAnswer)
+        .where(
+            ApplicationAnswer.user_id == user.id,
+            ApplicationAnswer.company_name.ilike(f"%{company_name}%"),
+        )
+        .order_by(ApplicationAnswer.created_at.desc())
+    )
+    ans_result = await db.execute(ans_stmt)
+    answers = ans_result.scalars().all()
+
+    return {
+        "company": company_name,
+        "resumes": [_resume_to_dict(r) for r in resumes],
+        "answers": [
+            {
+                "question_category": a.question_category,
+                "question_text": a.question_text[:200],
+                "answer_text": a.answer_text,
+                "word_count": a.word_count,
+                "saved_at": a.created_at.isoformat(),
+                "role_title": a.role_title,
+                "job_id": a.job_id,
+            }
+            for a in answers
+        ],
+    }
+
+
+@router.get("/answers/{company_name}")
+async def get_answers(
+    company_name: str,
+    category: str | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Retrieve previously saved Q&A answers for a company."""
+    user = await _get_placeholder_user(db)
+
+    stmt = (
+        select(ApplicationAnswer)
+        .where(
+            ApplicationAnswer.user_id == user.id,
+            ApplicationAnswer.company_name.ilike(f"%{company_name}%"),
+        )
+        .order_by(ApplicationAnswer.created_at.desc())
+    )
+    if category:
+        stmt = stmt.where(ApplicationAnswer.question_category == category)
+
+    result = await db.execute(stmt)
+    answers = result.scalars().all()
+
+    return {
+        "company": company_name,
+        "answers": [
+            {
+                "answer_id": str(a.id),
+                "question_category": a.question_category,
+                "question_text": a.question_text,
+                "answer_text": a.answer_text,
+                "word_count": a.word_count,
+                "saved_at": a.created_at.isoformat(),
+            }
+            for a in answers
+        ],
+    }
+
+
+# ── Serialisation helpers ──────────────────────────────────────────────────
+
+
+def _resume_to_dict(r: ResumeWithScore | None) -> dict | None:
+    if r is None:
+        return None
+    return {
+        "resume_id": str(r.resume_id),
+        "version_tag": r.version_tag,
+        "filename": r.filename,
+        "file_type": r.file_type,
+        "target_company": r.target_company,
+        "target_role": r.target_role,
+        "ats_score": r.ats_score,
+        "similarity_score": r.similarity_score,
+        "last_used": r.last_used,
+        "outcomes": r.usage_outcomes,
+        "github_path": r.github_path,
+    }
+
+
+def _ats_to_dict(r: ATSResult) -> dict:
+    return {
+        "overall_score": r.overall_score,
+        "keyword_coverage": round(r.keyword_coverage * 100, 1),
+        "skills_present": r.skills_present,
+        "skills_gap": r.skills_gap,
+        "quantification_score": round(r.quantification_score * 100, 1),
+        "experience_alignment": round(r.experience_alignment * 100, 1),
+        "mq_coverage": round(r.mq_coverage * 100, 1),
+        "suggestions": r.suggestions,
+        "total_jd_keywords": r.total_jd_keywords,
+        "matched_keywords": r.matched_keywords,
+    }
+
+
+# ── Sync markdown (offline edit drain) ─────────────────────────────────────
+
+
+@router.post("/sync-markdown")
+async def sync_markdown(
+    version_tag: str = Form(...),
+    markdown_content: str = Form(...),
+    timestamp: str = Form(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Sync an offline markdown edit to the database.
+
+    Called by the extension's background worker when connectivity is restored.
+    Updates the resume's markdown_content in the vault so it reflects any
+    offline edits the user made to their resume preview.
+    """
+    user = await _get_placeholder_user(db)
+
+    result = await db.execute(
+        select(Resume)
+        .where(
+            Resume.user_id == user.id,
+            Resume.version_tag == version_tag,
+        )
+        .order_by(Resume.created_at.desc())
+        .limit(1)
+    )
+    resume = result.scalar_one_or_none()
+
+    if not resume:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No resume found with version_tag={version_tag!r}",
+        )
+
+    resume.markdown_content = markdown_content
+    await db.commit()
+
+    logger.info(
+        f"Synced offline markdown edit for {version_tag} " f"(ts={timestamp}, user={user.id})"
+    )
+    return {"synced": True, "version_tag": version_tag}
+
+
+# ── GitHub versions directory ───────────────────────────────────────────────
+
+
+@router.get("/github/versions")
+async def list_github_versions(
+    company: str | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    List all named resume versions from the GitHub resume-vault versions/ dir.
+
+    Returns [{version_tag, path, sha, download_url}] for each .tex file.
+    Requires user to have a GitHub token stored.
+    """
+    user = await _get_placeholder_user(db)
+
+    if not user.encrypted_github_token:
+        raise HTTPException(
+            status_code=400,
+            detail="No GitHub token configured. Add your token via /api/v1/users/github-token.",
+        )
+
+    repo_full_name = f"{user.github_username}/{user.resume_repo_name}"
+    try:
+        versions = await _github_service.list_versions(
+            encrypted_token=user.encrypted_github_token,
+            repo_full_name=repo_full_name,
+            company_filter=company,
+        )
+    except Exception as exc:
+        logger.warning(f"GitHub list_versions failed: {exc}")
+        raise HTTPException(status_code=502, detail=f"GitHub API error: {exc}") from exc
+
+    return {"versions": versions, "total": len(versions)}

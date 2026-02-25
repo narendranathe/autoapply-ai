@@ -1,0 +1,312 @@
+/**
+ * Content Script — injected into every page.
+ *
+ * Responsibilities:
+ * 1. Detect application form fields (name, email, resume upload, etc.)
+ * 2. Detect open-ended questions (textarea prompts)
+ * 3. Detect job scout job cards (LinkedIn, Indeed, etc.)
+ * 4. Send PageContext to background worker
+ * 5. Listen for FILL_FIELD / ATTACH_RESUME messages from sidepanel
+ * 6. Inject the floating overlay badge on career pages
+ */
+
+import type { DetectedField, DetectedQuestion, FieldType, Message, PageContext, QuestionCategory } from "../shared/types";
+
+// ── Field detection ────────────────────────────────────────────────────────
+
+const FIELD_PATTERNS: Array<{ type: FieldType; patterns: RegExp[] }> = [
+  { type: "first_name", patterns: [/first[_\s-]?name/i, /fname/i, /given[_\s-]?name/i] },
+  { type: "last_name",  patterns: [/last[_\s-]?name/i, /lname/i, /family[_\s-]?name/i, /surname/i] },
+  { type: "full_name",  patterns: [/^name$/i, /full[_\s-]?name/i, /your[_\s-]?name/i] },
+  { type: "email",      patterns: [/email/i] },
+  { type: "phone",      patterns: [/phone/i, /mobile/i, /tel/i, /cell/i] },
+  { type: "address",    patterns: [/address/i, /street/i] },
+  { type: "city",       patterns: [/^city$/i, /city[_\s]?name/i] },
+  { type: "state",      patterns: [/^state$/i, /province/i, /region/i] },
+  { type: "zip",        patterns: [/zip/i, /postal/i, /postcode/i] },
+  { type: "linkedin",   patterns: [/linkedin/i] },
+  { type: "portfolio",  patterns: [/portfolio/i, /website/i, /github/i, /personal[_\s-]?site/i] },
+  { type: "skills",     patterns: [/skill/i] },
+  { type: "years_experience", patterns: [/years.+experience/i, /experience.+years/i, /yoe/i] },
+  { type: "salary",     patterns: [/salary/i, /compensation/i, /pay[_\s-]?expectation/i] },
+  { type: "sponsorship", patterns: [/sponsor/i, /visa/i, /work[_\s-]?auth/i, /authorized.+work/i, /immigration/i] },
+  { type: "demographic", patterns: [/race/i, /ethnicity/i, /gender/i, /veteran/i, /disability/i, /hispanic/i, /latino/i, /pronoun/i] },
+];
+
+const QUESTION_CATEGORY_PATTERNS: Array<{ category: QuestionCategory; patterns: RegExp[] }> = [
+  { category: "why_company", patterns: [/why.+(want|interested|join|work|here|company)/i, /what draws you/i] },
+  { category: "why_hire", patterns: [/why (should|hire|choose|best candidate)/i, /what makes you (unique|stand out)/i] },
+  { category: "about_yourself", patterns: [/tell us about yourself/i, /introduce yourself/i, /walk us through/i, /background/i] },
+  { category: "strength", patterns: [/strength/i, /excel at/i, /best at/i] },
+  { category: "weakness", patterns: [/weakness/i, /area.+improvement/i, /struggle with/i] },
+  { category: "challenge", patterns: [/challenge/i, /difficult situation/i, /obstacle/i, /failure/i, /overcame/i] },
+  { category: "leadership", patterns: [/led|lead/i, /leadership/i, /managed a team/i, /team lead/i] },
+  { category: "conflict", patterns: [/conflict/i, /disagreement/i, /difficult coworker/i, /colleague/i] },
+  { category: "motivation", patterns: [/motivat/i, /passion/i, /what drives/i] },
+  { category: "five_years", patterns: [/5 years|five years/i, /career goal/i, /long.term/i, /see yourself/i] },
+  { category: "impact", patterns: [/proud of/i, /biggest accomplishment/i, /greatest achievement/i] },
+  { category: "fit", patterns: [/align.+value/i, /culture/i, /what do you know about us/i, /research.+company/i] },
+  { category: "sponsorship", patterns: [/sponsor/i, /visa/i, /work authorization/i] },
+];
+
+function getFieldLabel(el: HTMLElement): string {
+  // Try: aria-label, placeholder, associated <label>, nearby text
+  const ariaLabel = el.getAttribute("aria-label") || "";
+  if (ariaLabel) return ariaLabel;
+
+  const placeholder = el.getAttribute("placeholder") || "";
+  if (placeholder) return placeholder;
+
+  const id = el.getAttribute("id");
+  if (id) {
+    const label = document.querySelector(`label[for="${id}"]`);
+    if (label) return label.textContent?.trim() || "";
+  }
+
+  // Walk up to find a label or legend
+  let parent = el.parentElement;
+  for (let i = 0; i < 5; i++) {
+    if (!parent) break;
+    const label = parent.querySelector("label, legend");
+    if (label && label !== el) return label.textContent?.trim() || "";
+    parent = parent.parentElement;
+  }
+
+  return el.getAttribute("name") || "";
+}
+
+function classifyField(el: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement): FieldType {
+  const label = getFieldLabel(el as HTMLElement).toLowerCase();
+  const name = (el.getAttribute("name") || "").toLowerCase();
+  const id = (el.getAttribute("id") || "").toLowerCase();
+  const combined = `${label} ${name} ${id}`;
+
+  if (el instanceof HTMLInputElement && el.type === "file") {
+    const accept = (el.getAttribute("accept") || "").toLowerCase();
+    const nearbyText = getFieldLabel(el as HTMLElement).toLowerCase();
+    if (/cover/i.test(nearbyText)) return "cover_letter_upload" as FieldType;
+    return "resume_upload";
+  }
+
+  for (const { type, patterns } of FIELD_PATTERNS) {
+    if (patterns.some((p) => p.test(combined))) return type;
+  }
+  return "unknown";
+}
+
+function detectFields(): DetectedField[] {
+  const inputs = Array.from(
+    document.querySelectorAll<HTMLInputElement | HTMLSelectElement>(
+      "input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=checkbox]):not([type=radio]), select"
+    )
+  );
+  const fields: DetectedField[] = [];
+
+  for (const el of inputs) {
+    const fieldType = classifyField(el as HTMLInputElement);
+    if (fieldType === "unknown") continue;
+
+    fields.push({
+      fieldId: el.id || el.name || `field_${fields.length}`,
+      fieldType,
+      label: getFieldLabel(el as HTMLElement),
+      currentValue: (el as HTMLInputElement).value || "",
+      suggestedValue: "",
+      confidence: 0.9,
+    });
+  }
+  return fields;
+}
+
+function detectQuestions(): DetectedQuestion[] {
+  const textareas = Array.from(document.querySelectorAll<HTMLTextAreaElement>("textarea"));
+  const questions: DetectedQuestion[] = [];
+
+  for (const ta of textareas) {
+    const label = getFieldLabel(ta);
+    if (!label || label.length < 10) continue;
+
+    let category: QuestionCategory = "custom";
+    for (const { category: cat, patterns } of QUESTION_CATEGORY_PATTERNS) {
+      if (patterns.some((p) => p.test(label))) {
+        category = cat;
+        break;
+      }
+    }
+
+    questions.push({
+      questionId: ta.id || `q_${questions.length}`,
+      questionText: label,
+      category,
+      fieldType: "textarea",
+      maxLength: ta.maxLength > 0 ? ta.maxLength : undefined,
+    });
+  }
+  return questions;
+}
+
+// ── Job scout detection (LinkedIn, Indeed) ─────────────────────────────────
+
+function extractJobCards(): Array<{ company: string; role: string; url: string }> {
+  const cards: Array<{ company: string; role: string; url: string }> = [];
+
+  // LinkedIn
+  document.querySelectorAll<HTMLElement>(".job-card-container").forEach((card) => {
+    const role = card.querySelector(".job-card-list__title")?.textContent?.trim() || "";
+    const company = card.querySelector(".job-card-container__company-name")?.textContent?.trim() || "";
+    const link = card.querySelector<HTMLAnchorElement>("a.job-card-list__title");
+    if (role && company) cards.push({ company, role, url: link?.href || "" });
+  });
+
+  // Indeed
+  document.querySelectorAll<HTMLElement>("[data-testid='job-title']").forEach((el) => {
+    const role = el.textContent?.trim() || "";
+    const companyEl = el.closest("[data-testid='slider_container']")?.querySelector("[data-testid='company-name']");
+    const company = companyEl?.textContent?.trim() || "";
+    const link = el.closest("a") as HTMLAnchorElement | null;
+    if (role && company) cards.push({ company, role, url: link?.href || "" });
+  });
+
+  return cards.slice(0, 20);
+}
+
+// ── Overlay badge injection ────────────────────────────────────────────────
+
+function injectOverlayBadge(company: string, atsHint: string) {
+  const existing = document.getElementById("autoapply-badge");
+  if (existing) existing.remove();
+
+  const badge = document.createElement("div");
+  badge.id = "autoapply-badge";
+  badge.innerHTML = `
+    <div style="
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      z-index: 2147483647;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      border-radius: 12px;
+      padding: 12px 16px;
+      font-family: system-ui, sans-serif;
+      font-size: 13px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.4);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 220px;
+      border: 1px solid #3a3a5c;
+    ">
+      <span style="font-size: 18px;">🎯</span>
+      <div>
+        <div style="font-weight: 600; color: #a78bfa;">${company || "Job Application"}</div>
+        <div style="font-size: 11px; color: #9ca3af; margin-top: 2px;">${atsHint || "AutoApply AI — Click to open"}</div>
+      </div>
+      <span style="margin-left: auto; color: #6b7280; font-size: 16px;">→</span>
+    </div>
+  `;
+
+  badge.addEventListener("click", () => {
+    chrome.runtime.sendMessage<Message>({ type: "OPEN_SIDEPANEL" });
+  });
+
+  document.body.appendChild(badge);
+
+  // Auto-hide after 8 seconds
+  setTimeout(() => badge.remove(), 8000);
+}
+
+// ── Apply button detection ─────────────────────────────────────────────────
+
+function detectApplyButton(): boolean {
+  const buttons = Array.from(document.querySelectorAll("button, a[role=button], [type=submit]"));
+  return buttons.some((btn) => {
+    const text = btn.textContent?.toLowerCase() || "";
+    return /\bapply\b|\bapply now\b|\beasy apply\b|\bsubmit application\b/.test(text);
+  });
+}
+
+// ── Main detection orchestrator ────────────────────────────────────────────
+
+function buildAndSendContext() {
+  const url = window.location.href;
+  const title = document.title;
+
+  // Determine mode
+  let mode: "apply" | "scout" | null = null;
+  if (/linkedin\.com\/jobs|indeed\.com\/(viewjob|jobs)|glassdoor\.com\/(job-listing|Jobs)/.test(url)) {
+    mode = "scout";
+  } else if (
+    /greenhouse\.io|lever\.co|workday\.com|myworkday\.com|taleo\.net|smartrecruiters\.com|careers\.|\/careers\/|\/jobs\//.test(url) ||
+    detectApplyButton()
+  ) {
+    mode = "apply";
+  }
+
+  if (!mode) return;
+
+  const fields = mode === "apply" ? detectFields() : [];
+  const questions = mode === "apply" ? detectQuestions() : [];
+
+  // Extract company from URL / title
+  let company = "";
+  const atMatch = title.match(/\bat\s+([A-Z][a-zA-Z\s]+?)(?:\s*[\-–|]|$)/);
+  if (atMatch) company = atMatch[1].trim();
+
+  const context: PageContext = {
+    mode,
+    company,
+    roleTitle: title,
+    jobUrl: url,
+    platform: detectPlatform(url),
+    detectedFields: fields,
+    openQuestions: questions,
+  };
+
+  chrome.runtime.sendMessage<Message>({ type: "PAGE_CONTEXT_UPDATE", payload: context });
+
+  if (mode === "apply" && company) {
+    injectOverlayBadge(company, `${fields.length} fields detected`);
+  }
+}
+
+function detectPlatform(url: string): string {
+  if (/linkedin\.com/.test(url)) return "linkedin";
+  if (/greenhouse\.io/.test(url)) return "greenhouse";
+  if (/lever\.co/.test(url)) return "lever";
+  if (/workday\.com|myworkday\.com/.test(url)) return "workday";
+  if (/indeed\.com/.test(url)) return "indeed";
+  if (/glassdoor\.com/.test(url)) return "glassdoor";
+  return "generic";
+}
+
+// ── Message listener (from sidepanel via background) ──────────────────────
+
+chrome.runtime.onMessage.addListener((message: Message) => {
+  if (message.type === "FILL_FIELD") {
+    const { fieldId, value } = message.payload;
+    const el = document.getElementById(fieldId) as HTMLInputElement | null
+      || document.querySelector<HTMLInputElement>(`[name="${fieldId}"]`);
+    if (el) {
+      el.focus();
+      el.value = value;
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  }
+});
+
+// ── Run on load and on SPA navigation ─────────────────────────────────────
+
+buildAndSendContext();
+
+// Re-run on SPA navigation (pushState / replaceState)
+const _pushState = history.pushState.bind(history);
+history.pushState = function (...args) {
+  _pushState(...args);
+  setTimeout(buildAndSendContext, 800);
+};
+window.addEventListener("popstate", () => setTimeout(buildAndSendContext, 800));
+
+export {};

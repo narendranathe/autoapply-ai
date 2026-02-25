@@ -90,7 +90,7 @@ class CircuitBreaker:
                 self._on_failure(e)
                 raise
 
-        wrapper.circuit = self
+        wrapper.circuit = self  # type: ignore[attr-defined]
         return wrapper
 
     def get_metrics(self) -> dict:

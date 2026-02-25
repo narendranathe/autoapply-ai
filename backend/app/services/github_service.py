@@ -27,30 +27,34 @@ RATE LIMITING:
 GitHub API allows 5000 requests/hour per authenticated user.
 We use circuit breaker + LRU cache to stay well under this limit.
 """
+
 import base64
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
 from loguru import logger
 
-from app.middleware.circuit_breaker import github_circuit, CircuitOpenError
+from app.middleware.circuit_breaker import github_circuit
 from app.utils.encryption import decrypt_value
 
 
 class GitHubError(Exception):
     """Base exception for GitHub operations."""
+
     pass
 
 
 class GitHubAuthError(GitHubError):
     """Token is invalid or expired."""
+
     pass
 
 
 class GitHubRateLimitError(GitHubError):
     """GitHub API rate limit hit."""
+
     pass
 
 
@@ -78,7 +82,7 @@ class GitHubService:
         try:
             return decrypt_value(encrypted_token)
         except Exception as e:
-            raise GitHubAuthError(f"Failed to decrypt GitHub token: {e}")
+            raise GitHubAuthError(f"Failed to decrypt GitHub token: {e}") from e
 
     # ══════════════════════════════════════════════════════
     # REPOSITORY MANAGEMENT
@@ -101,7 +105,7 @@ class GitHubService:
         self,
         encrypted_token: str,
         repo_name: str = DEFAULT_REPO_NAME,
-    ) -> dict[str, str]:
+    ) -> dict[str, str | bool]:
         """
         Create the resume repo if it doesn't exist.
 
@@ -185,7 +189,7 @@ class GitHubService:
         resume_filename: str,
         metadata: dict[str, Any],
         pdf_content: bytes | None = None,
-    ) -> dict[str, str]:
+    ) -> dict[str, str | None]:
         """
         Commit a tailored resume for a specific application.
 
@@ -206,13 +210,13 @@ class GitHubService:
             {"dir_path": "applications/...", "resume_sha": "...", "metadata_sha": "..."}
         """
         # Build safe directory name
-        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        date_str = datetime.now(UTC).strftime("%Y-%m-%d")
         safe_company = self._sanitize_path(company)[:30]
         safe_role = self._sanitize_path(role)[:30]
         dir_path = f"applications/{safe_company}-{safe_role}-{date_str}"
 
         # Add timestamp and dir_path to metadata
-        metadata["committed_at"] = datetime.now(timezone.utc).isoformat()
+        metadata["committed_at"] = datetime.now(UTC).isoformat()
         metadata["dir_path"] = dir_path
         metadata["company"] = company
         metadata["role"] = role
@@ -410,11 +414,220 @@ class GitHubService:
         "Senior ML Engineer" -> "senior-ml-engineer"
         """
         import re
+
         sanitized = name.lower().strip()
         sanitized = re.sub(r"[^a-z0-9\s-]", "", sanitized)
         sanitized = re.sub(r"\s+", "-", sanitized)
         sanitized = re.sub(r"-+", "-", sanitized)
         return sanitized.strip("-")
+
+    # ══════════════════════════════════════════════════════
+    # RESUME VAULT — IMPROVED VERSIONING ARCHITECTURE
+    # ══════════════════════════════════════════════════════
+
+    @github_circuit
+    async def commit_named_resume(
+        self,
+        encrypted_token: str,
+        repo_full_name: str,
+        version_tag: str,
+        tex_content: str,
+        pdf_content: bytes | None,
+        metadata: dict[str, Any],
+        job_id: str | None = None,
+    ) -> dict[str, str]:
+        """
+        Commit a named resume to versions/ (current canonical) and
+        applications/ (dated history), then create a Git tag.
+
+        versions/Narendranath_Google_DE.tex  ← always current best
+        versions/Narendranath_Google_DE.pdf
+        applications/Narendranath_Google_DE_2026-02-24/resume.tex
+        applications/Narendranath_Google_DE_2026-02-24/resume.pdf
+        applications/Narendranath_Google_DE_2026-02-24/metadata.json
+
+        Git tag: Narendranath_Google_DE  (or Narendranath_Google_DE_JOB123)
+        """
+        date_str = datetime.now(UTC).strftime("%Y-%m-%d")
+        tex_bytes = tex_content.encode("utf-8")
+
+        # 1. Commit to versions/ (canonical, overwrites previous)
+        versions_tex_path = f"versions/{version_tag}.tex"
+        versions_sha = await self._commit_file(
+            encrypted_token=encrypted_token,
+            repo_full_name=repo_full_name,
+            file_path=versions_tex_path,
+            content=tex_bytes,
+            commit_message=f"update: {version_tag}",
+        )
+
+        if pdf_content:
+            pdf_versions_path = f"versions/{version_tag}.pdf"
+            await self._commit_file(
+                encrypted_token=encrypted_token,
+                repo_full_name=repo_full_name,
+                file_path=pdf_versions_path,
+                content=pdf_content,
+                commit_message=f"update: {version_tag} (PDF)",
+            )
+
+        # 2. Commit to applications/ (dated history, never overwritten)
+        app_dir = f"applications/{version_tag}_{date_str}"
+        await self._commit_file(
+            encrypted_token=encrypted_token,
+            repo_full_name=repo_full_name,
+            file_path=f"{app_dir}/resume.tex",
+            content=tex_bytes,
+            commit_message=f"archive: {version_tag} {date_str}",
+        )
+
+        meta_with_tag = {**metadata, "version_tag": version_tag, "date": date_str}
+        meta_bytes = json.dumps(meta_with_tag, indent=2, default=str).encode("utf-8")
+        await self._commit_file(
+            encrypted_token=encrypted_token,
+            repo_full_name=repo_full_name,
+            file_path=f"{app_dir}/metadata.json",
+            content=meta_bytes,
+            commit_message=f"archive: {version_tag} metadata",
+        )
+
+        if pdf_content:
+            await self._commit_file(
+                encrypted_token=encrypted_token,
+                repo_full_name=repo_full_name,
+                file_path=f"{app_dir}/resume.pdf",
+                content=pdf_content,
+                commit_message=f"archive: {version_tag} (PDF)",
+            )
+
+        # 3. Create or move Git tag
+        tag_sha = await self._create_or_update_tag(
+            encrypted_token=encrypted_token,
+            repo_full_name=repo_full_name,
+            tag_name=version_tag,
+            commit_sha=versions_sha,
+        )
+
+        logger.info(
+            f"Committed named resume {version_tag} → "
+            f"versions/ + applications/{version_tag}_{date_str}"
+        )
+
+        return {
+            "versions_path": versions_tex_path,
+            "versions_sha": versions_sha,
+            "app_dir": app_dir,
+            "git_tag": version_tag,
+            "tag_sha": tag_sha or "",
+        }
+
+    @github_circuit
+    async def upload_private_resume(
+        self,
+        encrypted_token: str,
+        repo_full_name: str,
+        filename: str,
+        content: bytes,
+    ) -> str:
+        """
+        Upload a personal resume file to private/ directory.
+        This directory stores personal data (name, contact, work facts).
+        It is NOT accessible via public API responses.
+
+        Returns: git commit SHA
+        """
+        path = f"private/{filename}"
+        sha = await self._commit_file(
+            encrypted_token=encrypted_token,
+            repo_full_name=repo_full_name,
+            file_path=path,
+            content=content,
+            commit_message=f"private: upload {filename}",
+        )
+        logger.info(f"Uploaded private resume to {repo_full_name}/{path}")
+        return sha
+
+    @github_circuit
+    async def list_versions(
+        self,
+        encrypted_token: str,
+        repo_full_name: str,
+        company_filter: str | None = None,
+    ) -> list[dict[str, str]]:
+        """
+        List all named resume versions from the versions/ directory.
+        Returns [{name, path, sha, download_url}] for each .tex file.
+        Optionally filter by company name prefix.
+        """
+        token = self._decrypt_token(encrypted_token)
+        headers = self._build_headers(token)
+
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                f"{self.BASE_URL}/repos/{repo_full_name}/contents/versions",
+                headers=headers,
+            )
+            if resp.status_code == 404:
+                return []
+            self._check_response(resp)
+
+            items = resp.json()
+            versions = []
+            for item in items:
+                if item["type"] == "file" and item["name"].endswith(".tex"):
+                    tag_name = item["name"].replace(".tex", "")
+                    if company_filter and company_filter.lower() not in tag_name.lower():
+                        continue
+                    versions.append(
+                        {
+                            "version_tag": tag_name,
+                            "path": item["path"],
+                            "sha": item["sha"],
+                            "download_url": item.get("download_url", ""),
+                        }
+                    )
+
+        return versions
+
+    async def _create_or_update_tag(
+        self,
+        encrypted_token: str,
+        repo_full_name: str,
+        tag_name: str,
+        commit_sha: str,
+    ) -> str | None:
+        """
+        Create a lightweight Git tag pointing to the given commit SHA.
+        If the tag already exists, delete and recreate it (move it to new commit).
+        Returns the tag SHA or None on failure.
+        """
+        token = self._decrypt_token(encrypted_token)
+        headers = self._build_headers(token)
+
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                # Try to delete existing tag
+                await client.delete(
+                    f"{self.BASE_URL}/repos/{repo_full_name}/git/refs/tags/{tag_name}",
+                    headers=headers,
+                )
+                # 204 = deleted, 422 = didn't exist — both are fine
+
+                # Create new tag ref
+                create_resp = await client.post(
+                    f"{self.BASE_URL}/repos/{repo_full_name}/git/refs",
+                    headers=headers,
+                    json={
+                        "ref": f"refs/tags/{tag_name}",
+                        "sha": commit_sha,
+                    },
+                )
+                if create_resp.status_code in (200, 201):
+                    return create_resp.json().get("object", {}).get("sha")
+        except Exception as e:
+            logger.warning(f"Failed to create git tag {tag_name}: {e}")
+
+        return None
 
     @staticmethod
     def _check_response(resp: httpx.Response) -> None:
@@ -435,6 +648,4 @@ class GitHubService:
         if resp.status_code == 404:
             raise GitHubError(f"GitHub resource not found: {resp.url}")
         if resp.status_code >= 400:
-            raise GitHubError(
-                f"GitHub API error {resp.status_code}: {resp.text[:300]}"
-            )
+            raise GitHubError(f"GitHub API error {resp.status_code}: {resp.text[:300]}")

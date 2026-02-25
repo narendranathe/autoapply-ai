@@ -9,15 +9,14 @@ This service coordinates between:
 - GitHub (resume storage)
 - Tailoring pipeline (resume rewriting)
 """
-import uuid
-from datetime import datetime, timezone
 
-from sqlalchemy import select, func, desc
-from sqlalchemy.ext.asyncio import AsyncSession
+import uuid
+
 from loguru import logger
+from sqlalchemy import desc, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.application import Application
-from app.models.user import User
 from app.utils.hashing import hash_jd
 
 
@@ -105,18 +104,12 @@ class ApplicationService:
         """
         # Build base query
         query = select(Application).where(Application.user_id == user_id)
-        count_query = select(func.count(Application.id)).where(
-            Application.user_id == user_id
-        )
+        count_query = select(func.count(Application.id)).where(Application.user_id == user_id)
 
         # Apply filters
         if company_filter:
-            query = query.where(
-                Application.company_name.ilike(f"%{company_filter}%")
-            )
-            count_query = count_query.where(
-                Application.company_name.ilike(f"%{company_filter}%")
-            )
+            query = query.where(Application.company_name.ilike(f"%{company_filter}%"))
+            count_query = count_query.where(Application.company_name.ilike(f"%{company_filter}%"))
 
         if status_filter:
             query = query.where(Application.status == status_filter)
@@ -212,9 +205,7 @@ class ApplicationService:
         """Get application statistics for a user."""
         # Total count
         total_result = await db.execute(
-            select(func.count(Application.id)).where(
-                Application.user_id == user_id
-            )
+            select(func.count(Application.id)).where(Application.user_id == user_id)
         )
         total = total_result.scalar() or 0
 
@@ -228,8 +219,9 @@ class ApplicationService:
 
         # Unique companies
         company_result = await db.execute(
-            select(func.count(func.distinct(Application.company_name)))
-            .where(Application.user_id == user_id)
+            select(func.count(func.distinct(Application.company_name))).where(
+                Application.user_id == user_id
+            )
         )
         unique_companies = company_result.scalar() or 0
 

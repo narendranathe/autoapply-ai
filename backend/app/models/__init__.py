@@ -1,6 +1,7 @@
 from app.models.application import Application
 from app.models.audit_log import AuditLog
 from app.models.base import Base, TimestampMixin, async_session_factory, engine
+from app.models.resume import ApplicationAnswer, Resume, ResumeUsage
 from app.models.user import User
 
 __all__ = [
@@ -11,4 +12,7 @@ __all__ = [
     "User",
     "Application",
     "AuditLog",
+    "Resume",
+    "ResumeUsage",
+    "ApplicationAnswer",
 ]

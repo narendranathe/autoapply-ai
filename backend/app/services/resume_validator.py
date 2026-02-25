@@ -24,6 +24,7 @@ WHEN VALIDATION FAILS:
 This is a HARD gate, not a soft suggestion. We'd rather show the
 original resume than let a hallucinated version through.
 """
+
 import re
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
@@ -41,6 +42,7 @@ class ValidationResult:
     If is_valid is False, the rewrite should be rejected.
     violations contains human-readable descriptions of each problem.
     """
+
     is_valid: bool
     violations: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
@@ -76,9 +78,9 @@ class ResumeValidator:
     """
 
     # Thresholds — tuned through testing
-    MIN_BULLET_SIMILARITY = 0.25    # Below this = likely hallucination
-    MAX_BULLET_SIMILARITY = 0.99    # Above this = no meaningful change
-    MIN_OVERALL_SIMILARITY = 0.35   # Average across all bullets
+    MIN_BULLET_SIMILARITY = 0.25  # Below this = likely hallucination
+    MAX_BULLET_SIMILARITY = 0.99  # Above this = no meaningful change
+    MIN_OVERALL_SIMILARITY = 0.35  # Average across all bullets
 
     # Patterns for detecting invented metrics
     METRIC_PATTERN = re.compile(
@@ -114,7 +116,7 @@ class ResumeValidator:
 
         # ── Rule 2-6: Per-bullet validation ───────────────
         for i, (original, rewritten) in enumerate(
-            zip(original_ast.bullets, rewritten_bullets)
+            zip(original_ast.bullets, rewritten_bullets, strict=False)
         ):
             self._check_single_bullet(i, original, rewritten, original_ast, result)
 
@@ -241,7 +243,7 @@ class ResumeValidator:
         result: ValidationResult,
     ) -> None:
         """Rule 3: Company names in the rewrite must exist in the original."""
-        for company in ast.companies:
+        for _company in ast.companies:
             # We only flag if a NEW company appears that wasn't in original
             pass  # Company names shouldn't appear in bullets normally
 
@@ -250,9 +252,17 @@ class ResumeValidator:
         proper_nouns = re.findall(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b", rewritten)
         for noun in proper_nouns:
             # Skip common phrases that look like proper nouns
-            skip_words = {"Machine Learning", "Deep Learning", "Natural Language",
-                         "Computer Science", "Data Science", "Project Management",
-                         "Software Engineering", "Full Stack", "Cross Functional"}
+            skip_words = {
+                "Machine Learning",
+                "Deep Learning",
+                "Natural Language",
+                "Computer Science",
+                "Data Science",
+                "Project Management",
+                "Software Engineering",
+                "Full Stack",
+                "Cross Functional",
+            }
             if noun in skip_words:
                 continue
 
@@ -271,8 +281,8 @@ class ResumeValidator:
         result: ValidationResult,
     ) -> None:
         """Rule 6: No invented numbers or metrics."""
-        original_metrics = set(m.strip() for m in self.METRIC_PATTERN.findall(original_text.lower()))
-        rewritten_metrics = set(m.strip() for m in self.METRIC_PATTERN.findall(rewritten.lower()))
+        original_metrics = {m.strip() for m in self.METRIC_PATTERN.findall(original_text.lower())}
+        rewritten_metrics = {m.strip() for m in self.METRIC_PATTERN.findall(rewritten.lower())}
 
         new_metrics = rewritten_metrics - original_metrics
         if new_metrics:

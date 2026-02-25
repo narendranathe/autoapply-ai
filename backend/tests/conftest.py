@@ -2,20 +2,20 @@
 Test fixtures with proper async SQLAlchemy isolation.
 Fixes: 'operation in progress', 'different loop', and foreign key issues.
 """
+
 import asyncio
 import uuid
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.config import settings
-from app.models.base import Base
-from app.models.user import User
 from app.dependencies import get_db
 from app.main import create_app
+from app.models.base import Base
+from app.models.user import User
 
 # Use the test database (port 5433 from docker-compose)
 TEST_DB_URL = "postgresql+asyncpg://autoapply:testpassword@localhost:5433/autoapply_test"
@@ -34,9 +34,9 @@ def event_loop():
 async def test_engine():
     """Create test database engine."""
     engine = create_async_engine(
-        TEST_DB_URL, 
-        echo=False, 
-        poolclass=None  # Disable pooling to prevent "operation in progress" errors
+        TEST_DB_URL,
+        echo=False,
+        poolclass=None,  # Disable pooling to prevent "operation in progress" errors
     )
     yield engine
     await engine.dispose()
@@ -51,24 +51,20 @@ async def db_session(test_engine) -> AsyncGenerator[AsyncSession, None]:
     # Create all tables fresh for this test
     async with test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    
+
     # Create session factory bound to the engine
     async_session = async_sessionmaker(
-        test_engine, 
-        class_=AsyncSession, 
-        expire_on_commit=False,
-        autocommit=False,
-        autoflush=False
+        test_engine, class_=AsyncSession, expire_on_commit=False, autocommit=False, autoflush=False
     )
-    
+
     # Create session and transaction
-    async with async_session() as session:
+    async with async_session() as session:  # noqa: SIM117
         async with session.begin():
             try:
                 yield session
             finally:
                 await session.rollback()
-    
+
     # Clean up: drop all tables after test
     async with test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
@@ -105,7 +101,7 @@ async def test_user(db_session: AsyncSession) -> User:
         resume_repo_name="resume-vault",
         is_active=True,
         total_resumes_generated=0,
-        total_applications_tracked=0
+        total_applications_tracked=0,
     )
     db_session.add(user)
     await db_session.flush()  # Get the ID without committing

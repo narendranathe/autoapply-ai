@@ -1,19 +1,22 @@
 ﻿"""
 Tests for Application Service.
 """
+
 import uuid
+
 import pytest
-from app.services.application_service import ApplicationService
+
 from app.models.user import User
+from app.services.application_service import ApplicationService
 
 
 class TestApplicationService:
-    
+
     @pytest.mark.asyncio
     async def test_create_application(self, db_session, test_user):
         """Test creating an application with valid data."""
         app_service = ApplicationService(db_session)
-        
+
         app = await app_service.create_application(
             user_id=test_user.id,  # Use test_user fixture instead of random UUID
             company_name="Google",
@@ -21,9 +24,9 @@ class TestApplicationService:
             job_url="https://careers.google.com/jobs/123",
             platform="linkedin",
             job_description="Looking for Python engineer with 5 years experience",
-            strategy="moderate"
+            strategy="moderate",
         )
-        
+
         assert app is not None
         assert app.user_id == test_user.id
         assert app.company_name == "Google"
@@ -34,7 +37,7 @@ class TestApplicationService:
     async def test_update_status(self, db_session, test_user):
         """Test updating application status."""
         app_service = ApplicationService(db_session)
-        
+
         # First create an application using the real test_user
         app = await app_service.create_application(
             user_id=test_user.id,  # Use test_user fixture
@@ -43,9 +46,9 @@ class TestApplicationService:
             job_url=None,
             platform="manual",
             job_description="ML engineer role",
-            strategy=None
+            strategy=None,
         )
-        
+
         # Update status
         updated = await app_service.update_status(app.id, "applied")
         assert updated.status == "applied"
@@ -54,7 +57,7 @@ class TestApplicationService:
     async def test_invalid_status_raises(self, db_session, test_user):
         """Test that invalid status raises error."""
         app_service = ApplicationService(db_session)
-        
+
         app = await app_service.create_application(
             user_id=test_user.id,  # Use test_user fixture
             company_name="Test",
@@ -62,9 +65,9 @@ class TestApplicationService:
             job_url=None,
             platform="manual",
             job_description="Test job",
-            strategy=None
+            strategy=None,
         )
-        
+
         with pytest.raises(ValueError):
             await app_service.update_status(app.id, "invalid_status")
 
@@ -72,14 +75,12 @@ class TestApplicationService:
     async def test_list_applications_empty(self, db_session, test_user):
         """Test listing applications when user has none (but user exists)."""
         app_service = ApplicationService(db_session)
-        
+
         # Query for the test_user (who has no applications yet)
         apps, total = await app_service.list_applications(
-            user_id=test_user.id,  # Use real user ID
-            skip=0,
-            limit=10
+            user_id=test_user.id, skip=0, limit=10  # Use real user ID
         )
-        
+
         assert len(apps) == 0
         assert total == 0
 
@@ -87,7 +88,7 @@ class TestApplicationService:
     async def test_find_similar_by_jd_hash(self, db_session, test_user):
         """Test finding similar applications by JD hash."""
         app_service = ApplicationService(db_session)
-        
+
         # Create first application for test_user
         job_desc = "Software engineer with Python experience"
         app1 = await app_service.create_application(
@@ -97,9 +98,9 @@ class TestApplicationService:
             job_url=None,
             platform="manual",
             job_description=job_desc,
-            strategy=None
+            strategy=None,
         )
-        
+
         # Create second application for same user with same description
         app2 = await app_service.create_application(
             user_id=test_user.id,  # Same user
@@ -108,16 +109,14 @@ class TestApplicationService:
             job_url=None,
             platform="manual",
             job_description=job_desc,  # Same description = same hash
-            strategy=None
+            strategy=None,
         )
-        
+
         # Find similar apps for app2 (excluding itself)
         similar = await app_service.find_similar_by_jd_hash(
-            user_id=test_user.id,
-            jd_hash=app2.jd_hash,
-            exclude_id=app2.id
+            user_id=test_user.id, jd_hash=app2.jd_hash, exclude_id=app2.id
         )
-        
+
         # Should find app1 as similar
         assert len(similar) >= 1
         assert any(s.id == app1.id for s in similar)
@@ -126,7 +125,7 @@ class TestApplicationService:
     async def test_find_similar_different_user(self, db_session, test_user):
         """Test that similar applications from different users are not returned."""
         app_service = ApplicationService(db_session)
-        
+
         # Create application for test_user
         app = await app_service.create_application(
             user_id=test_user.id,
@@ -135,9 +134,9 @@ class TestApplicationService:
             job_url=None,
             platform="manual",
             job_description="iOS developer role",
-            strategy=None
+            strategy=None,
         )
-        
+
         # Create a second user manually in this test
         other_user = User(
             id=uuid.uuid4(),
@@ -145,11 +144,11 @@ class TestApplicationService:
             email_hash="b" * 64,
             github_username="otheruser",
             resume_repo_name="resume-vault",
-            is_active=True
+            is_active=True,
         )
         db_session.add(other_user)
         await db_session.flush()
-        
+
         # Create application for other user with same job description
         await app_service.create_application(
             user_id=other_user.id,  # Different user
@@ -158,16 +157,14 @@ class TestApplicationService:
             job_url=None,
             platform="manual",
             job_description="iOS developer role",  # Same description
-            strategy=None
+            strategy=None,
         )
-        
+
         # Search should only return apps for test_user
         similar = await app_service.find_similar_by_jd_hash(
-            user_id=test_user.id,  # Query as test_user
-            jd_hash=app.jd_hash,
-            exclude_id=None
+            user_id=test_user.id, jd_hash=app.jd_hash, exclude_id=None  # Query as test_user
         )
-        
+
         # Should only find the one belonging to test_user, not other_user
         assert all(s.user_id == test_user.id for s in similar)
         assert not any(s.user_id == other_user.id for s in similar)

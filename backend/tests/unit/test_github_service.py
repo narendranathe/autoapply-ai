@@ -5,6 +5,7 @@ Uses mocked HTTP responses — no real GitHub API calls.
 Tests the logic: path sanitization, file commit flow,
 error handling, and similar application detection.
 """
+
 import pytest
 
 from app.services.github_service import GitHubService
@@ -41,6 +42,7 @@ class TestPathSanitization:
         assert len(result) > 0
         # Should contain only safe chars
         import re
+
         assert re.match(r"^[a-z0-9-]+$", result)
 
     def test_empty_string(self, github_service):
@@ -59,8 +61,10 @@ class TestCheckResponse:
 
     def test_401_raises_auth_error(self, github_service):
         from unittest.mock import MagicMock
-        from app.services.github_service import GitHubAuthError
+
         import httpx
+
+        from app.services.github_service import GitHubAuthError
 
         mock_resp = MagicMock(spec=httpx.Response)
         mock_resp.status_code = 401
@@ -71,6 +75,7 @@ class TestCheckResponse:
 
     def test_200_passes(self, github_service):
         from unittest.mock import MagicMock
+
         import httpx
 
         mock_resp = MagicMock(spec=httpx.Response)

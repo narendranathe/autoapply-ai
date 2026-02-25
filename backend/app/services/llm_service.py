@@ -19,14 +19,15 @@ COST MODEL:
 - We pay $0 for LLM compute
 - We add value through prompt engineering + validation
 """
-import json
+
+import re
 from abc import ABC, abstractmethod
 from enum import Enum
 
 import httpx
 from loguru import logger
 
-from app.middleware.circuit_breaker import llm_circuit, CircuitOpenError
+from app.middleware.circuit_breaker import CircuitOpenError, llm_circuit
 from app.services.resume_parser import ResumeAST
 from app.utils.encryption import decrypt_value
 
@@ -40,6 +41,7 @@ class RewriteStrategy(str, Enum):
     - MODERATE: 60-85% similar
     - GROUND_UP: <60% similar (new domain/role)
     """
+
     SLIGHT_TWEAK = "slight_tweak"
     MODERATE = "moderate"
     GROUND_UP = "ground_up"
@@ -105,6 +107,7 @@ STRATEGY_DESCRIPTIONS = {
 # ══════════════════════════════════════════════════════════════
 # LLM PROVIDERS
 # ══════════════════════════════════════════════════════════════
+
 
 class LLMProvider(ABC):
     """Abstract base class for LLM providers."""
@@ -191,6 +194,82 @@ class OpenAIProvider(LLMProvider):
         return api_key.startswith("sk-") and len(api_key) > 20
 
 
+class KimiProvider(LLMProvider):
+    """
+    Kimi (Moonshot AI) provider.
+    Best for very long-context JDs (32K token window).
+    Model: moonshot-v1-32k
+    """
+
+    @llm_circuit
+    async def complete(self, system_prompt: str, user_prompt: str, api_key: str) -> str:
+        async with httpx.AsyncClient(timeout=90.0) as client:
+            response = await client.post(
+                "https://api.moonshot.cn/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "moonshot-v1-32k",
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "temperature": 0.3,
+                    "max_tokens": 4096,
+                },
+            )
+
+            if response.status_code == 401:
+                raise InvalidAPIKeyError("Kimi API key is invalid or expired")
+            if response.status_code == 429:
+                raise RateLimitError("Kimi rate limit exceeded")
+
+            response.raise_for_status()
+            data = response.json()
+            return data["choices"][0]["message"]["content"]
+
+    def validate_key_format(self, api_key: str) -> bool:
+        return len(api_key) > 10  # Kimi keys don't have a fixed prefix
+
+
+class OllamaProvider(LLMProvider):
+    """
+    Ollama local LLM provider — no API key required.
+    Recommended model: llama3.1:8b (strong at structured LaTeX generation).
+    Requires Ollama running at http://localhost:11434.
+    """
+
+    def __init__(self, model: str = "llama3.1:8b"):
+        self.model = model
+
+    @llm_circuit
+    async def complete(self, system_prompt: str, user_prompt: str, api_key: str = "") -> str:
+        async with httpx.AsyncClient(timeout=180.0) as client:
+            response = await client.post(
+                "http://localhost:11434/api/generate",
+                json={
+                    "model": self.model,
+                    "system": system_prompt,
+                    "prompt": user_prompt,
+                    "stream": False,
+                    "options": {"temperature": 0.3, "num_predict": 4096},
+                },
+            )
+
+            if response.status_code == 404:
+                raise InvalidAPIKeyError(
+                    f"Ollama model '{self.model}' not found. " f"Run: ollama pull {self.model}"
+                )
+
+            response.raise_for_status()
+            return response.json()["response"]
+
+    def validate_key_format(self, api_key: str) -> bool:
+        return True  # Ollama doesn't need a key
+
+
 class KeywordFallback(LLMProvider):
     """
     Free, offline fallback when LLM is unavailable.
@@ -227,12 +306,54 @@ class KeywordFallback(LLMProvider):
         jd_words = set(job_description.lower().split())
         # Remove common stop words
         stop_words = {
-            "the", "a", "an", "is", "are", "was", "were", "be", "been",
-            "being", "have", "has", "had", "do", "does", "did", "will",
-            "would", "could", "should", "may", "might", "can", "shall",
-            "to", "of", "in", "for", "on", "with", "at", "by", "from",
-            "and", "or", "but", "not", "no", "this", "that", "these",
-            "those", "we", "you", "they", "our", "your", "their",
+            "the",
+            "a",
+            "an",
+            "is",
+            "are",
+            "was",
+            "were",
+            "be",
+            "been",
+            "being",
+            "have",
+            "has",
+            "had",
+            "do",
+            "does",
+            "did",
+            "will",
+            "would",
+            "could",
+            "should",
+            "may",
+            "might",
+            "can",
+            "shall",
+            "to",
+            "of",
+            "in",
+            "for",
+            "on",
+            "with",
+            "at",
+            "by",
+            "from",
+            "and",
+            "or",
+            "but",
+            "not",
+            "no",
+            "this",
+            "that",
+            "these",
+            "those",
+            "we",
+            "you",
+            "they",
+            "our",
+            "your",
+            "their",
         }
         jd_keywords = jd_words - stop_words
 
@@ -250,18 +371,22 @@ class KeywordFallback(LLMProvider):
 # CUSTOM EXCEPTIONS
 # ══════════════════════════════════════════════════════════════
 
+
 class InvalidAPIKeyError(Exception):
     """Raised when user's API key is invalid."""
+
     pass
 
 
 class RateLimitError(Exception):
     """Raised when LLM provider rate limits us."""
+
     pass
 
 
 class LLMUnavailableError(Exception):
     """Raised when LLM is down and we're using fallback."""
+
     pass
 
 
@@ -272,6 +397,8 @@ class LLMUnavailableError(Exception):
 PROVIDERS: dict[str, LLMProvider] = {
     "anthropic": AnthropicProvider(),
     "openai": OpenAIProvider(),
+    "kimi": KimiProvider(),
+    "ollama": OllamaProvider(model="llama3.1:8b"),
     "fallback": KeywordFallback(),
 }
 
@@ -284,6 +411,7 @@ def get_provider(name: str) -> LLMProvider:
 # ══════════════════════════════════════════════════════════════
 # MAIN TAILORING FUNCTION
 # ══════════════════════════════════════════════════════════════
+
 
 async def tailor_resume(
     resume_ast: ResumeAST,
@@ -309,7 +437,6 @@ async def tailor_resume(
         - str: Summary of changes made
     """
     provider = get_provider(provider_name)
-    used_fallback = False
 
     # ── Decrypt API key ───────────────────────────────────
     api_key = ""
@@ -319,13 +446,11 @@ async def tailor_resume(
         except Exception as e:
             logger.error(f"Failed to decrypt API key: {e}")
             provider = PROVIDERS["fallback"]
-            used_fallback = True
 
     # ── Validate key format ───────────────────────────────
     if api_key and not provider.validate_key_format(api_key):
         logger.warning(f"Invalid API key format for {provider_name}")
         provider = PROVIDERS["fallback"]
-        used_fallback = True
 
     # ── Build the prompt ──────────────────────────────────
     user_prompt = REWRITE_PROMPT_TEMPLATE.format(
@@ -341,7 +466,6 @@ async def tailor_resume(
 
         # Check for fallback marker
         if raw_response == "__FALLBACK_MODE__":
-            used_fallback = True
             return (
                 [b.text for b in resume_ast.bullets],
                 True,
@@ -360,11 +484,10 @@ async def tailor_resume(
 
     except CircuitOpenError as e:
         logger.warning(f"Circuit open for {provider_name}: {e}")
-        used_fallback = True
         return (
             [b.text for b in resume_ast.bullets],
             True,
-            f"LLM service temporarily unavailable (circuit open). Showing original.",
+            "LLM service temporarily unavailable (circuit open). Showing original.",
         )
 
     except InvalidAPIKeyError:
@@ -418,15 +541,11 @@ def _parse_llm_response(raw_response: str, expected_count: int) -> list[str]:
 
     # If we got more bullets than expected, try to trim
     if len(bullets) > expected_count:
-        logger.warning(
-            f"LLM returned {len(bullets)} bullets, expected {expected_count}. Trimming."
-        )
+        logger.warning(f"LLM returned {len(bullets)} bullets, expected {expected_count}. Trimming.")
         bullets = bullets[:expected_count]
 
     # If we got fewer, log warning (validator will catch this)
     if len(bullets) < expected_count:
-        logger.warning(
-            f"LLM returned {len(bullets)} bullets, expected {expected_count}."
-        )
+        logger.warning(f"LLM returned {len(bullets)} bullets, expected {expected_count}.")
 
     return bullets

@@ -5,21 +5,19 @@ POST /api/v1/resume/parse    → Upload and parse a resume
 POST /api/v1/resume/tailor   → Tailor a resume for a job description
 GET  /api/v1/resume/strategies → List available rewrite strategies
 """
-import hashlib
+
 import json
 import time
-import uuid
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, Request
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
-from loguru import logger
 
 from app.dependencies import get_db
 from app.models.audit_log import AuditLog
+from app.services.llm_service import RewriteStrategy
 from app.services.resume_parser import ResumeParser
 from app.services.tailoring_pipeline import TailoringPipeline
-from app.services.llm_service import RewriteStrategy
-from app.utils.hashing import hash_pii, hash_jd
+from app.utils.hashing import hash_jd, hash_pii
 
 router = APIRouter()
 
@@ -38,9 +36,7 @@ def _get_file_extension(filename: str) -> str:
         raise HTTPException(400, "File must have an extension (.pdf, .docx, .txt)")
     ext = filename.rsplit(".", 1)[1].lower()
     if ext not in ALLOWED_EXTENSIONS:
-        raise HTTPException(
-            400, f"Unsupported file type: .{ext}. Allowed: {ALLOWED_EXTENSIONS}"
-        )
+        raise HTTPException(400, f"Unsupported file type: .{ext}. Allowed: {ALLOWED_EXTENSIONS}")
     return ext
 
 
@@ -85,12 +81,14 @@ async def parse_resume(
         user_hash=hash_pii(request.headers.get("X-User-ID", "anonymous")),
         request_id=request_id,
         action="resume.parse",
-        metadata_json=json.dumps({
-            "format": ext,
-            "file_size_bytes": len(content),
-            "bullet_count": ast.bullet_count,
-            "skill_count": len(ast.skills),
-        }),
+        metadata_json=json.dumps(
+            {
+                "format": ext,
+                "file_size_bytes": len(content),
+                "bullet_count": ast.bullet_count,
+                "skill_count": len(ast.skills),
+            }
+        ),
         success=True,
         duration_ms=duration_ms,
     )
@@ -143,11 +141,10 @@ async def tailor_resume_endpoint(
 
     try:
         rewrite_strategy = RewriteStrategy(strategy)
-    except ValueError:
+    except ValueError as exc:
         raise HTTPException(
-            400,
-            f"Invalid strategy: {strategy}. Use: slight_tweak, moderate, ground_up"
-        )
+            400, f"Invalid strategy: {strategy}. Use: slight_tweak, moderate, ground_up"
+        ) from exc
 
     # TODO: Get encrypted API key from authenticated user's database record
     # For now, use fallback mode
@@ -170,16 +167,18 @@ async def tailor_resume_endpoint(
         user_hash=hash_pii(request.headers.get("X-User-ID", "anonymous")),
         request_id=request_id,
         action="resume.tailor",
-        metadata_json=json.dumps({
-            "company": company_name,
-            "role": role_title,
-            "strategy": strategy,
-            "provider": provider,
-            "jd_hash": hash_jd(job_description),
-            "rewrite_accepted": result.rewrite_accepted,
-            "used_fallback": result.used_fallback,
-            "bullet_count": len(result.bullets),
-        }),
+        metadata_json=json.dumps(
+            {
+                "company": company_name,
+                "role": role_title,
+                "strategy": strategy,
+                "provider": provider,
+                "jd_hash": hash_jd(job_description),
+                "rewrite_accepted": result.rewrite_accepted,
+                "used_fallback": result.used_fallback,
+                "bullet_count": len(result.bullets),
+            }
+        ),
         success=result.rewrite_accepted,
         duration_ms=duration_ms,
     )

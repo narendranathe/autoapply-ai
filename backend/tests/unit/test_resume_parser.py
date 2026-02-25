@@ -5,6 +5,7 @@ We test with known resume formats to ensure deterministic parsing.
 These are the ground-truth tests — if the parser breaks, the
 entire anti-hallucination system breaks.
 """
+
 import pytest
 
 from app.services.resume_parser import ResumeParser, ResumeSection

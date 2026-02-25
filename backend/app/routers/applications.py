@@ -7,19 +7,19 @@ PATCH /api/v1/applications/{id}    → Update application status
 GET  /api/v1/applications/stats    → Application statistics
 GET  /api/v1/applications/similar  → Find similar previous applications
 """
+
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from loguru import logger
 
 from app.dependencies import get_db
-from app.services.application_service import ApplicationService
 from app.schemas.application import (
-    ApplicationResponse,
     ApplicationListResponse,
+    ApplicationResponse,
     ApplicationStatusUpdate,
 )
+from app.services.application_service import ApplicationService
 from app.utils.hashing import hash_jd
 
 router = APIRouter()
@@ -93,8 +93,8 @@ async def find_similar(
             "found": True,
             "application": ApplicationResponse.model_validate(similar),
             "message": f"You applied to {similar.company_name} for "
-                      f"{similar.role_title} on {similar.created_at.strftime('%Y-%m-%d')}. "
-                      f"Would you like to tweak that resume?",
+            f"{similar.role_title} on {similar.created_at.strftime('%Y-%m-%d')}. "
+            f"Would you like to tweak that resume?",
         }
 
     return {
@@ -133,11 +133,9 @@ async def update_application_status(
     user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
     try:
-        application = await service.update_status(
-            db, application_id, user_id, body.status
-        )
+        application = await service.update_status(db, application_id, user_id, body.status)
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
 
     if not application:
         raise HTTPException(404, "Application not found")
