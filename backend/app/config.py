@@ -66,12 +66,31 @@ class Settings(BaseSettings):
     RATE_LIMIT_PER_MINUTE: int = 60
     GITHUB_API_RATE_BUFFER: int = 500
 
+    # ── Ollama ────────────────────────────────────────────
+    OLLAMA_BASE_URL: str = "http://localhost:11434"
+
     # ── CORS ──────────────────────────────────────────────
+    # In production set EXTENSION_ID to your published Chrome extension ID
+    # so only your extension can call the API.
+    EXTENSION_ID: str = ""
     ALLOWED_ORIGINS: list[str] = [
         "chrome-extension://*",
         "http://localhost:3000",
         "http://localhost:5173",
     ]
+
+    @property
+    def cors_origins(self) -> list[str]:
+        """
+        Returns effective CORS origins.
+        In production with a known extension ID, restricts to that extension only.
+        """
+        if self.is_production and self.EXTENSION_ID:
+            return [
+                f"chrome-extension://{self.EXTENSION_ID}",
+                *[o for o in self.ALLOWED_ORIGINS if not o.startswith("chrome-extension://")],
+            ]
+        return self.ALLOWED_ORIGINS
 
     @field_validator("ENVIRONMENT")
     @classmethod

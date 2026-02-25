@@ -10,7 +10,7 @@
  * 6. Inject the floating overlay badge on career pages
  */
 
-import type { DetectedField, DetectedQuestion, FieldType, Message, PageContext, QuestionCategory } from "../shared/types";
+import type { DetectedField, DetectedQuestion, FieldType, JobCard, Message, PageContext, QuestionCategory } from "../shared/types";
 
 // ── Field detection ────────────────────────────────────────────────────────
 
@@ -266,6 +266,14 @@ function buildAndSendContext() {
 
   chrome.runtime.sendMessage<Message>({ type: "PAGE_CONTEXT_UPDATE", payload: context });
 
+  // In scout mode, also send the scraped job cards so JobScout shows all results
+  if (mode === "scout") {
+    const cards: JobCard[] = extractJobCards();
+    if (cards.length > 0) {
+      chrome.runtime.sendMessage<Message>({ type: "JOB_CARDS_UPDATE", payload: cards });
+    }
+  }
+
   if (mode === "apply" && company) {
     injectOverlayBadge(company, `${fields.length} fields detected`);
   }
@@ -286,14 +294,49 @@ function detectPlatform(url: string): string {
 chrome.runtime.onMessage.addListener((message: Message) => {
   if (message.type === "FILL_FIELD") {
     const { fieldId, value } = message.payload;
-    const el = document.getElementById(fieldId) as HTMLInputElement | null
-      || document.querySelector<HTMLInputElement>(`[name="${fieldId}"]`);
+    const el =
+      (document.getElementById(fieldId) as HTMLInputElement | null) ||
+      document.querySelector<HTMLInputElement>(`[name="${fieldId}"]`);
     if (el) {
       el.focus();
       el.value = value;
       el.dispatchEvent(new Event("input", { bubbles: true }));
       el.dispatchEvent(new Event("change", { bubbles: true }));
     }
+  }
+
+  if (message.type === "FILL_ANSWER") {
+    const { questionId, text } = message.payload;
+    const el =
+      (document.getElementById(questionId) as HTMLTextAreaElement | null) ||
+      document.querySelector<HTMLTextAreaElement>(`[name="${questionId}"]`) ||
+      document.querySelector<HTMLTextAreaElement>("textarea");
+    if (el) {
+      el.focus();
+      el.value = text;
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  }
+
+  if (message.type === "ATTACH_RESUME") {
+    const { fieldId, pdfUrl } = message.payload;
+    const fileInput =
+      (document.getElementById(fieldId) as HTMLInputElement | null) ||
+      document.querySelector<HTMLInputElement>(`input[type="file"][accept*="pdf"], input[type="file"]`);
+    if (!fileInput) return;
+
+    fetch(pdfUrl)
+      .then((r) => r.blob())
+      .then((blob) => {
+        const file = new File([blob], "resume.pdf", { type: "application/pdf" });
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        fileInput.files = dt.files;
+        fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+        fileInput.dispatchEvent(new Event("input", { bubbles: true }));
+      })
+      .catch(console.error);
   }
 });
 

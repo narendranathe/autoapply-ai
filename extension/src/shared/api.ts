@@ -1,12 +1,43 @@
 // Typed API client — talks to the FastAPI backend at localhost:8000
 
+import type { ATSScoreResult, ResumeCard } from "./types";
+
 const API_BASE = "http://localhost:8000/api/v1";
+
+// ── Auth token ─────────────────────────────────────────────────────────────
+// Set once when the user signs in via Clerk. Sent on every request so the
+// backend can resolve the authenticated user.
+
+let _clerkUserId: string | null = null;
+
+export function setClerkUserId(id: string | null) {
+  _clerkUserId = id;
+  if (id) {
+    chrome.storage.local.set({ clerkUserId: id });
+  } else {
+    chrome.storage.local.remove("clerkUserId");
+  }
+}
+
+/** Restore the Clerk user ID from storage on extension startup. */
+export async function restoreClerkUserId(): Promise<void> {
+  const { clerkUserId } = await chrome.storage.local.get("clerkUserId");
+  if (clerkUserId) _clerkUserId = clerkUserId as string;
+}
+
+function authHeaders(): Record<string, string> {
+  return _clerkUserId ? { "X-Clerk-User-Id": _clerkUserId } : {};
+}
+
+// ── HTTP helpers ───────────────────────────────────────────────────────────
 
 async function post<T>(path: string, body: FormData | Record<string, unknown>): Promise<T> {
   const isForm = body instanceof FormData;
   const resp = await fetch(`${API_BASE}${path}`, {
     method: "POST",
-    headers: isForm ? undefined : { "Content-Type": "application/json" },
+    headers: isForm
+      ? authHeaders()
+      : { "Content-Type": "application/json", ...authHeaders() },
     body: isForm ? body : JSON.stringify(body),
   });
   if (!resp.ok) {
@@ -19,20 +50,67 @@ async function post<T>(path: string, body: FormData | Record<string, unknown>): 
 async function get<T>(path: string, params?: Record<string, string>): Promise<T> {
   const url = new URL(`${API_BASE}${path}`);
   if (params) Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
-  const resp = await fetch(url.toString());
+  const resp = await fetch(url.toString(), { headers: authHeaders() });
   if (!resp.ok) throw new Error(`API GET ${path} failed (${resp.status})`);
   return resp.json() as Promise<T>;
 }
 
-// ── Vault endpoints ────────────────────────────────────────────────────────
+// ── Response types ─────────────────────────────────────────────────────────
 
 export interface RetrieveResponse {
-  company_history: unknown[];
-  best_match: unknown | null;
+  company_history: ResumeCard[];
+  best_match: ResumeCard | null;
   positioning_summary: string | null;
-  reuse_recommendation: string;
-  ats_result: unknown | null;
+  reuse_recommendation: "reuse" | "tweak" | "generate_new";
+  ats_result: ATSScoreResult | null;
 }
+
+export interface AnswerResponse {
+  drafts: string[];
+  previously_used: string | null;
+  previously_used_at: string | null;
+  question_category: string;
+}
+
+export interface SaveAnswerResponse {
+  answer_id: string;
+  word_count: number;
+  question_hash: string;
+  saved: boolean;
+}
+
+export interface ResumeListResponse {
+  items: Array<{
+    resume_id: string;
+    filename: string;
+    version_tag: string | null;
+    target_company: string | null;
+    target_role: string | null;
+    ats_score: number | null;
+    bullet_count: number;
+    is_base_template: boolean;
+    is_generated: boolean;
+    github_path: string | null;
+    created_at: string;
+  }>;
+  page: number;
+  per_page: number;
+}
+
+export interface GenerateResumeResponse {
+  resume_id: string;
+  version_tag: string;
+  recruiter_filename: string;
+  latex_content: string;
+  markdown_preview: string;
+  ats_score_estimate: number | null;
+  skills_gap: string[];
+  changes_summary: string;
+  llm_provider_used: string;
+  warnings: string[];
+}
+
+// ── Vault endpoints ────────────────────────────────────────────────────────
 
 export const vaultApi = {
   /** Semantic retrieval: find past resumes for a company + JD */
@@ -44,7 +122,7 @@ export const vaultApi = {
   },
 
   /** ATS score: score a stored resume against a JD */
-  atsScore(jdText: string, resumeId?: string, resumeText?: string): Promise<unknown> {
+  atsScore(jdText: string, resumeId?: string, resumeText?: string): Promise<ATSScoreResult> {
     const fd = new FormData();
     fd.append("jd_text", jdText);
     if (resumeId) fd.append("resume_id", resumeId);
@@ -62,7 +140,7 @@ export const vaultApi = {
     workHistoryText: string;
     llmProvider?: string;
     llmApiKey?: string;
-  }): Promise<{ drafts: string[]; previously_used: string | null }> {
+  }): Promise<AnswerResponse> {
     const fd = new FormData();
     fd.append("question_text", params.questionText);
     fd.append("question_category", params.questionCategory);
@@ -85,7 +163,7 @@ export const vaultApi = {
     jobId?: string;
     wasDefault?: boolean;
     llmProviderUsed?: string;
-  }): Promise<{ answer_id: string; saved: boolean }> {
+  }): Promise<SaveAnswerResponse> {
     const fd = new FormData();
     fd.append("question_text", params.questionText);
     fd.append("question_category", params.questionCategory);
@@ -99,12 +177,12 @@ export const vaultApi = {
   },
 
   /** All resumes and answers for a company (recruiter callback reference) */
-  companyHistory(companyName: string): Promise<unknown> {
+  companyHistory(companyName: string): Promise<{ company: string; resumes: ResumeCard[]; answers: unknown[] }> {
     return get(`/vault/history/${encodeURIComponent(companyName)}`);
   },
 
   /** List all resumes in vault */
-  listResumes(company?: string): Promise<{ items: unknown[] }> {
+  listResumes(company?: string): Promise<ResumeListResponse> {
     return get("/vault/resumes", company ? { company } : undefined);
   },
 };

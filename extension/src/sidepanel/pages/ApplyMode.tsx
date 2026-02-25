@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import type { ATSScoreResult, PageContext, ResumeCard } from "../../shared/types";
-import { vaultApi } from "../../shared/api";
+import { vaultApi, type RetrieveResponse } from "../../shared/api";
 import ATSScoreBar from "../components/ATSScoreBar";
 import ResumeCardComponent from "../components/ResumeCard";
 
@@ -22,10 +22,9 @@ export default function ApplyMode({ context }: Props) {
     setLoading(true);
     vaultApi
       .retrieve(context.company)
-      .then((res) => {
-        const items = (res.company_history || []) as ResumeCard[];
-        setResumes(items);
-        if (res.ats_result) setAts(res.ats_result as ATSScoreResult);
+      .then((res: RetrieveResponse) => {
+        setResumes(res.company_history ?? []);
+        if (res.ats_result) setAts(res.ats_result);
       })
       .catch(console.error)
       .finally(() => setLoading(false));
@@ -73,7 +72,11 @@ export default function ApplyMode({ context }: Props) {
       companyName: context.company,
       roleTitle: context.roleTitle,
     });
-    handleFillField(questionId, text);
+    // Use FILL_ANSWER so the content script targets textarea elements
+    chrome.runtime.sendMessage({
+      type: "FILL_ANSWER",
+      payload: { questionId, text },
+    });
     setSavingAnswer(null);
   };
 

@@ -279,8 +279,10 @@ async def _call_kimi(system: str, user: str, api_key: str) -> str:
 
 async def _call_ollama(system: str, user: str, model: str = "llama3.1:8b") -> str:
     async with httpx.AsyncClient(timeout=180.0) as client:
+        from app.config import settings
+
         response = await client.post(
-            "http://localhost:11434/api/generate",
+            f"{settings.OLLAMA_BASE_URL}/api/generate",
             json={
                 "model": model,
                 "system": system,

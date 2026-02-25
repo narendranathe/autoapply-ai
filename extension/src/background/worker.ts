@@ -141,8 +141,9 @@ chrome.runtime.onMessage.addListener(
         return true; // Keep channel open for async sendResponse
       }
 
-      case "FILL_FIELD": {
-        // Sidepanel asks content script to fill a specific field
+      case "FILL_FIELD":
+      case "FILL_ANSWER": {
+        // Sidepanel asks content script to fill a specific field / textarea
         chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
           if (tabs[0]?.id) {
             chrome.tabs.sendMessage(tabs[0].id, message).catch(() => {});
@@ -158,6 +159,12 @@ chrome.runtime.onMessage.addListener(
             chrome.tabs.sendMessage(tabs[0].id, message).catch(() => {});
           }
         });
+        break;
+      }
+
+      case "JOB_CARDS_UPDATE": {
+        // Content script sends scraped job cards; relay to sidepanel
+        chrome.runtime.sendMessage(message).catch(() => {});
         break;
       }
     }

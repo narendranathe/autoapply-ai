@@ -25,7 +25,7 @@ from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies import get_db
+from app.dependencies import get_current_user, get_db
 from app.models.resume import ApplicationAnswer, Resume
 from app.models.user import User
 from app.services.ats_service import ATSResult, score_resume
@@ -45,22 +45,6 @@ _resume_parser = ResumeParser()
 _github_service = GitHubService()
 
 
-# ── Placeholder user resolution ────────────────────────────────────────────
-# TODO: Replace with real Clerk auth once auth is wired up.
-
-
-async def _get_placeholder_user(db: AsyncSession) -> User:
-    """Temporary: return the first user in DB for development."""
-    result = await db.execute(select(User).limit(1))
-    user = result.scalar_one_or_none()
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="No user found. Create a user first via /api/v1/users.",
-        )
-    return user
-
-
 # ── Upload ─────────────────────────────────────────────────────────────────
 
 
@@ -72,6 +56,7 @@ async def upload_resume(
     target_role: str | None = Form(None),
     is_base_template: bool = Form(False),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """
     Upload a resume file (PDF, DOCX, or .tex) to the vault.
@@ -80,7 +65,6 @@ async def upload_resume(
     Personal data stored here is for retrieval/ATS only — canonical source
     is the user's private GitHub vault.
     """
-    user = await _get_placeholder_user(db)
 
     file_bytes = await file.read()
     filename = file.filename or "resume"
@@ -171,9 +155,9 @@ async def list_resumes(
     per_page: int = 20,
     company: str | None = None,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """List all resumes in the user's vault, newest first."""
-    user = await _get_placeholder_user(db)
 
     stmt = select(Resume).where(Resume.user_id == user.id)
     if company:
@@ -212,8 +196,8 @@ async def list_resumes(
 async def delete_resume(
     resume_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
-    user = await _get_placeholder_user(db)
     result = await db.execute(
         select(Resume).where(Resume.id == resume_id, Resume.user_id == user.id)
     )
@@ -234,6 +218,7 @@ async def retrieve_resumes(
     jd_text: str | None = Form(None),
     top_k: int = Form(5),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """
     Semantic retrieval: returns the most relevant resumes for a company + JD.
@@ -242,7 +227,6 @@ async def retrieve_resumes(
     - Company + JD text → TF-IDF similarity ranked results
     Returns positioning advice alongside the resume list.
     """
-    user = await _get_placeholder_user(db)
 
     if jd_text:
         advice = await _retrieval_agent.get_positioning_advice(db, user.id, jd_text, company_name)
@@ -274,12 +258,12 @@ async def ats_score(
     resume_id: str | None = Form(None),
     resume_text: str | None = Form(None),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """
     Score a resume against a job description.
     Provide either resume_id (to score a stored resume) or raw resume_text.
     """
-    user = await _get_placeholder_user(db)
 
     raw_text = resume_text
     if resume_id and not raw_text:
@@ -326,6 +310,7 @@ async def generate_resume(
     # Base resume for ATS pre-scoring
     base_resume_id: str | None = Form(None),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """
     Generate a complete LaTeX resume tailored to the JD.
@@ -333,7 +318,6 @@ async def generate_resume(
     Returns: latex_content, markdown_preview, version_tag, recruiter_filename,
              ats_score_estimate, skills_gap, changes_summary, llm_provider_used
     """
-    user = await _get_placeholder_user(db)
 
     # Pre-score with base resume if available
     ats_result: ATSResult | None = None
@@ -368,7 +352,7 @@ async def generate_resume(
         job_id=job_id,
         ats_result=ats_result,
         provider=llm_provider,
-        api_key=llm_api_key or "",
+        api_key=llm_api_key or user.encrypted_llm_api_key or "",
         ollama_model=ollama_model,
     )
 
@@ -425,13 +409,12 @@ async def generate_answers(
     llm_api_key: str | None = Form(None),
     ollama_model: str = Form("llama3.1:8b"),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """
     Generate 3 draft answers to an open-ended application question.
     Each draft is ≤ 250 words, grounded in the user's real work history.
     """
-    user = await _get_placeholder_user(db)
-
     # Check for a previously used answer first
     prev = await _retrieval_agent.get_previous_answer(db, user.id, question_text, company_name)
 
@@ -443,7 +426,7 @@ async def generate_answers(
         jd_text=jd_text,
         work_history_text=work_history_text,
         provider=llm_provider,
-        api_key=llm_api_key or "",
+        api_key=llm_api_key or user.encrypted_llm_api_key or "",
         ollama_model=ollama_model,
     )
 
@@ -470,9 +453,9 @@ async def save_answer(
     was_default: bool = Form(False),
     llm_provider_used: str = Form(""),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """Save a user-accepted answer to the DB for future reuse and callback reference."""
-    user = await _get_placeholder_user(db)
 
     q_hash = hashlib.sha256(" ".join(question_text.lower().split()).encode()).hexdigest()
 
@@ -511,9 +494,9 @@ async def save_answer(
 async def company_history(
     company_name: str,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """All resumes and answers ever used for a company — recruiter callback reference."""
-    user = await _get_placeholder_user(db)
 
     resumes = await _retrieval_agent.retrieve_by_company(db, user.id, company_name)
 
@@ -552,9 +535,9 @@ async def get_answers(
     company_name: str,
     category: str | None = None,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """Retrieve previously saved Q&A answers for a company."""
-    user = await _get_placeholder_user(db)
 
     stmt = (
         select(ApplicationAnswer)
@@ -631,6 +614,7 @@ async def sync_markdown(
     markdown_content: str = Form(...),
     timestamp: str = Form(...),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """
     Sync an offline markdown edit to the database.
@@ -639,7 +623,6 @@ async def sync_markdown(
     Updates the resume's markdown_content in the vault so it reflects any
     offline edits the user made to their resume preview.
     """
-    user = await _get_placeholder_user(db)
 
     result = await db.execute(
         select(Resume)
@@ -674,6 +657,7 @@ async def sync_markdown(
 async def list_github_versions(
     company: str | None = None,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """
     List all named resume versions from the GitHub resume-vault versions/ dir.
@@ -681,7 +665,6 @@ async def list_github_versions(
     Returns [{version_tag, path, sha, download_url}] for each .tex file.
     Requires user to have a GitHub token stored.
     """
-    user = await _get_placeholder_user(db)
 
     if not user.encrypted_github_token:
         raise HTTPException(

@@ -247,8 +247,10 @@ class OllamaProvider(LLMProvider):
     @llm_circuit
     async def complete(self, system_prompt: str, user_prompt: str, api_key: str = "") -> str:
         async with httpx.AsyncClient(timeout=180.0) as client:
+            from app.config import settings
+
             response = await client.post(
-                "http://localhost:11434/api/generate",
+                f"{settings.OLLAMA_BASE_URL}/api/generate",
                 json={
                     "model": self.model,
                     "system": system_prompt,

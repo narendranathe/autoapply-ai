@@ -146,8 +146,6 @@ async def tailor_resume_endpoint(
             400, f"Invalid strategy: {strategy}. Use: slight_tweak, moderate, ground_up"
         ) from exc
 
-    # TODO: Get encrypted API key from authenticated user's database record
-    # For now, use fallback mode
     encrypted_api_key = ""
 
     # Run the pipeline

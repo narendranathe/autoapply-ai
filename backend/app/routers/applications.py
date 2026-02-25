@@ -13,7 +13,8 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies import get_db
+from app.dependencies import get_current_user, get_db
+from app.models.user import User
 from app.schemas.application import (
     ApplicationListResponse,
     ApplicationResponse,
@@ -33,6 +34,7 @@ async def list_applications(
     company: str | None = Query(default=None, description="Filter by company name"),
     status: str | None = Query(default=None, description="Filter by status"),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """
     List all applications for the current user.
@@ -40,9 +42,7 @@ async def list_applications(
     Supports pagination and filtering by company name or status.
     Results are ordered by most recent first.
     """
-    # TODO: Get user_id from authenticated session
-    # For now, use a placeholder
-    user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+    user_id = user.id
 
     applications, total = await service.list_applications(
         db=db,
@@ -65,9 +65,10 @@ async def list_applications(
 @router.get("/stats")
 async def get_stats(
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """Get application statistics (total, by status, unique companies)."""
-    user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+    user_id = user.id
     return await service.get_stats(db, user_id)
 
 
@@ -76,6 +77,7 @@ async def find_similar(
     company_name: str = Query(..., description="Company to check"),
     job_description: str = Query(..., min_length=20, description="JD text"),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """
     Check if the user has applied to a similar role before.
@@ -83,7 +85,7 @@ async def find_similar(
     Returns the most similar previous application, if any.
     Used by the Chrome extension to offer "reuse previous resume" flow.
     """
-    user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+    user_id = user.id
     jd_hash_val = hash_jd(job_description)
 
     similar = await service.find_similar(db, user_id, jd_hash_val, company_name)
@@ -108,9 +110,10 @@ async def find_similar(
 async def get_application(
     application_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """Get a single application by ID."""
-    user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+    user_id = user.id
 
     application = await service.get_application(db, application_id, user_id)
     if not application:
@@ -124,13 +127,14 @@ async def update_application_status(
     application_id: uuid.UUID,
     body: ApplicationStatusUpdate,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """
     Update the status of an application.
 
     Valid statuses: draft, tailored, applied, rejected, interview, offer
     """
-    user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+    user_id = user.id
 
     try:
         application = await service.update_status(db, application_id, user_id, body.status)

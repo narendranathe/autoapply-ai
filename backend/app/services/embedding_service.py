@@ -185,8 +185,10 @@ async def generate_embedding_ollama(text: str, model: str = "nomic-embed-text") 
     Recommended local model: nomic-embed-text
     """
     async with httpx.AsyncClient(timeout=30.0) as client:
+        from app.config import settings
+
         response = await client.post(
-            "http://localhost:11434/api/embeddings",
+            f"{settings.OLLAMA_BASE_URL}/api/embeddings",
             json={"model": model, "prompt": text[:8000]},
         )
         response.raise_for_status()

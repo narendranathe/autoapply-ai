@@ -78,12 +78,20 @@ export interface AnswerDraft {
   index: number;
 }
 
+export interface JobCard {
+  company: string;
+  role: string;
+  url: string;
+}
+
 // Messages between content script ↔ background ↔ sidepanel
 export type Message =
   | { type: "PAGE_CONTEXT_UPDATE"; payload: PageContext }
   | { type: "OPEN_SIDEPANEL" }
   | { type: "FILL_FIELD"; payload: { fieldId: string; value: string } }
+  | { type: "FILL_ANSWER"; payload: { questionId: string; text: string } }
   | { type: "ATTACH_RESUME"; payload: { fieldId: string; pdfUrl: string } }
+  | { type: "JOB_CARDS_UPDATE"; payload: JobCard[] }
   | { type: "GET_CONTEXT" }
   | { type: "CONTEXT_RESPONSE"; payload: PageContext | null };
 

@@ -1,28 +1,43 @@
 import React, { useEffect, useState } from "react";
-import type { PageContext } from "../../shared/types";
+import type { JobCard, Message, PageContext } from "../../shared/types";
 import { vaultApi } from "../../shared/api";
 import ATSScoreBar from "../components/ATSScoreBar";
 
 interface Props { context: PageContext }
 
-interface JobEntry {
-  company: string;
-  role: string;
-  url: string;
+interface JobEntry extends JobCard {
   score: number | null;
   loading: boolean;
   pastCount: number;
 }
 
+function scoreJob(entry: JobEntry, setJobs: React.Dispatch<React.SetStateAction<JobEntry[]>>) {
+  vaultApi.retrieve(entry.company).then((res) => {
+    const ats = res.ats_result as { overall_score?: number } | null;
+    const history = (res.company_history || []) as unknown[];
+    setJobs((prev) =>
+      prev.map((j) =>
+        j.company === entry.company && j.role === entry.role
+          ? { ...j, score: ats?.overall_score ?? null, loading: false, pastCount: history.length }
+          : j
+      )
+    );
+  }).catch(() => {
+    setJobs((prev) =>
+      prev.map((j) =>
+        j.company === entry.company && j.role === entry.role ? { ...j, loading: false } : j
+      )
+    );
+  });
+}
+
 export default function JobScout({ context }: Props) {
   const [jobs, setJobs] = useState<JobEntry[]>([]);
 
-  // On LinkedIn/Indeed, the content script may send job cards via context
-  // For now seed from context metadata; real job cards come via DOM scraping.
+  // Seed from current-page context immediately
   useEffect(() => {
-    // Placeholder: show the current page's company as one entry
     if (context.company) {
-      const entry: JobEntry = {
+      const seed: JobEntry = {
         company: context.company,
         role: context.roleTitle,
         url: context.jobUrl,
@@ -30,24 +45,28 @@ export default function JobScout({ context }: Props) {
         loading: true,
         pastCount: 0,
       };
-      setJobs([entry]);
-
-      // Score against vault
-      vaultApi.retrieve(context.company).then((res) => {
-        const ats = res.ats_result as { overall_score?: number } | null;
-        const history = (res.company_history || []) as unknown[];
-        setJobs((prev) =>
-          prev.map((j) =>
-            j.company === context.company
-              ? { ...j, score: ats?.overall_score ?? null, loading: false, pastCount: history.length }
-              : j
-          )
-        );
-      }).catch(() => {
-        setJobs((prev) => prev.map((j) => ({ ...j, loading: false })));
-      });
+      setJobs([seed]);
+      scoreJob(seed, setJobs);
     }
-  }, [context.company]);
+  }, [context.company, context.roleTitle, context.jobUrl]);
+
+  // Listen for scraped job cards from the content script (LinkedIn / Indeed)
+  useEffect(() => {
+    const listener = (message: Message) => {
+      if (message.type !== "JOB_CARDS_UPDATE") return;
+      const incoming = message.payload as JobCard[];
+      const newEntries: JobEntry[] = incoming.map((c) => ({
+        ...c,
+        score: null,
+        loading: true,
+        pastCount: 0,
+      }));
+      setJobs(newEntries);
+      newEntries.forEach((e) => scoreJob(e, setJobs));
+    };
+    chrome.runtime.onMessage.addListener(listener);
+    return () => chrome.runtime.onMessage.removeListener(listener);
+  }, []);
 
   const S = {
     container: { display: "flex", flexDirection: "column" as const, height: "calc(100vh - 53px)" },
