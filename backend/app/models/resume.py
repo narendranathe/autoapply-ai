@@ -64,7 +64,7 @@ class Resume(Base, TimestampMixin):
 
     # --- Version / identity ---
     # Internal git tag name: Narendranath_Google_DE or Narendranath_Google_DE_JOB123
-    version_tag: Mapped[str | None] = mapped_column(String(200), nullable=True, index=True)
+    version_tag: Mapped[str | None] = mapped_column(String(200), nullable=True)
     # Recruiter-facing filename (always FirstName.pdf at download time — stored for reference)
     recruiter_filename: Mapped[str | None] = mapped_column(String(100), nullable=True)
     is_base_template: Mapped[bool] = mapped_column(Boolean, default=False)

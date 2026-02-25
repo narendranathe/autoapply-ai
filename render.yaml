@@ -33,9 +33,9 @@ services:
         sync: false
       - key: GITHUB_TOKEN
         sync: false
-      - key: GITHUB_REPO_OWNER
+      - key: GITHUB_VAULT_OWNER
         sync: false
-      - key: GITHUB_REPO_NAME
+      - key: GITHUB_VAULT_REPO
         sync: false
       - key: SENTRY_DSN
         sync: false

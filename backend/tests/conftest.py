@@ -48,8 +48,9 @@ async def db_session(test_engine) -> AsyncGenerator[AsyncSession, None]:
     Provide a database session with full isolation per test.
     Creates tables → runs test → rolls back → drops tables.
     """
-    # Create all tables fresh for this test
+    # Clean slate: drop any tables left by alembic or a prior run, then recreate
     async with test_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
 
     # Create session factory bound to the engine

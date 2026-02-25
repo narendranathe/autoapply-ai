@@ -47,7 +47,7 @@ jobs:
     env:
       DATABASE_URL: "postgresql+asyncpg://autoapply:testpassword@localhost:5433/autoapply_test"
       REDIS_URL: "redis://localhost:6379"
-      ENVIRONMENT: "testing"
+      ENVIRONMENT: "test"
       FERNET_KEY: "x_fMBr_lJSHIVPOtMtFxnq5RZ34kEFiL-7UEiM-JKYA="
       JWT_SECRET: "ci-test-secret-not-real"
 
