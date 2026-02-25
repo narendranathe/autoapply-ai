@@ -3,8 +3,7 @@ name = "autoapply-ai-backend"
 version = "0.1.0"
 description = "AutoApply AI - Resume tailoring backend"
 authors = ["Your Name <your@email.com>"]
-readme = "README.md"
-packages = [{include = "app"}]
+package-mode = false
 
 [tool.poetry.dependencies]
 python = "^3.12"

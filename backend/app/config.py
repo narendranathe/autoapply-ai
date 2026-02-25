@@ -37,6 +37,21 @@ class Settings(BaseSettings):
 
     # ── Database ──────────────────────────────────────────
     DATABASE_URL: str = "postgresql+asyncpg://autoapply:localdev@localhost:5432/autoapply"
+
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def fix_database_url(cls, v: str) -> str:
+        """
+        Render (and some other hosts) provide DATABASE_URL as postgres:// or
+        postgresql:// (psycopg2 sync scheme). asyncpg requires
+        postgresql+asyncpg://. Normalise here so the app works on any host.
+        """
+        if v.startswith("postgres://"):
+            return v.replace("postgres://", "postgresql+asyncpg://", 1)
+        if v.startswith("postgresql://"):
+            return v.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return v
+
     DB_POOL_SIZE: int = 5
     DB_MAX_OVERFLOW: int = 10
     DB_ECHO: bool = False  # Set True to log all SQL queries
