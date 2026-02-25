@@ -201,6 +201,53 @@ RuntimeError: Unable to find installation candidates for python-magic-bin (0.4.1
 ```
 `python-magic-bin` is a Windows-only package that bundles `libmagic.dll`. It has no Linux build and was never imported anywhere in the codebase. Removed from `pyproject.toml` and regenerated `poetry.lock`.
 
+### Docker Hub secrets added via GitHub API
+GitHub CLI (`gh`) was not installed locally. Used `curl` + PyNaCl (via `poetry run python`) to:
+1. Fetch the repo's RSA public key from `GET /repos/{owner}/{repo}/actions/secrets/public-key`
+2. Encrypt each secret value with a libsodium sealed box (`nacl.public.SealedBox`)
+3. `PUT /repos/{owner}/{repo}/actions/secrets/{name}` with the encrypted payload + key_id
+
+Secrets uploaded: `DOCKERHUB_USERNAME=narendranathe`, `DOCKERHUB_TOKEN=dckr_pat_...`
+
+### Render free tier conflict — Blueprint failed silently
+```
+Create database autoapply-db  (cannot have more than one active free tier database)
+Create Key Value autoapply-redis  (cannot have more than 1 free tier Redis instance)
+Create web service autoapply-ai-api  (canceled: another action failed)
+```
+Render free tier: **1 PostgreSQL + 1 Redis per account**. An existing `job-scout` Blueprint from a separate repo (`narendranathe/job-scout`) already occupied both slots.
+
+**Fix**: Delete the job-scout Blueprint resources manually in Render dashboard (web service → PostgreSQL → Redis → Blueprint), then re-sync the autoapply-ai Blueprint. All three slots become available.
+
+**Lesson**: Render Blueprint apply fails silently with "canceled" on dependent resources when an upstream resource fails. Always check the free tier limits before creating a Blueprint.
+
+### Render deploy — `No module named 'psycopg2'`
+```
+ModuleNotFoundError: No module named 'psycopg2'
+```
+Render injects `DATABASE_URL` as `postgresql://user:pass@host/db` — the standard psycopg2 **sync** driver scheme. Our stack uses `asyncpg` which requires `postgresql+asyncpg://`. SQLAlchemy picked up the `postgresql://` scheme, tried to import the sync psycopg2 driver, which isn't installed.
+
+**Fix**: Added `field_validator("DATABASE_URL", mode="before")` in `config.py` that rewrites any incoming `postgres://` or `postgresql://` URL to `postgresql+asyncpg://` before the engine is created. Transparent to all hosting providers (Render, Railway, Heroku all use the standard scheme).
+
+```python
+@field_validator("DATABASE_URL", mode="before")
+@classmethod
+def fix_database_url(cls, v: str) -> str:
+    if v.startswith("postgres://"):
+        return v.replace("postgres://", "postgresql+asyncpg://", 1)
+    if v.startswith("postgresql://"):
+        return v.replace("postgresql://", "postgresql+asyncpg://", 1)
+    return v
+```
+
+### Poetry `README.md not found` warning during Docker build
+```
+Warning: The current project could not be installed: [Errno 2] No such file or directory: '/app/README.md'
+```
+`pyproject.toml` had `readme = "README.md"` and `packages = [{include = "app"}]`. The README lives at the project root, outside the `./backend` Docker build context — Poetry couldn't find it. This was a warning that Poetry explicitly states will become a hard error in a future version.
+
+**Fix**: Replaced both fields with `package-mode = false`. This tells Poetry the project is dependency-management-only (not a publishable package), eliminating the need for `readme`, `packages`, or any installable entry point entirely.
+
 ---
 
 ## Architectural Decisions
@@ -393,11 +440,79 @@ autoapply-ai/
 |-----------|--------|
 | Backend tests | 74/74 passing |
 | TypeScript | 0 errors |
-| Extension build | Clean (503ms, 41 modules) |
+| Extension build | Clean (41 modules) |
 | ruff / black / mypy | All passing |
 | Docker (local) | postgres + db_test + redis up, both migrations applied |
 | GitHub repo | `narendranathe/autoapply-ai` — main branch current |
+| GitHub Actions secrets | `DOCKERHUB_USERNAME` + `DOCKERHUB_TOKEN` uploaded |
 | Resume vault repo | `narendranathe/resume-vault` (private) — created |
-| Clerk | `feasible-liger-35` (test instance) — JWKS verified |
-| Render deploy | Pending — CI was fixed, retry after CI goes green |
+| Clerk | `feasible-liger-35.clerk.accounts.dev` (test instance) — JWKS verified |
+| Render deploy | **In progress** — psycopg2 + README.md fixes pushed, awaiting redeploy |
 | Chrome extension | `extension/dist/` built, ready for Web Store submission |
+
+---
+
+## Next Steps (in order)
+
+### 1. Confirm Render deploy is green
+Watch Render logs for `autoapply-ai-api` → **Logs** tab. Success looks like:
+```
+[AutoApply] Running database migrations...
+INFO  Running upgrade  -> 15d0f847bcc2, initial schema
+INFO  Running upgrade 15d0f847bcc2 -> a3f2e1d4c5b6, add resume vault
+Starting uvicorn...
+Application startup complete.
+```
+If Render didn't auto-deploy the latest commit: Dashboard → `autoapply-ai-api` → **Manual Deploy** → **Deploy latest commit**.
+
+Copy your URL — e.g. `https://autoapply-ai-api.onrender.com`.
+
+### 2. Create your Clerk user + insert into DB
+**Get Clerk user ID:**
+- https://dashboard.clerk.com → your app → **Users** → **Create user**
+- Enter email + password → after creation click the user → copy **User ID** (`user_2...`)
+
+**Insert into production DB** (Render Dashboard → `autoapply-db` → **Shell** tab):
+```sql
+INSERT INTO users (id, clerk_id, email_hash, is_active, created_at, updated_at, total_resumes_generated, total_applications_tracked)
+VALUES (
+  gen_random_uuid(),
+  'user_YOUR_CLERK_ID_HERE',
+  encode(sha256('your@email.com'::bytea), 'hex'),
+  true, now(), now(), 0, 0
+) ON CONFLICT DO NOTHING;
+```
+
+### 3. Configure the Chrome extension
+Build (if not already):
+```bash
+cd extension && npm run build
+```
+Load: Chrome → `chrome://extensions` → **Developer mode** → **Load unpacked** → select `extension/dist/`
+
+Options (right-click icon → Options):
+- **API Base URL** → `https://autoapply-ai-api.onrender.com/api/v1` → **Save & Test**
+- **Clerk User ID** → your `user_2...` ID → **Verify & Save**
+
+### 4. Smoke test
+```bash
+# Health check
+curl https://autoapply-ai-api.onrender.com/health
+# → {"status":"alive","service":"autoapply-ai"}
+
+# Vault — should return empty list (no resumes yet)
+curl https://autoapply-ai-api.onrender.com/api/v1/vault/resumes \
+  -H "X-Clerk-User-Id: user_YOUR_CLERK_ID"
+# → {"items":[],"page":1,"per_page":20}
+```
+In Chrome: go to https://www.linkedin.com/jobs/ → sidepanel opens in **Job Scout** mode.
+
+### 5. Chrome Web Store (when ready to publish)
+```bash
+# Windows PowerShell — zip the dist folder
+cd extension
+Compress-Archive -Path dist\* -DestinationPath ..\autoapply-extension.zip
+```
+- https://chrome.google.com/webstore/devconsole → pay $5 one-time fee → **New Item** → upload zip
+- Fill title, description (`extension/store/description.txt`), screenshots (1280×800 minimum)
+- After approval: copy the 32-char extension ID → Render env → add `EXTENSION_ID=<id>` → Save (locks CORS to your extension only)
