@@ -42,16 +42,16 @@ def do_run_migrations(connection):
 
 
 async def run_async_migrations() -> None:
-    _connect_args: dict = {}
-    if settings.DB_SSL_REQUIRE:
-        _connect_args["ssl"] = "require"
+    from sqlalchemy.engine.url import make_url
+
+    _url = make_url(_DATABASE_URL)
     if settings.DB_PASSWORD:
-        _connect_args["password"] = settings.DB_PASSWORD
+        _url = _url.set(password=settings.DB_PASSWORD)
 
     connectable = create_async_engine(
-        _DATABASE_URL,
+        _url,
         pool_pre_ping=True,
-        connect_args=_connect_args,
+        connect_args={"ssl": "require"} if settings.DB_SSL_REQUIRE else {},
     )
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
