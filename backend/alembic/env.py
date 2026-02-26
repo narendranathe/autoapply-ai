@@ -17,14 +17,16 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
 target_metadata = Base.metadata
+
+# Use settings.DATABASE_URL directly — bypasses configparser which misinterprets
+# percent-encoded characters (e.g. %40 in passwords) as interpolation syntax.
+_DATABASE_URL = settings.DATABASE_URL
 
 
 def run_migrations_offline() -> None:
-    url = config.get_main_option("sqlalchemy.url")
     context.configure(
-        url=url,
+        url=_DATABASE_URL,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -41,7 +43,7 @@ def do_run_migrations(connection):
 
 async def run_async_migrations() -> None:
     connectable = create_async_engine(
-        config.get_main_option("sqlalchemy.url"),
+        _DATABASE_URL,
         pool_pre_ping=True,
         connect_args={"ssl": "require"} if settings.DB_SSL_REQUIRE else {},
     )
