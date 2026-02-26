@@ -15,6 +15,12 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from app.config import settings
 
+_connect_args: dict = {}
+if settings.DB_SSL_REQUIRE:
+    _connect_args["ssl"] = "require"
+if settings.DB_PASSWORD:
+    _connect_args["password"] = settings.DB_PASSWORD
+
 engine = create_async_engine(
     settings.DATABASE_URL,
     pool_size=settings.DB_POOL_SIZE,
@@ -22,7 +28,7 @@ engine = create_async_engine(
     echo=settings.DB_ECHO,
     pool_pre_ping=True,
     pool_recycle=1800,
-    connect_args={"ssl": "require"} if settings.DB_SSL_REQUIRE else {},
+    connect_args=_connect_args,
 )
 
 async_session_factory = async_sessionmaker(

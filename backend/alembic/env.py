@@ -42,10 +42,16 @@ def do_run_migrations(connection):
 
 
 async def run_async_migrations() -> None:
+    _connect_args: dict = {}
+    if settings.DB_SSL_REQUIRE:
+        _connect_args["ssl"] = "require"
+    if settings.DB_PASSWORD:
+        _connect_args["password"] = settings.DB_PASSWORD
+
     connectable = create_async_engine(
         _DATABASE_URL,
         pool_pre_ping=True,
-        connect_args={"ssl": "require"} if settings.DB_SSL_REQUIRE else {},
+        connect_args=_connect_args,
     )
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)

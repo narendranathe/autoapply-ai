@@ -52,6 +52,11 @@ class Settings(BaseSettings):
             return v.replace("postgresql://", "postgresql+asyncpg://", 1)
         return v
 
+    # Separate password field — avoids URL percent-encoding issues with
+    # special chars (e.g. @ in passwords). When set, overrides any password
+    # in DATABASE_URL via connect_args so the URL never needs encoding.
+    DB_PASSWORD: str = ""
+
     DB_POOL_SIZE: int = 5
     DB_MAX_OVERFLOW: int = 10
     DB_ECHO: bool = False  # Set True to log all SQL queries
