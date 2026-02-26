@@ -176,3 +176,21 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           tags: autoapply-ai:${{ github.sha }}
+
+  # ── Deploy to Fly.io (main branch only, after all checks pass) ────────────
+  deploy:
+    name: Deploy to Fly.io
+    needs: [backend, extension]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy to Fly.io
+        working-directory: backend
+        run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     DB_POOL_SIZE: int = 5
     DB_MAX_OVERFLOW: int = 10
     DB_ECHO: bool = False  # Set True to log all SQL queries
+    DB_SSL_REQUIRE: bool = False  # Set True for Supabase / managed Postgres in production
 
     # ── Redis ─────────────────────────────────────────────
     REDIS_URL: str = "redis://localhost:6379"

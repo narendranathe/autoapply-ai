@@ -22,6 +22,7 @@ engine = create_async_engine(
     echo=settings.DB_ECHO,
     pool_pre_ping=True,
     pool_recycle=1800,
+    connect_args={"ssl": "require"} if settings.DB_SSL_REQUIRE else {},
 )
 
 async_session_factory = async_sessionmaker(
