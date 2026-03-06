@@ -2,7 +2,7 @@
 
 import { workHistoryApi, type WorkHistoryEntry } from "../shared/api";
 
-const API_DEFAULT = "http://localhost:8000/api/v1";
+const API_DEFAULT = "https://autoapply-ai-api.fly.dev/api/v1";
 
 function get(id: string): HTMLElement {
   return document.getElementById(id) as HTMLElement;
@@ -120,9 +120,13 @@ async function saveAuth() {
     }
 
     showStatus("auth-status", `Backend returned ${meResp.status}.`, "err");
-  } catch {
-    await chrome.storage.local.set({ clerkUserId: userId });
-    showStatus("auth-status", "Saved locally (backend unreachable — will sync later).", "info");
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    showStatus(
+      "auth-status",
+      `Cannot reach backend: ${msg}. Check the Backend API URL below.`,
+      "err"
+    );
   }
 }
 
