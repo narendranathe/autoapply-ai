@@ -6,15 +6,28 @@ const API_DEFAULT = "http://localhost:8000/api/v1";
 
 // Resolved at startup from chrome.storage; falls back to localhost for dev.
 let _apiBase = API_DEFAULT;
+let _clerkUserId: string | null = null;
 
-// Read once on module load, then keep in sync with storage changes.
-chrome.storage.local.get("apiBaseUrl").then((data) => {
-  if (data.apiBaseUrl) _apiBase = data.apiBaseUrl as string;
-});
+// Single promise that resolves once storage has been read.
+let _initPromise: Promise<void> | null = null;
 
+function ensureInit(): Promise<void> {
+  if (!_initPromise) {
+    _initPromise = chrome.storage.local
+      .get(["apiBaseUrl", "clerkUserId"])
+      .then((data) => {
+        if (data.apiBaseUrl) _apiBase = data.apiBaseUrl as string;
+        if (data.clerkUserId) _clerkUserId = data.clerkUserId as string;
+      });
+  }
+  return _initPromise;
+}
+
+// Keep in sync with storage changes after init.
 chrome.storage.onChanged.addListener((changes) => {
   if (changes.apiBaseUrl?.newValue) _apiBase = changes.apiBaseUrl.newValue as string;
   if (changes.apiBaseUrl && !changes.apiBaseUrl.newValue) _apiBase = API_DEFAULT;
+  if (changes.clerkUserId?.newValue) _clerkUserId = changes.clerkUserId.newValue as string;
 });
 
 function getApiBase(): string {
@@ -24,8 +37,6 @@ function getApiBase(): string {
 // ── Auth token ─────────────────────────────────────────────────────────────
 // Set once when the user signs in via Clerk. Sent on every request so the
 // backend can resolve the authenticated user.
-
-let _clerkUserId: string | null = null;
 
 export function setClerkUserId(id: string | null) {
   _clerkUserId = id;
@@ -49,6 +60,7 @@ function authHeaders(): Record<string, string> {
 // ── HTTP helpers ───────────────────────────────────────────────────────────
 
 async function post<T>(path: string, body: FormData | Record<string, unknown>): Promise<T> {
+  await ensureInit();
   const isForm = body instanceof FormData;
   const resp = await fetch(`${getApiBase()}${path}`, {
     method: "POST",
@@ -65,6 +77,7 @@ async function post<T>(path: string, body: FormData | Record<string, unknown>): 
 }
 
 async function get<T>(path: string, params?: Record<string, string>): Promise<T> {
+  await ensureInit();
   const url = new URL(`${getApiBase()}${path}`);
   if (params) Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
   const resp = await fetch(url.toString(), { headers: authHeaders() });
@@ -73,6 +86,7 @@ async function get<T>(path: string, params?: Record<string, string>): Promise<T>
 }
 
 async function patch<T>(path: string, body: FormData): Promise<T> {
+  await ensureInit();
   const resp = await fetch(`${getApiBase()}${path}`, {
     method: "PATCH",
     headers: authHeaders(),
@@ -317,10 +331,11 @@ export const workHistoryApi = {
     return post("/work-history", entry);
   },
 
-  delete(entryId: string): Promise<void> {
-    return fetch(`${_apiBase}/work-history/${entryId}`, {
+  async delete(entryId: string): Promise<void> {
+    await ensureInit();
+    await fetch(`${getApiBase()}/work-history/${entryId}`, {
       method: "DELETE",
       headers: authHeaders(),
-    }).then(() => undefined);
+    });
   },
 };
