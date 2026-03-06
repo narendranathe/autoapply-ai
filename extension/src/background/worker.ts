@@ -10,10 +10,20 @@
 
 import type { Message, PageContext } from "../shared/types";
 
+// Open sidepanel when user clicks the toolbar icon (required for MV3)
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+
+// Fallback: also handle action click directly
+chrome.action.onClicked.addListener((tab) => {
+  if (tab.id) {
+    chrome.sidePanel.open({ tabId: tab.id }).catch(() => {});
+  }
+});
+
 // ── Career page URL patterns ───────────────────────────────────────────────
 
 const CAREER_URL_PATTERNS = [
-  /greenhouse\.io\/jobs\//,
+  /greenhouse\.io/,
   /lever\.co\//,
   /myworkday\.com/,
   /workday\.com\/[^/]+\/d\/jobs/,
@@ -121,6 +131,15 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 chrome.runtime.onMessage.addListener(
   (message: Message, sender, sendResponse) => {
     switch (message.type) {
+      case "OPEN_SIDEPANEL": {
+        // Badge click in content script → open sidepanel for that tab
+        const tabId = sender.tab?.id;
+        if (tabId) {
+          chrome.sidePanel.open({ tabId }).catch(() => {});
+        }
+        break;
+      }
+
       case "PAGE_CONTEXT_UPDATE": {
         // Content script sends enriched context (detected fields, questions)
         if (sender.tab?.id) {

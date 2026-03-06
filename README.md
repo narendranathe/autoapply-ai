@@ -147,6 +147,104 @@ Extension sends `X-Clerk-User-Id` from `chrome.storage.local` (set once at optio
 - Options page validation, typed API client
 - `start.sh`: alembic upgrade head → uvicorn
 
+### Phase 6 — Fly.io migration + extension fixes + UI redesign
+- **Migrated hosting** from Render (50s cold-start spin-down on free tier) to **Fly.io + Supabase + Upstash Redis** for always-on production
+- **Extension sidepanel fixed**: three bugs caused the panel to never open
+- **UI redesigned** to match premium extensions (Simplify / Jobright AI aesthetic)
+
+---
+
+## Phase 6 — Fly.io Migration + Extension Fixes
+
+### Why migrate from Render to Fly.io?
+
+Render's free tier spins down web services after 15 minutes of inactivity. The first request after spin-down takes 50+ seconds — unacceptable for a Chrome extension that fires on every job page load. Fly.io + Supabase is **always-on at zero cost**:
+
+| | Render (before) | Fly.io + Supabase (now) |
+|---|---|---|
+| PostgreSQL | 256 MB shared, 1 active free DB | Supabase 500 MB free, no spin-down |
+| Redis | 25 MB, spin-down | Upstash Redis, pay-as-you-go ($0.20/100K commands) |
+| Web service | 50s cold start | Fly.io shared-cpu-1x, `min_machines_running = 1` |
+| Auto-deploy | Render webhook | GitHub Actions → `flyctl deploy` |
+
+### Fly.io + Supabase setup
+
+**New files:**
+- `backend/fly.toml` — Fly.io app config with `auto_stop_machines = false`
+
+**Config changes (config.py):**
+- Added `DB_PASSWORD: str = ""` — inject DB password separately to avoid URL percent-encoding issues with special characters (`@` in passwords breaks URL parsers)
+- Added `DB_SSL_REQUIRE: bool = False` — Supabase requires SSL
+
+**Engine changes (models/base.py + alembic/env.py):**
+- Use `make_url(DATABASE_URL).set(password=DB_PASSWORD)` — SQLAlchemy injects the password via the URL object, bypassing string parsing entirely
+- Alembic `env.py`: removed `config.set_main_option("sqlalchemy.url", ...)` entirely — Python's `configparser` treats `%` as interpolation syntax, crashing on `%40` (`@`) in percent-encoded passwords
+
+**CI/CD:** Added `deploy` job to `.github/workflows/ci.yml` that runs `flyctl deploy --remote-only` on main after backend + extension pass. FLY_API_TOKEN uploaded to GitHub secrets.
+
+### Errors encountered and fixed (Fly.io migration)
+
+**`start.sh` CRLF line endings** — Windows git checked out `start.sh` with `\r\n`. Linux Docker sees `#!/bin/sh\r` and returns `No such file or directory`. Fix: `sed -i 's/\r//' start.sh` + `.gitattributes` to enforce LF for `*.sh`.
+
+**Alembic `configparser` percent-encoding** — `ValueError: invalid interpolation syntax in 'postgresql+asyncpg://...N%40rendr%40n%40th@...'`. Python's configparser treats `%` as a format string prefix. The call to `config.set_main_option("sqlalchemy.url", url)` triggers this. Fix: bypass configparser entirely — read `settings.DATABASE_URL` directly.
+
+**Supabase IPv6** — Fly.io machines prefer IPv6. Supabase direct connection on port 5432 is IPv4-only. Connection fails with `ConnectionRefusedError: [Errno 111] Connect call failed ('2600:1f18:...', 5432)`. Fix: use the **session mode connection pooler** URL (`aws-1-us-east-1.pooler.supabase.com:5432`) which runs on IPv4.
+
+**Password with `@` signs** — Password `N@rendr@n@th` contains `@` which is the credential separator in URLs. `%40` encoding was being decoded by Fly's secret storage before reaching the app. `make_url().set(password=...)` still failed because Fly stored the decoded value with literal `@` back in the URL. Final fix: reset Supabase password to `AutoApply2026Prod` (no special characters) — simple and robust.
+
+**Production deploy confirmation:**
+```
+curl https://autoapply-ai-api.fly.dev/health
+→ {"status":"alive","service":"autoapply-ai"}
+
+curl -X POST https://autoapply-ai-api.fly.dev/api/v1/auth/register \
+  -H "X-Clerk-User-Id: user_3AB26PAgD82zYApFLsMeqaTQyDT"
+→ {"user_id":"4c458e37-7e10-411e-95b3-4ddca1648ca8","created":true}
+```
+
+### Extension sidepanel — three bugs fixed
+
+The sidepanel **never opened** on Greenhouse or any career page. Three separate root causes:
+
+**Bug 1 — `chrome.sidePanel.open()` in `tabs.onUpdated` fails silently**
+
+In Chrome MV3, `chrome.sidePanel.open()` can only be called from a user gesture handler. `tabs.onUpdated` is NOT a user gesture. The existing code called `chrome.sidePanel.open({ tabId })` inside `tabs.onUpdated` — Chrome ignores this call silently (error swallowed by `.catch()`).
+
+**Fix:** Add `chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })` at module top level. This makes clicking the toolbar icon open the panel automatically — no code needed. Also added `chrome.action.onClicked` as a belt-and-suspenders fallback.
+
+```typescript
+// At module level — one call, permanent fix
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+chrome.action.onClicked.addListener((tab) => {
+  if (tab.id) chrome.sidePanel.open({ tabId: tab.id }).catch(() => {});
+});
+```
+
+**Bug 2 — `OPEN_SIDEPANEL` message not handled**
+
+The content script overlay badge calls `chrome.runtime.sendMessage({ type: "OPEN_SIDEPANEL" })` when clicked. The background worker had no handler for this message type — the message was silently dropped.
+
+**Fix:** Added case `"OPEN_SIDEPANEL"` in the `onMessage` switch that calls `chrome.sidePanel.open({ tabId: sender.tab.id })`.
+
+**Bug 3 — Greenhouse URL pattern too strict**
+
+`CAREER_URL_PATTERNS` had `/greenhouse\.io\/jobs\//` — this only matches URLs containing `/jobs/` in the path. Many Greenhouse URLs (company boards, specific stages) don't include `/jobs/`. For example `boards.greenhouse.io/company` wouldn't match.
+
+**Fix:** Loosened to `/greenhouse\.io/` — any Greenhouse subdomain triggers apply mode.
+
+### Extension UI redesign
+
+Redesigned all sidepanel components to match the aesthetic of premium job-assist extensions (Simplify, Jobright AI):
+
+- **Company avatar**: color-coded letter avatar (hue derived from company name) — instant visual context
+- **ATS score chip**: prominent score badge next to company name with color coding (green ≥80, amber ≥65, orange ≥50, red <50)
+- **Tab navigation**: pill-style tabs with count badges instead of underline tabs
+- **Resume cards**: outcome badge (🎉 offer / ✅ interview / 📤 applied / ✕ rejected), ATS score bar, attach button
+- **Q&A drafts**: numbered draft selector, scrollable draft text, Regenerate + Use & Fill buttons
+- **Job Scout cards**: per-company avatar, fit score chip, past application count, direct "Open →" link
+- **Idle state**: platform-list idle screen instead of generic "navigate to a job page"
+- **Header**: SVG logo, gradient background, mode indicator with colored dot
+
 ---
 
 ## What Failed / What Was Learned
@@ -355,27 +453,67 @@ Triggered on push to `main`, `feat/**`, `fix/**` and PRs to `main`.
 
 ---
 
-## Deployment (Render)
+## Deployment
 
-Defined in `render.yaml` — Render Blueprint provisions:
-- Web service (Docker, `backend/Dockerfile`, free tier)
-- PostgreSQL (free tier, `autoapply_prod`)
-- Redis (free tier)
+### Fly.io (current production — always-on)
 
-`start.sh` runs `alembic upgrade head` then `uvicorn` on startup — zero manual DB setup.
-
-**Required env vars to set manually in Render dashboard:**
-
-```
-CLERK_SECRET_KEY
-CLERK_FRONTEND_API_URL
-GITHUB_TOKEN
-GITHUB_VAULT_OWNER
-GITHUB_VAULT_REPO
-EXTENSION_ID          (set after Chrome Web Store approval)
+Configured in `backend/fly.toml`. Key settings:
+```toml
+[http_service]
+  auto_stop_machines = false   # Never spin down
+  min_machines_running = 1     # Always one machine running
+[[vm]]
+  memory = "256mb"
+  cpu_kind = "shared"
+  cpus = 1
 ```
 
-`FERNET_KEY` and `JWT_SECRET` are auto-generated by Render (`generateValue: true`).
+Deploy manually:
+```bash
+cd backend && fly deploy --remote-only
+```
+
+Auto-deploy: GitHub Actions `deploy` job runs after CI passes on `main`.
+
+**Production secrets** (set via `fly secrets set KEY=value --app autoapply-ai-api`):
+```
+DATABASE_URL      postgresql://postgres.hobhlxhmqhqdahokqndq@aws-1-us-east-1.pooler.supabase.com:5432/postgres
+DB_PASSWORD       AutoApply2026Prod
+DB_SSL_REQUIRE    true
+REDIS_URL         redis://default:ab716940...@fly-autoapply-redis.upstash.io:6379
+CLERK_SECRET_KEY  sk_test_...
+CLERK_FRONTEND_API_URL  https://feasible-liger-35.clerk.accounts.dev
+GITHUB_TOKEN      ghp_...
+GITHUB_VAULT_REPO resume-vault
+GITHUB_VAULT_OWNER narendranathe
+FERNET_KEY        <generated>
+JWT_SECRET        <generated>
+EXTENSION_ID      (set after Chrome Web Store approval)
+```
+
+### Supabase (PostgreSQL)
+
+Free tier: 500 MB storage, no spin-down. Connection via **session mode pooler** (IPv4, required for Fly.io IPv6 compatibility):
+```
+Host: aws-1-us-east-1.pooler.supabase.com
+Port: 5432
+Database: postgres
+User: postgres.hobhlxhmqhqdahokqndq
+SSL: required
+```
+DB Shell: https://supabase.com/dashboard/project/hobhlxhmqhqdahokqndq/editor
+
+### Render (archived — replaced by Fly.io)
+
+`render.yaml` still exists for reference. Not actively deployed. Render's free tier has 50s cold-start spin-down which breaks extension UX.
+
+### CI/CD Auto-deploy
+
+`.github/workflows/ci.yml` deploy job:
+1. Waits for `backend` + `extension` jobs to pass
+2. Runs only on `main` branch
+3. `flyctl deploy --remote-only` — builds in Fly's infrastructure, no local Docker needed
+4. Requires `FLY_API_TOKEN` in GitHub Actions secrets
 
 ---
 
@@ -443,69 +581,56 @@ autoapply-ai/
 | Extension build | Clean (41 modules) |
 | ruff / black / mypy | All passing |
 | Docker (local) | postgres + db_test + redis up, both migrations applied |
-| GitHub repo | `narendranathe/autoapply-ai` — main branch current |
-| GitHub Actions secrets | `DOCKERHUB_USERNAME` + `DOCKERHUB_TOKEN` uploaded |
+| GitHub repo | `narendranathe/autoapply-ai` — branch `feat/phase-4-vault-extension` |
+| GitHub Actions secrets | `DOCKERHUB_USERNAME` + `DOCKERHUB_TOKEN` + `FLY_API_TOKEN` uploaded |
 | Resume vault repo | `narendranathe/resume-vault` (private) — created |
 | Clerk | `feasible-liger-35.clerk.accounts.dev` (test instance) — JWKS verified |
-| Render deploy | **In progress** — psycopg2 + README.md fixes pushed, awaiting redeploy |
-| Chrome extension | `extension/dist/` built, ready for Web Store submission |
+| **Fly.io deploy** | **Live** — `https://autoapply-ai-api.fly.dev` (always-on, 0s cold start) |
+| **Supabase DB** | **Live** — `aws-1-us-east-1.pooler.supabase.com` (session pooler, SSL) |
+| **Upstash Redis** | **Live** — `fly-autoapply-redis.upstash.io:6379` |
+| Production user | Registered — `user_3AB26PAgD82zYApFLsMeqaTQyDT` → `4c458e37-...` |
+| Chrome extension | Loaded unpacked — ID `cepfanhjdjlhmfchelknemfmlodnmbfa` |
+| Extension sidepanel | **Fixed** — opens on toolbar icon click + badge click |
+| Extension UI | **Redesigned** — Simplify/Jobright AI style with company avatars + score chips |
 
 ---
 
 ## Next Steps (in order)
 
-### 1. Confirm Render deploy is green
-Watch Render logs for `autoapply-ai-api` → **Logs** tab. Success looks like:
-```
-[AutoApply] Running database migrations...
-INFO  Running upgrade  -> 15d0f847bcc2, initial schema
-INFO  Running upgrade 15d0f847bcc2 -> a3f2e1d4c5b6, add resume vault
-Starting uvicorn...
-Application startup complete.
-```
-If Render didn't auto-deploy the latest commit: Dashboard → `autoapply-ai-api` → **Manual Deploy** → **Deploy latest commit**.
-
-Copy your URL — e.g. `https://autoapply-ai-api.onrender.com`.
-
-### 2. Create your Clerk user + insert into DB
-**Get Clerk user ID:**
-- https://dashboard.clerk.com → your app → **Users** → **Create user**
-- Enter email + password → after creation click the user → copy **User ID** (`user_2...`)
-
-**Insert into production DB** (Render Dashboard → `autoapply-db` → **Shell** tab):
-```sql
-INSERT INTO users (id, clerk_id, email_hash, is_active, created_at, updated_at, total_resumes_generated, total_applications_tracked)
-VALUES (
-  gen_random_uuid(),
-  'user_YOUR_CLERK_ID_HERE',
-  encode(sha256('your@email.com'::bytea), 'hex'),
-  true, now(), now(), 0, 0
-) ON CONFLICT DO NOTHING;
-```
-
-### 3. Configure the Chrome extension
-Build (if not already):
+### 1. Rebuild and reload the extension
+After the sidepanel fixes and UI redesign:
 ```bash
 cd extension && npm run build
 ```
-Load: Chrome → `chrome://extensions` → **Developer mode** → **Load unpacked** → select `extension/dist/`
+In Chrome → `chrome://extensions` → **AutoApply AI** → click the refresh icon (↺).
 
-Options (right-click icon → Options):
-- **API Base URL** → `https://autoapply-ai-api.onrender.com/api/v1` → **Save & Test**
-- **Clerk User ID** → your `user_2...` ID → **Verify & Save**
+Navigate to a Greenhouse job page (e.g. `boards.greenhouse.io/...`) → click the AutoApply AI toolbar icon → sidepanel should open immediately.
 
-### 4. Smoke test
+### 2. Smoke test production
 ```bash
 # Health check
-curl https://autoapply-ai-api.onrender.com/health
+curl https://autoapply-ai-api.fly.dev/health
 # → {"status":"alive","service":"autoapply-ai"}
 
 # Vault — should return empty list (no resumes yet)
-curl https://autoapply-ai-api.onrender.com/api/v1/vault/resumes \
-  -H "X-Clerk-User-Id: user_YOUR_CLERK_ID"
+curl https://autoapply-ai-api.fly.dev/api/v1/vault/resumes \
+  -H "X-Clerk-User-Id: user_3AB26PAgD82zYApFLsMeqaTQyDT"
 # → {"items":[],"page":1,"per_page":20}
 ```
-In Chrome: go to https://www.linkedin.com/jobs/ → sidepanel opens in **Job Scout** mode.
+
+### 3. Extension options page — point to production
+In Chrome → right-click AutoApply AI icon → **Options**:
+- **API Base URL** → `https://autoapply-ai-api.fly.dev/api/v1` → **Save & Test**
+- **Clerk User ID** → `user_3AB26PAgD82zYApFLsMeqaTQyDT` → **Verify & Save**
+
+### 4. Upload your first resume
+```bash
+curl -X POST https://autoapply-ai-api.fly.dev/api/v1/vault/upload \
+  -H "X-Clerk-User-Id: user_3AB26PAgD82zYApFLsMeqaTQyDT" \
+  -F "file=@/path/to/your/resume.pdf" \
+  -F "target_company=Google" \
+  -F "target_role=Data Engineer"
+```
 
 ### 5. Chrome Web Store (when ready to publish)
 ```bash
@@ -515,4 +640,16 @@ Compress-Archive -Path dist\* -DestinationPath ..\autoapply-extension.zip
 ```
 - https://chrome.google.com/webstore/devconsole → pay $5 one-time fee → **New Item** → upload zip
 - Fill title, description (`extension/store/description.txt`), screenshots (1280×800 minimum)
-- After approval: copy the 32-char extension ID → Render env → add `EXTENSION_ID=<id>` → Save (locks CORS to your extension only)
+- After approval: copy the 32-char extension ID → set in Fly secrets:
+  ```bash
+  fly secrets set EXTENSION_ID=<your-32-char-id> --app autoapply-ai-api
+  ```
+  This locks CORS to your extension only (rejects other origins in production).
+
+### 6. Merge to main
+```bash
+git checkout main
+git merge feat/phase-4-vault-extension
+git push origin main
+# GitHub Actions → CI passes → flyctl deploy auto-runs
+```

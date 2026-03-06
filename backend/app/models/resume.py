@@ -202,6 +202,17 @@ class ApplicationAnswer(Base, TimestampMixin):
     )  # True = user said "enter default"
     llm_provider_used: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
+    # --- Feedback / RL reward signal ---
+    # feedback:     outcome recorded by the extension after user decision
+    #   "used_as_is"  → reward 1.0  (accepted without changes)
+    #   "edited"      → reward 0.4–0.8 (kept but modified; penalised by edit distance)
+    #   "regenerated" → reward 0.2  (discarded, asked for new drafts)
+    #   "skipped"     → reward 0.0  (ignored entirely)
+    #   "pending"     → no feedback yet (default)
+    feedback: Mapped[str] = mapped_column(String(30), default="pending", nullable=False)
+    reward_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    edit_distance: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     # --- Context ---
     company_name: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
     role_title: Mapped[str | None] = mapped_column(String(200), nullable=True)
@@ -210,6 +221,7 @@ class ApplicationAnswer(Base, TimestampMixin):
     __table_args__ = (
         Index("ix_answers_user_company", "user_id", "company_name"),
         Index("ix_answers_question_hash", "question_hash"),
+        Index("ix_answers_user_category_reward", "user_id", "question_category", "reward_score"),
     )
 
     def __repr__(self) -> str:

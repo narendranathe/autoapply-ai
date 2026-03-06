@@ -2,19 +2,21 @@
 Vault Router — Resume vault CRUD, semantic retrieval, ATS scoring, and resume generation.
 
 Endpoints:
-  POST   /api/v1/vault/upload              Upload resume file → parse → embed → store
-  GET    /api/v1/vault/resumes             List all user resumes (paginated)
-  DELETE /api/v1/vault/resumes/{id}        Delete a resume
-  POST   /api/v1/vault/retrieve            Semantic retrieval by company + optional JD
-  POST   /api/v1/vault/ats-score           Score a stored resume against a JD
-  POST   /api/v1/vault/generate            Generate full LaTeX resume
-  POST   /api/v1/vault/generate/summary    Generate professional summary only
-  POST   /api/v1/vault/generate/bullets    Generate tailored bullets only
-  POST   /api/v1/vault/generate/answers    Generate open-ended Q&A drafts
-  GET    /api/v1/vault/history/{company}   All resumes ever used for a company
-  GET    /api/v1/vault/answers/{company}   Previously saved answers for a company
-  POST   /api/v1/vault/answers/save        Save accepted answer to DB
-  GET    /api/v1/vault/github/versions     List versions/ directory on GitHub
+  POST   /api/v1/vault/upload                   Upload resume file → parse → embed → store
+  GET    /api/v1/vault/resumes                  List all user resumes (paginated)
+  DELETE /api/v1/vault/resumes/{id}             Delete a resume
+  POST   /api/v1/vault/retrieve                 Semantic retrieval by company + optional JD
+  POST   /api/v1/vault/ats-score                Score a stored resume against a JD
+  POST   /api/v1/vault/generate                 Generate full LaTeX resume
+  POST   /api/v1/vault/generate/summary         Generate professional summary only
+  POST   /api/v1/vault/generate/bullets         Generate tailored bullets only
+  POST   /api/v1/vault/generate/answers         Generate open-ended Q&A drafts
+  GET    /api/v1/vault/history/{company}        All resumes ever used for a company
+  GET    /api/v1/vault/answers/{company}        Previously saved answers for a company
+  POST   /api/v1/vault/answers/save             Save accepted answer to DB
+  PATCH  /api/v1/vault/answers/{id}/feedback    Record outcome (RL reward signal)
+  GET    /api/v1/vault/answers/similar          Best past answers for a question (bandit policy)
+  GET    /api/v1/vault/github/versions          List versions/ directory on GitHub
 """
 
 import hashlib
@@ -414,9 +416,17 @@ async def generate_answers(
     """
     Generate 3 draft answers to an open-ended application question.
     Each draft is ≤ 250 words, grounded in the user's real work history.
+    High-reward past answers are injected as style examples (RL grounding).
     """
-    # Check for a previously used answer first
+    # 1. Check for an exact previous answer at this company
     prev = await _retrieval_agent.get_previous_answer(db, user.id, question_text, company_name)
+
+    # 2. Pull top-3 high-reward answers for this category to ground the LLM
+    best_past = await _retrieval_agent.get_best_answers_for_question(
+        db, user.id, question_text, question_category, top_k=3
+    )
+    # Only inject answers with a meaningful reward score (0.6+)
+    past_texts = [a.answer_text for a in best_past if (a.reward_score or 0) >= 0.6]
 
     drafts = await generate_answer_drafts(
         question_text=question_text,
@@ -428,6 +438,7 @@ async def generate_answers(
         provider=llm_provider,
         api_key=llm_api_key or user.encrypted_llm_api_key or "",
         ollama_model=ollama_model,
+        past_accepted_answers=past_texts or None,
     )
 
     return {
@@ -484,6 +495,137 @@ async def save_answer(
         "word_count": word_count,
         "question_hash": q_hash,
         "saved": True,
+    }
+
+
+# ── Answer feedback (RL reward signal) ────────────────────────────────────
+
+
+def _levenshtein(a: str, b: str) -> int:
+    """Simple O(mn) Levenshtein distance on character level."""
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    # Limit to first 1000 chars to stay fast
+    a, b = a[:1000], b[:1000]
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        curr = [i]
+        for j, cb in enumerate(b, 1):
+            curr.append(prev[j - 1] if ca == cb else 1 + min(prev[j], curr[j - 1], prev[j - 1]))
+        prev = curr
+    return prev[-1]
+
+
+def _compute_reward(feedback: str, edit_distance: int = 0, answer_len: int = 1) -> float:
+    """
+    Reward function for the contextual bandit.
+      used_as_is  → 1.0
+      edited      → 0.8 penalised by normalised edit distance (min 0.4)
+      regenerated → 0.2
+      skipped     → 0.0
+    """
+    if feedback == "used_as_is":
+        return 1.0
+    if feedback == "edited":
+        penalty = min(edit_distance / max(answer_len, 1), 0.4)
+        return max(0.4, 0.8 - penalty)
+    if feedback == "regenerated":
+        return 0.2
+    if feedback == "skipped":
+        return 0.0
+    return 0.5  # pending / unknown
+
+
+@router.patch("/answers/{answer_id}/feedback")
+async def record_answer_feedback(
+    answer_id: str,
+    feedback: str = Form(...),  # used_as_is | edited | regenerated | skipped
+    edited_answer: str | None = Form(None),  # final text if user edited before using
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Record the outcome of a generated answer draft (RL reward signal).
+    Called by the extension after the user decides what to do with a draft.
+    """
+    stmt = select(ApplicationAnswer).where(
+        ApplicationAnswer.id == uuid.UUID(answer_id),
+        ApplicationAnswer.user_id == user.id,
+    )
+    result = await db.execute(stmt)
+    ans = result.scalar_one_or_none()
+    if ans is None:
+        raise HTTPException(status_code=404, detail="Answer not found")
+
+    valid_feedback = {"used_as_is", "edited", "regenerated", "skipped"}
+    if feedback not in valid_feedback:
+        raise HTTPException(status_code=422, detail=f"feedback must be one of {valid_feedback}")
+
+    edit_dist = 0
+    if feedback == "edited" and edited_answer:
+        # Update the stored answer to the final version the user used
+        edit_dist = _levenshtein(ans.answer_text, edited_answer)
+        ans.answer_text = edited_answer
+        ans.word_count = len(edited_answer.split())
+
+    ans.feedback = feedback
+    ans.edit_distance = edit_dist
+    ans.reward_score = _compute_reward(feedback, edit_dist, len(ans.answer_text))
+
+    await db.commit()
+    logger.info(
+        f"Answer feedback: {feedback} reward={ans.reward_score:.2f} "
+        f"edit_dist={edit_dist} answer_id={answer_id}"
+    )
+
+    return {
+        "answer_id": answer_id,
+        "feedback": feedback,
+        "reward_score": ans.reward_score,
+        "edit_distance": edit_dist,
+    }
+
+
+# ── Similar answers retrieval (bandit policy) ─────────────────────────────
+
+
+@router.get("/answers/similar")
+async def get_similar_answers(
+    question_text: str,
+    question_category: str = "custom",
+    top_k: int = 3,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Return the top-k highest-reward past answers for this question category,
+    ranked by reward_score * 0.7 + tfidf_similarity(question_text) * 0.3.
+
+    Used by the extension to show "From Memory" answers before generating new ones.
+    """
+    best = await _retrieval_agent.get_best_answers_for_question(
+        db, user.id, question_text, question_category, top_k=top_k
+    )
+    return {
+        "answers": [
+            {
+                "answer_id": str(a.id),
+                "question_text": a.question_text,
+                "answer_text": a.answer_text,
+                "company_name": a.company_name,
+                "question_category": a.question_category,
+                "reward_score": a.reward_score,
+                "feedback": a.feedback,
+                "word_count": a.word_count,
+                "created_at": a.created_at.isoformat(),
+            }
+            for a in best
+        ],
+        "total": len(best),
     }
 
 
