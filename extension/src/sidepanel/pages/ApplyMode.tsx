@@ -87,9 +87,19 @@ export default function ApplyMode({ context }: Props) {
   const [profile, setProfile] = useState<UserProfile | null>(null);
 
   useEffect(() => {
+    // Load profile on mount
     chrome.storage.local.get(["profile"], (data) => {
       if (data.profile) setProfile(data.profile as UserProfile);
     });
+
+    // Re-load whenever the user saves profile in Options
+    const onChanged = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+      if (area === "local" && changes.profile?.newValue) {
+        setProfile(changes.profile.newValue as UserProfile);
+      }
+    };
+    chrome.storage.onChanged.addListener(onChanged);
+    return () => chrome.storage.onChanged.removeListener(onChanged);
   }, []);
 
   useEffect(() => {
