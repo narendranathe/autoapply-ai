@@ -88,11 +88,12 @@
       <!-- Auth -->
       <div class="card" id="auth-card">
         <h2>Authentication</h2>
-        <label for="clerk-user-id">Clerk User ID</label>
-        <input type="text" id="clerk-user-id" placeholder="user_2abc..." />
+        <label for="clerk-user-id">Your User ID</label>
+        <input type="text" id="clerk-user-id" placeholder="narendra" />
         <p class="hint">
-          Find your user ID at <strong>your-app.clerk.com → Users</strong>, or from the
-          backend: <code>GET /api/v1/auth/me</code> after signing in via the web app.
+          Pick any unique ID for yourself (e.g. your name or email). First time?
+          Just type something and click <strong>Save &amp; Verify</strong> — your
+          account will be created automatically.
         </p>
         <div id="auth-status" class="status"></div>
         <button class="btn btn-primary" id="save-auth">Save &amp; Verify</button>
