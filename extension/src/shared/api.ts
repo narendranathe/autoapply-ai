@@ -259,3 +259,68 @@ export const vaultApi = {
     return get("/vault/resumes", company ? { company } : undefined);
   },
 };
+
+// ── Work History types ──────────────────────────────────────────────────────
+
+export interface WorkHistoryEntry {
+  id: string;
+  entry_type: string;
+  company_name: string;
+  role_title: string;
+  start_date: string;
+  end_date: string | null;
+  is_current: boolean;
+  location: string | null;
+  bullets: string[];
+  technologies: string[];
+  team_size: number | null;
+  sort_order: number;
+  created_at: string;
+}
+
+export interface WorkHistoryListResponse {
+  entries: WorkHistoryEntry[];
+  total: number;
+}
+
+export interface WorkHistoryTextResponse {
+  text: string;
+  entry_count: number;
+}
+
+export interface WorkHistoryEntryIn {
+  entry_type?: string;
+  company_name: string;
+  role_title: string;
+  start_date: string;
+  end_date?: string;
+  is_current?: boolean;
+  location?: string;
+  bullets?: string[];
+  technologies?: string[];
+  team_size?: number;
+  sort_order?: number;
+}
+
+// ── Work History API ────────────────────────────────────────────────────────
+
+export const workHistoryApi = {
+  list(): Promise<WorkHistoryListResponse> {
+    return get("/work-history");
+  },
+
+  getText(): Promise<WorkHistoryTextResponse> {
+    return get("/work-history/text");
+  },
+
+  create(entry: WorkHistoryEntryIn): Promise<{ id: string; created: boolean }> {
+    return post("/work-history", entry);
+  },
+
+  delete(entryId: string): Promise<void> {
+    return fetch(`${_apiBase}/work-history/${entryId}`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    }).then(() => undefined);
+  },
+};
