@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.dependencies import get_current_user, get_db
 from app.models.resume import ApplicationAnswer, Resume
 from app.models.user import User
+from app.models.work_history import WorkHistoryEntry
 from app.services.ats_service import ATSResult, score_resume
 from app.services.embedding_service import build_tfidf_vector
 from app.services.github_service import GitHubService
@@ -406,7 +407,7 @@ async def generate_answers(
     company_name: str = Form(...),
     role_title: str = Form(""),
     jd_text: str = Form(""),
-    work_history_text: str = Form(...),
+    work_history_text: str = Form(""),  # optional — auto-filled from DB if empty
     llm_provider: str = Form("anthropic"),
     llm_api_key: str | None = Form(None),
     ollama_model: str = Form("llama3.1:8b"),
@@ -417,7 +418,19 @@ async def generate_answers(
     Generate 3 draft answers to an open-ended application question.
     Each draft is ≤ 250 words, grounded in the user's real work history.
     High-reward past answers are injected as style examples (RL grounding).
+    If work_history_text is empty, pulls structured history from the DB automatically.
     """
+    # 0. Auto-fetch work history from DB if not provided by the client
+    if not work_history_text.strip():
+        wh_stmt = (
+            select(WorkHistoryEntry)
+            .where(WorkHistoryEntry.user_id == user.id)
+            .order_by(WorkHistoryEntry.sort_order, WorkHistoryEntry.created_at.desc())
+        )
+        wh_result = await db.execute(wh_stmt)
+        wh_entries = list(wh_result.scalars().all())
+        work_history_text = "\n\n".join(e.to_text_block() for e in wh_entries)
+
     # 1. Check for an exact previous answer at this company
     prev = await _retrieval_agent.get_previous_answer(db, user.id, question_text, company_name)
 

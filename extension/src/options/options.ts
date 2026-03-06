@@ -1,5 +1,7 @@
 // Options page script — module scripts run after DOM is parsed, no DOMContentLoaded needed
 
+import { workHistoryApi, type WorkHistoryEntry } from "../shared/api";
+
 const API_DEFAULT = "http://localhost:8000/api/v1";
 
 function get(id: string): HTMLElement {
@@ -140,10 +142,114 @@ async function saveProfile() {
   showStatus("profile-status", "Profile saved.", "ok");
 }
 
+// ── Work History ────────────────────────────────────────────────────────────
+
+function renderWorkHistoryList(entries: WorkHistoryEntry[]) {
+  const container = document.getElementById("wh-list")!;
+  const empty = document.getElementById("wh-empty")!;
+  if (entries.length === 0) {
+    empty.textContent = "No entries yet. Add your first role above.";
+    empty.style.display = "block";
+    // Remove any previously rendered entry divs
+    container.querySelectorAll(".wh-entry").forEach((el) => el.remove());
+    return;
+  }
+  empty.style.display = "none";
+  container.querySelectorAll(".wh-entry").forEach((el) => el.remove());
+  for (const e of entries) {
+    const div = document.createElement("div");
+    div.className = "wh-entry";
+    div.dataset.id = e.id;
+    const dateRange = e.end_date ? `${e.start_date} – ${e.end_date}` : `${e.start_date} – Present`;
+    const tech = e.technologies.length > 0 ? ` · ${e.technologies.slice(0, 4).join(", ")}` : "";
+    div.innerHTML = `
+      <div class="wh-entry-info">
+        <div class="wh-entry-title">${e.role_title} @ ${e.company_name}</div>
+        <div class="wh-entry-meta">${dateRange}${e.location ? " · " + e.location : ""}${tech}</div>
+      </div>
+      <button class="wh-del-btn" title="Delete entry">✕</button>
+    `;
+    div.querySelector(".wh-del-btn")!.addEventListener("click", () => deleteWorkHistoryEntry(e.id, div));
+    container.appendChild(div);
+  }
+}
+
+async function loadWorkHistory() {
+  try {
+    const res = await workHistoryApi.list();
+    renderWorkHistoryList(res.entries);
+  } catch {
+    const empty = document.getElementById("wh-empty");
+    if (empty) empty.textContent = "Could not load work history (backend unreachable).";
+  }
+}
+
+async function addWorkHistoryEntry() {
+  const company = (document.getElementById("wh-company") as HTMLInputElement).value.trim();
+  const role = (document.getElementById("wh-role") as HTMLInputElement).value.trim();
+  const start = (document.getElementById("wh-start") as HTMLInputElement).value.trim();
+  const end = (document.getElementById("wh-end") as HTMLInputElement).value.trim();
+  const location = (document.getElementById("wh-location") as HTMLInputElement).value.trim();
+  const bulletsRaw = (document.getElementById("wh-bullets") as HTMLTextAreaElement).value.trim();
+  const techRaw = (document.getElementById("wh-tech") as HTMLInputElement).value.trim();
+
+  if (!company || !role || !start) {
+    showStatus("wh-add-status", "Company, Role, and Start Date are required.", "err");
+    return;
+  }
+
+  const bullets = bulletsRaw ? bulletsRaw.split("\n").map((s) => s.trim()).filter(Boolean) : [];
+  const technologies = techRaw ? techRaw.split(",").map((s) => s.trim()).filter(Boolean) : [];
+  const isCurrent = !end || end.toLowerCase() === "present";
+
+  try {
+    await workHistoryApi.create({
+      company_name: company,
+      role_title: role,
+      start_date: start,
+      end_date: isCurrent ? undefined : end,
+      is_current: isCurrent,
+      location: location || undefined,
+      bullets,
+      technologies,
+    });
+
+    showStatus("wh-add-status", "Entry added.", "ok");
+
+    // Clear form
+    (["wh-company", "wh-role", "wh-start", "wh-end", "wh-location", "wh-tech"] as const).forEach((id) => {
+      (document.getElementById(id) as HTMLInputElement).value = "";
+    });
+    (document.getElementById("wh-bullets") as HTMLTextAreaElement).value = "";
+
+    loadWorkHistory();
+  } catch (e) {
+    showStatus("wh-add-status", `Failed: ${e instanceof Error ? e.message : "unknown error"}`, "err");
+  }
+}
+
+async function deleteWorkHistoryEntry(entryId: string, el: HTMLElement) {
+  try {
+    await workHistoryApi.delete(entryId);
+    el.remove();
+    // Check if list is now empty
+    const container = document.getElementById("wh-list")!;
+    if (!container.querySelector(".wh-entry")) {
+      const empty = document.getElementById("wh-empty")!;
+      empty.textContent = "No entries yet. Add your first role above.";
+      empty.style.display = "block";
+    }
+  } catch {
+    // Silently fail — entry still shows
+  }
+}
+
 // Module scripts are deferred — DOM is fully parsed when this runs.
 loadSettings();
+loadWorkHistory();
 get("save-auth").addEventListener("click", saveAuth);
 get("test-api").addEventListener("click", testApi);
 get("save-api").addEventListener("click", saveApi);
 get("save-llm").addEventListener("click", saveLlm);
 get("save-profile").addEventListener("click", saveProfile);
+get("wh-add-btn").addEventListener("click", addWorkHistoryEntry);

@@ -70,6 +70,12 @@
       .row { display: flex; gap: 10px; margin-top: 8px; }
       .tag { background: #1e1e3a; color: #a78bfa; border-radius: 99px; padding: 2px 10px; font-size: 11px; }
       .sep { height: 1px; background: #1e1e3a; margin: 16px 0; }
+      .wh-entry { background:#0f0f1a; border:1px solid #1e1e3a; border-radius:8px; padding:12px 14px; display:flex; justify-content:space-between; align-items:flex-start; }
+      .wh-entry-info { flex:1; min-width:0; }
+      .wh-entry-title { font-size:13px; font-weight:700; color:#e2e8f0; }
+      .wh-entry-meta { font-size:11px; color:#6b7280; margin-top:2px; }
+      .wh-del-btn { background:none; border:none; color:#4b5563; cursor:pointer; font-size:16px; padding:0 4px; flex-shrink:0; margin-left:8px; transition:color 0.15s; }
+      .wh-del-btn:hover { color:#f87171; }
     </style>
   </head>
   <body>
@@ -196,6 +202,62 @@
 
         <button class="btn btn-primary" id="save-profile">Save Profile</button>
         <div id="profile-status" class="status"></div>
+      </div>
+
+      <!-- Work History -->
+      <div class="card">
+        <h2>Work History</h2>
+        <p class="hint" style="margin-bottom:14px">Your employment history — used to ground LLM answers with real facts about your experience.</p>
+
+        <!-- Add new entry form -->
+        <div id="wh-add-form" style="border:1px solid #1e1e3a;border-radius:8px;padding:16px;margin-bottom:16px;">
+          <div style="font-size:12px;font-weight:700;color:#a78bfa;margin-bottom:12px;text-transform:uppercase;letter-spacing:0.05em;">Add Entry</div>
+
+          <div class="row" style="margin-top:0">
+            <div style="flex:1">
+              <label for="wh-company">Company *</label>
+              <input type="text" id="wh-company" placeholder="ExponentHR" />
+            </div>
+            <div style="flex:1">
+              <label for="wh-role">Role Title *</label>
+              <input type="text" id="wh-role" placeholder="Data Engineer" />
+            </div>
+          </div>
+
+          <div class="row" style="margin-top:10px">
+            <div style="flex:1">
+              <label for="wh-start">Start Date *</label>
+              <input type="text" id="wh-start" placeholder="July 2024" />
+            </div>
+            <div style="flex:1">
+              <label for="wh-end">End Date</label>
+              <input type="text" id="wh-end" placeholder="Present" />
+            </div>
+          </div>
+
+          <div style="margin-top:10px">
+            <label for="wh-location">Location</label>
+            <input type="text" id="wh-location" placeholder="Dallas, TX" />
+          </div>
+
+          <div style="margin-top:10px">
+            <label for="wh-bullets">Key Bullets (one per line)</label>
+            <textarea id="wh-bullets" rows="4" style="width:100%;padding:10px 12px;background:#0f0f1a;border:1px solid #1e1e3a;border-radius:8px;color:#f1f5f9;font-size:13px;outline:none;resize:vertical;" placeholder="Built CDC-based ETL pipeline reducing runtime by 70%&#10;Deployed CI/CD via Azure DevOps cutting cycle from 3 months to 14 days"></textarea>
+          </div>
+
+          <div style="margin-top:10px">
+            <label for="wh-tech">Technologies (comma-separated)</label>
+            <input type="text" id="wh-tech" placeholder="Python, SQL, Azure DevOps, SSIS, Microsoft Fabric" />
+          </div>
+
+          <button class="btn btn-primary" id="wh-add-btn" style="margin-top:12px">Add Entry</button>
+          <div id="wh-add-status" class="status"></div>
+        </div>
+
+        <!-- Entries list -->
+        <div id="wh-list" style="display:flex;flex-direction:column;gap:8px;">
+          <div style="font-size:12px;color:#4b5563;" id="wh-empty">Loading…</div>
+        </div>
       </div>
 
       <!-- Status -->

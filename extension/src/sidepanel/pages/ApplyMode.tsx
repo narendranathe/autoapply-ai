@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import type { ATSScoreResult, PageContext, ResumeCard } from "../../shared/types";
-import { vaultApi, type RetrieveResponse, type SimilarAnswer } from "../../shared/api";
+import { vaultApi, workHistoryApi, type RetrieveResponse, type SimilarAnswer } from "../../shared/api";
 import ATSScoreBar from "../components/ATSScoreBar";
 import ResumeCardComponent from "../components/ResumeCard";
 
@@ -85,6 +85,7 @@ export default function ApplyMode({ context }: Props) {
   const [savingAnswer, setSavingAnswer] = useState<string | null>(null);
   const [generatingAnswer, setGeneratingAnswer] = useState<string | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [workHistoryText, setWorkHistoryText] = useState<string>("");
   // answerId is set after saveAnswer — needed to record feedback
   const [savedAnswerIds, setSavedAnswerIds] = useState<Record<string, string>>({});
   // "From Memory" similar answers per question
@@ -104,6 +105,16 @@ export default function ApplyMode({ context }: Props) {
     };
     chrome.storage.onChanged.addListener(onChanged);
     return () => chrome.storage.onChanged.removeListener(onChanged);
+  }, []);
+
+  // Fetch work history text from backend (used to ground LLM answers)
+  useEffect(() => {
+    workHistoryApi
+      .getText()
+      .then((res) => {
+        if (res.text) setWorkHistoryText(res.text);
+      })
+      .catch(() => {}); // silently fail — backend may be unreachable
   }, []);
 
   useEffect(() => {
@@ -165,7 +176,7 @@ export default function ApplyMode({ context }: Props) {
         companyName: context.company,
         roleTitle: context.roleTitle,
         jdText: "",
-        workHistoryText: "",
+        workHistoryText,
       });
       setAnswerDrafts((prev) => ({ ...prev, [questionId]: res.drafts }));
       setSelectedAnswers((prev) => ({ ...prev, [questionId]: 0 }));
