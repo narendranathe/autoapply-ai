@@ -78,17 +78,48 @@ async function saveAuth() {
     ((await chrome.storage.local.get("apiBaseUrl")).apiBaseUrl as string | undefined) ||
     API_DEFAULT;
 
+  showStatus("auth-status", "Connecting…", "info");
+
   try {
-    const resp = await fetch(`${apiBase}/auth/me`, {
+    // Step 1: check if user already exists
+    const meResp = await fetch(`${apiBase}/auth/me`, {
       headers: { "X-Clerk-User-Id": userId },
     });
-    if (resp.ok) {
+
+    if (meResp.ok) {
       await chrome.storage.local.set({ clerkUserId: userId });
-      showStatus("auth-status", "Verified and saved.", "ok");
+      showStatus("auth-status", "Verified and saved ✓", "ok");
       loadSettings();
-    } else {
-      showStatus("auth-status", `Backend returned ${resp.status}. Check your User ID.`, "err");
+      loadWorkHistory();
+      return;
     }
+
+    // Step 2: user not found — auto-register (first time setup)
+    if (meResp.status === 401) {
+      const profileData = await chrome.storage.local.get("profile");
+      const profile = (profileData.profile as Record<string, string> | undefined) || {};
+      const email = profile.email || `${userId}@autoapply.local`;
+      // Simple deterministic hash for email_hash (not sensitive — just a DB key)
+      const emailHash = btoa(email).replace(/[^a-zA-Z0-9]/g, "").slice(0, 32);
+
+      const registerResp = await fetch(
+        `${apiBase}/auth/register?clerk_id=${encodeURIComponent(userId)}&email_hash=${encodeURIComponent(emailHash)}`,
+        { method: "POST" }
+      );
+
+      if (registerResp.ok) {
+        await chrome.storage.local.set({ clerkUserId: userId });
+        showStatus("auth-status", "Account created and saved ✓", "ok");
+        loadSettings();
+        loadWorkHistory();
+      } else {
+        const errText = await registerResp.text();
+        showStatus("auth-status", `Registration failed (${registerResp.status}): ${errText}`, "err");
+      }
+      return;
+    }
+
+    showStatus("auth-status", `Backend returned ${meResp.status}.`, "err");
   } catch {
     await chrome.storage.local.set({ clerkUserId: userId });
     showStatus("auth-status", "Saved locally (backend unreachable — will sync later).", "info");
@@ -175,16 +206,28 @@ function renderWorkHistoryList(entries: WorkHistoryEntry[]) {
 }
 
 async function loadWorkHistory() {
+  const { clerkUserId } = await chrome.storage.local.get("clerkUserId");
+  if (!clerkUserId) {
+    const empty = document.getElementById("wh-empty");
+    if (empty) empty.textContent = "Save your User ID above first, then work history will load.";
+    return;
+  }
   try {
     const res = await workHistoryApi.list();
     renderWorkHistoryList(res.entries);
   } catch {
     const empty = document.getElementById("wh-empty");
-    if (empty) empty.textContent = "Could not load work history (backend unreachable).";
+    if (empty) empty.textContent = "Could not load (check API URL and User ID above).";
   }
 }
 
 async function addWorkHistoryEntry() {
+  const { clerkUserId } = await chrome.storage.local.get("clerkUserId");
+  if (!clerkUserId) {
+    showStatus("wh-add-status", "Save your User ID in the Authentication section first.", "err");
+    return;
+  }
+
   const company = (document.getElementById("wh-company") as HTMLInputElement).value.trim();
   const role = (document.getElementById("wh-role") as HTMLInputElement).value.trim();
   const start = (document.getElementById("wh-start") as HTMLInputElement).value.trim();
