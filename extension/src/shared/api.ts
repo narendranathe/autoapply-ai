@@ -2,7 +2,7 @@
 
 import type { ATSScoreResult, ResumeCard } from "./types";
 
-const API_DEFAULT = "http://localhost:8000/api/v1";
+const API_DEFAULT = "https://autoapply-ai-api.fly.dev/api/v1";
 
 // Resolved at startup from chrome.storage; falls back to localhost for dev.
 let _apiBase = API_DEFAULT;
