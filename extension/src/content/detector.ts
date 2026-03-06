@@ -344,6 +344,17 @@ chrome.runtime.onMessage.addListener((message: Message) => {
 
 buildAndSendContext();
 
+// Re-scan when SPA frameworks (React/Vue) render form fields after document_idle.
+// Greenhouse, Lever, Workday all inject inputs 1-3s after the initial script run.
+let _mutationDebounce: ReturnType<typeof setTimeout> | null = null;
+const _fieldObserver = new MutationObserver(() => {
+  if (_mutationDebounce !== null) clearTimeout(_mutationDebounce);
+  _mutationDebounce = setTimeout(buildAndSendContext, 1000);
+});
+if (document.body) {
+  _fieldObserver.observe(document.body, { childList: true, subtree: true });
+}
+
 // Re-run on SPA navigation (pushState / replaceState)
 const _pushState = history.pushState.bind(history);
 history.pushState = function (...args) {
