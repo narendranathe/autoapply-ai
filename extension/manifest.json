@@ -27,6 +27,26 @@
       "matches": ["<all_urls>"],
       "js": ["content/detector.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "*://*.greenhouse.io/*",
+        "*://*.lever.co/*",
+        "*://*.myworkday.com/*",
+        "*://*.workday.com/*",
+        "*://*.ashbyhq.com/*",
+        "*://*.smartrecruiters.com/*",
+        "*://*.bamboohr.com/*",
+        "*://*.icims.com/*",
+        "*://*.jobvite.com/*",
+        "*://*.taleo.net/*",
+        "*://linkedin.com/jobs/*",
+        "*://www.linkedin.com/jobs/*",
+        "*://indeed.com/viewjob*",
+        "*://www.indeed.com/viewjob*"
+      ],
+      "js": ["content/floatingPanel.js"],
+      "run_at": "document_idle"
     }
   ],
   "action": {

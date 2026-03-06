@@ -30,8 +30,10 @@ export default defineConfig({
       input: {
         // Background service worker (no DOM)
         "background/worker": resolve(__dirname, "src/background/worker.ts"),
-        // Content script (injected into every page)
+        // Content script — field detection, sends PageContext to sidepanel (all pages)
         "content/detector": resolve(__dirname, "src/content/detector.ts"),
+        // Content script — in-page floating panel for form fill + Q&A (job pages only)
+        "content/floatingPanel": resolve(__dirname, "src/content/floatingPanel.ts"),
         // Side panel React app
         "sidepanel/index": resolve(__dirname, "src/sidepanel/index.html"),
         // Options / settings page
