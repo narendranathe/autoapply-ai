@@ -1,13 +1,22 @@
-// Options page script
+// Options page script — module scripts run after DOM is parsed, no DOMContentLoaded needed
 
 const API_DEFAULT = "http://localhost:8000/api/v1";
 
-function $(id: string): HTMLElement {
-  return document.getElementById(id)!;
+function get(id: string): HTMLElement {
+  return document.getElementById(id) as HTMLElement;
+}
+
+function getInput(id: string): HTMLInputElement {
+  return document.getElementById(id) as HTMLInputElement;
+}
+
+function getSelect(id: string): HTMLSelectElement {
+  return document.getElementById(id) as HTMLSelectElement;
 }
 
 function showStatus(elId: string, msg: string, type: "ok" | "err" | "info") {
-  const el = $(elId) as HTMLElement;
+  const el = get(elId);
+  if (!el) return;
   el.textContent = msg;
   el.className = `status ${type}`;
 }
@@ -19,10 +28,10 @@ async function loadSettings() {
     "llmApiKey",
     "llmProvider",
   ]);
-  if (data.clerkUserId) ($("#clerk-user-id") as HTMLInputElement).value = data.clerkUserId;
-  if (data.apiBaseUrl) ($("#api-base") as HTMLInputElement).value = data.apiBaseUrl;
-  if (data.llmApiKey) ($("#llm-key") as HTMLInputElement).value = data.llmApiKey;
-  if (data.llmProvider) ($("#llm-provider") as HTMLSelectElement).value = data.llmProvider;
+  if (data.clerkUserId) getInput("clerk-user-id").value = data.clerkUserId as string;
+  if (data.apiBaseUrl) getInput("api-base").value = data.apiBaseUrl as string;
+  if (data.llmApiKey) getInput("llm-key").value = data.llmApiKey as string;
+  if (data.llmProvider) getSelect("llm-provider").value = data.llmProvider as string;
 
   const apiBase = (data.apiBaseUrl as string | undefined) || API_DEFAULT;
   const hasUser = !!data.clerkUserId;
@@ -36,7 +45,7 @@ async function loadSettings() {
 }
 
 async function saveAuth() {
-  const userId = ($("#clerk-user-id") as HTMLInputElement).value.trim();
+  const userId = getInput("clerk-user-id").value.trim();
   if (!userId) {
     showStatus("auth-status", "User ID cannot be empty.", "err");
     return;
@@ -58,16 +67,13 @@ async function saveAuth() {
       showStatus("auth-status", `Backend returned ${resp.status}. Check your User ID.`, "err");
     }
   } catch {
-    // Backend not reachable — save anyway, will retry on next use
     await chrome.storage.local.set({ clerkUserId: userId });
     showStatus("auth-status", "Saved locally (backend unreachable — will sync later).", "info");
   }
 }
 
 async function testApi() {
-  const apiBase =
-    (($("api-base") as HTMLInputElement).value.trim()) ||
-    API_DEFAULT;
+  const apiBase = getInput("api-base").value.trim() || API_DEFAULT;
   try {
     const resp = await fetch(`${apiBase.replace(/\/api\/v1$/, "")}/health`);
     if (resp.ok) {
@@ -81,23 +87,22 @@ async function testApi() {
 }
 
 async function saveApi() {
-  const url = ($("#api-base") as HTMLInputElement).value.trim();
+  const url = getInput("api-base").value.trim();
   await chrome.storage.local.set({ apiBaseUrl: url || "" });
   showStatus("api-status", "Saved.", "ok");
   loadSettings();
 }
 
 async function saveLlm() {
-  const key = ($("#llm-key") as HTMLInputElement).value.trim();
-  const provider = ($("#llm-provider") as HTMLSelectElement).value;
+  const key = getInput("llm-key").value.trim();
+  const provider = getSelect("llm-provider").value;
   await chrome.storage.local.set({ llmApiKey: key, llmProvider: provider });
   showStatus("llm-status", "Saved.", "ok");
 }
 
-document.addEventListener("DOMContentLoaded", () => {
-  loadSettings();
-  $("#save-auth").addEventListener("click", saveAuth);
-  $("#test-api").addEventListener("click", testApi);
-  $("#save-api").addEventListener("click", saveApi);
-  $("#save-llm").addEventListener("click", saveLlm);
-});
+// Module scripts are deferred — DOM is fully parsed when this runs.
+loadSettings();
+get("save-auth").addEventListener("click", saveAuth);
+get("test-api").addEventListener("click", testApi);
+get("save-api").addEventListener("click", saveApi);
+get("save-llm").addEventListener("click", saveLlm);

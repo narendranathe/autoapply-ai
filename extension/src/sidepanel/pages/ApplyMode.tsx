@@ -8,6 +8,36 @@ interface Props { context: PageContext }
 
 type Tab = "resumes" | "fields" | "questions";
 
+function scoreColor(s: number): string {
+  if (s >= 80) return "#10b981";
+  if (s >= 65) return "#f59e0b";
+  if (s >= 50) return "#f97316";
+  return "#f87171";
+}
+
+function CompanyAvatar({ name }: { name: string }) {
+  const initial = (name || "?")[0].toUpperCase();
+  const hue = name.charCodeAt(0) % 360;
+  return (
+    <div style={{
+      width: 40,
+      height: 40,
+      borderRadius: 10,
+      background: `hsl(${hue}, 50%, 25%)`,
+      border: `1px solid hsl(${hue}, 50%, 35%)`,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      fontWeight: 700,
+      fontSize: 16,
+      color: `hsl(${hue}, 70%, 85%)`,
+      flexShrink: 0,
+    }}>
+      {initial}
+    </div>
+  );
+}
+
 export default function ApplyMode({ context }: Props) {
   const [tab, setTab] = useState<Tab>("resumes");
   const [resumes, setResumes] = useState<ResumeCard[]>([]);
@@ -16,6 +46,7 @@ export default function ApplyMode({ context }: Props) {
   const [answerDrafts, setAnswerDrafts] = useState<Record<string, string[]>>({});
   const [selectedAnswers, setSelectedAnswers] = useState<Record<string, number>>({});
   const [savingAnswer, setSavingAnswer] = useState<string | null>(null);
+  const [generatingAnswer, setGeneratingAnswer] = useState<string | null>(null);
 
   useEffect(() => {
     if (!context.company) return;
@@ -34,30 +65,31 @@ export default function ApplyMode({ context }: Props) {
     if (!resume.githubPath) return;
     const fileInput = context.detectedFields.find((f) => f.fieldType === "resume_upload");
     if (!fileInput) return;
-    chrome.runtime.sendMessage({
-      type: "ATTACH_RESUME",
-      payload: { fieldId: fileInput.fieldId, pdfUrl: resume.githubPath },
-    });
+    chrome.runtime.sendMessage({ type: "ATTACH_RESUME", payload: { fieldId: fileInput.fieldId, pdfUrl: resume.githubPath } });
   };
 
   const handleFillField = (fieldId: string, value: string) => {
-    chrome.runtime.sendMessage({
-      type: "FILL_FIELD",
-      payload: { fieldId, value },
-    });
+    chrome.runtime.sendMessage({ type: "FILL_FIELD", payload: { fieldId, value } });
   };
 
   const handleGenerateAnswers = async (questionId: string, questionText: string, category: string) => {
-    const res = await vaultApi.generateAnswers({
-      questionText,
-      questionCategory: category,
-      companyName: context.company,
-      roleTitle: context.roleTitle,
-      jdText: "",
-      workHistoryText: "",
-    });
-    setAnswerDrafts((prev) => ({ ...prev, [questionId]: res.drafts }));
-    setSelectedAnswers((prev) => ({ ...prev, [questionId]: 0 }));
+    setGeneratingAnswer(questionId);
+    try {
+      const res = await vaultApi.generateAnswers({
+        questionText,
+        questionCategory: category,
+        companyName: context.company,
+        roleTitle: context.roleTitle,
+        jdText: "",
+        workHistoryText: "",
+      });
+      setAnswerDrafts((prev) => ({ ...prev, [questionId]: res.drafts }));
+      setSelectedAnswers((prev) => ({ ...prev, [questionId]: 0 }));
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setGeneratingAnswer(null);
+    }
   };
 
   const handleSaveAnswer = async (questionId: string, questionText: string, category: string) => {
@@ -65,184 +97,384 @@ export default function ApplyMode({ context }: Props) {
     const text = answerDrafts[questionId]?.[idx];
     if (!text) return;
     setSavingAnswer(questionId);
-    await vaultApi.saveAnswer({
-      questionText,
-      questionCategory: category,
-      answerText: text,
-      companyName: context.company,
-      roleTitle: context.roleTitle,
-    });
-    // Use FILL_ANSWER so the content script targets textarea elements
-    chrome.runtime.sendMessage({
-      type: "FILL_ANSWER",
-      payload: { questionId, text },
-    });
-    setSavingAnswer(null);
+    try {
+      await vaultApi.saveAnswer({
+        questionText,
+        questionCategory: category,
+        answerText: text,
+        companyName: context.company,
+        roleTitle: context.roleTitle,
+      });
+      chrome.runtime.sendMessage({ type: "FILL_ANSWER", payload: { questionId, text } });
+    } finally {
+      setSavingAnswer(null);
+    }
   };
 
-  const S = {
-    container: { display: "flex", flexDirection: "column" as const, height: "calc(100vh - 53px)", overflow: "hidden" },
-    companyBar: { padding: "12px 16px", borderBottom: "1px solid #1e1e3a", background: "#13131f" },
-    companyName: { fontWeight: 700, fontSize: 15, color: "#f1f5f9" },
-    roleTitle: { fontSize: 12, color: "#6b7280", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const },
-    atsRow: { padding: "10px 16px", borderBottom: "1px solid #1e1e3a" },
-    tabs: { display: "flex", borderBottom: "1px solid #1e1e3a" },
-    tab: (active: boolean): React.CSSProperties => ({
-      flex: 1, padding: "9px 0", textAlign: "center" as const, fontSize: 12, fontWeight: 600,
-      cursor: "pointer", color: active ? "#a78bfa" : "#6b7280",
-      borderBottom: active ? "2px solid #a78bfa" : "2px solid transparent",
-      background: "none", border: "none", outline: "none",
-    }),
-    body: { flex: 1, overflowY: "auto" as const, padding: 12, display: "flex", flexDirection: "column" as const, gap: 8 },
-    sectionLabel: { fontSize: 11, color: "#6b7280", fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase" as const, marginBottom: 4 },
-    emptyState: { fontSize: 13, color: "#4b5563", textAlign: "center" as const, padding: "24px 0" },
-    fieldRow: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: "1px solid #1a1a2e", fontSize: 12 },
-    fieldLabel: { color: "#9ca3af", flex: 1 },
-    fieldBadge: (type: string): React.CSSProperties => ({
-      fontSize: 10, padding: "2px 6px", borderRadius: 4, fontWeight: 600,
-      background: type === "resume_upload" ? "#4f46e5" : "#1e1e3a",
-      color: type === "resume_upload" ? "#fff" : "#a78bfa",
-    }),
-    questionCard: { background: "#13131f", border: "1px solid #1e1e3a", borderRadius: 10, padding: 12, display: "flex", flexDirection: "column" as const, gap: 8 },
-    questionText: { fontSize: 12, color: "#c4b5fd", fontWeight: 600 },
-    draftText: { fontSize: 12, color: "#d1d5db", lineHeight: 1.5, background: "#0f0f1a", borderRadius: 6, padding: 8 },
-    draftTabs: { display: "flex", gap: 4 },
-    draftTabBtn: (active: boolean): React.CSSProperties => ({
-      fontSize: 11, padding: "3px 8px", borderRadius: 4, cursor: "pointer", border: "none",
-      background: active ? "#4f46e5" : "#1e1e3a", color: active ? "#fff" : "#6b7280",
-    }),
-    generateBtn: { fontSize: 11, padding: "4px 10px", borderRadius: 6, cursor: "pointer", border: "none", background: "#1e1e3a", color: "#a78bfa", fontWeight: 600 },
-    saveBtn: { fontSize: 11, padding: "4px 10px", borderRadius: 6, cursor: "pointer", border: "none", background: "#4f46e5", color: "#fff", fontWeight: 600 },
-    gapPill: { display: "inline-block", background: "#2d1b4e", color: "#c4b5fd", borderRadius: 99, fontSize: 11, padding: "2px 8px" },
-  };
+  const tabs: Array<{ key: Tab; label: string; count: number }> = [
+    { key: "resumes", label: "Resumes", count: resumes.length },
+    { key: "fields", label: "Fields", count: context.detectedFields.length },
+    { key: "questions", label: "Q&A", count: context.openQuestions.length },
+  ];
 
   return (
-    <div style={S.container}>
-      {/* Company + role */}
-      <div style={S.companyBar}>
-        <div style={S.companyName}>{context.company || "Unknown Company"}</div>
-        <div style={S.roleTitle}>{context.roleTitle}</div>
+    <div style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 45px)", overflow: "hidden" }}>
+
+      {/* Company context bar */}
+      <div style={{
+        padding: "10px 14px",
+        background: "#0f0f1e",
+        borderBottom: "1px solid #1f1f38",
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        flexShrink: 0,
+      }}>
+        <CompanyAvatar name={context.company || "?"} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 700, fontSize: 14, color: "#f1f5f9", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {context.company || "Unknown Company"}
+          </div>
+          <div style={{ fontSize: 11, color: "#64748b", marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {context.roleTitle}
+          </div>
+        </div>
+        {ats && (
+          <div style={{
+            flexShrink: 0,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            background: "#12121e",
+            border: `1px solid ${scoreColor(ats.overallScore)}44`,
+            borderRadius: 10,
+            padding: "6px 10px",
+          }}>
+            <span style={{ fontSize: 16, fontWeight: 800, color: scoreColor(ats.overallScore) }}>
+              {ats.overallScore.toFixed(0)}
+            </span>
+            <span style={{ fontSize: 9, color: "#64748b", fontWeight: 600, letterSpacing: "0.04em" }}>ATS</span>
+          </div>
+        )}
       </div>
 
-      {/* ATS score strip */}
+      {/* ATS bar (only when score exists) */}
       {ats && (
-        <div style={S.atsRow}>
-          <ATSScoreBar score={ats.overallScore} label={`ATS Match: ${ats.overallScore.toFixed(0)}/100`} />
+        <div style={{ padding: "8px 14px", borderBottom: "1px solid #1a1a2e", background: "#0a0a14", flexShrink: 0 }}>
+          <ATSScoreBar score={ats.overallScore} label={`Resume Match · ${ats.matchedKeywords}/${ats.totalJdKeywords} keywords`} />
         </div>
       )}
 
-      {/* Tabs */}
-      <div style={S.tabs}>
-        {(["resumes", "fields", "questions"] as Tab[]).map((t) => (
-          <button key={t} style={S.tab(tab === t)} onClick={() => setTab(t)}>
-            {t === "resumes" ? `Resumes (${resumes.length})` : t === "fields" ? `Fields (${context.detectedFields.length})` : `Q&A (${context.openQuestions.length})`}
+      {/* Tab navigation */}
+      <div style={{
+        display: "flex",
+        gap: 4,
+        padding: "8px 14px",
+        borderBottom: "1px solid #1a1a2e",
+        background: "#0a0a14",
+        flexShrink: 0,
+      }}>
+        {tabs.map(({ key, label, count }) => (
+          <button
+            key={key}
+            onClick={() => setTab(key)}
+            style={{
+              flex: 1,
+              padding: "5px 4px",
+              borderRadius: 6,
+              border: "none",
+              cursor: "pointer",
+              fontSize: 11,
+              fontWeight: 600,
+              transition: "all 0.15s",
+              background: tab === key ? "#1e1335" : "transparent",
+              color: tab === key ? "#a78bfa" : "#475569",
+              outline: tab === key ? "1px solid #3d2b6e" : "none",
+            }}
+          >
+            {label}
+            {count > 0 && (
+              <span style={{
+                marginLeft: 5,
+                background: tab === key ? "#2d1b69" : "#1a1a2e",
+                color: tab === key ? "#c4b5fd" : "#374151",
+                borderRadius: 99,
+                padding: "1px 6px",
+                fontSize: 10,
+              }}>
+                {count}
+              </span>
+            )}
           </button>
         ))}
       </div>
 
-      <div style={S.body}>
-        {/* Resumes tab */}
+      {/* Tab content */}
+      <div style={{ flex: 1, overflowY: "auto", padding: "10px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
+
+        {/* RESUMES TAB */}
         {tab === "resumes" && (
           <>
+            {/* Skills gap pills */}
             {ats?.skillsGap && ats.skillsGap.length > 0 && (
-              <div>
-                <div style={S.sectionLabel}>Skills Gap</div>
-                <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 4 }}>
-                  {ats.skillsGap.slice(0, 6).map((s) => <span key={s} style={S.gapPill}>{s}</span>)}
+              <Section label="Skills Gap">
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                  {ats.skillsGap.slice(0, 8).map((s) => (
+                    <span key={s} style={{
+                      background: "#2d1b4e",
+                      color: "#c4b5fd",
+                      borderRadius: 99,
+                      fontSize: 10,
+                      padding: "2px 8px",
+                      border: "1px solid #3d2560",
+                    }}>
+                      {s}
+                    </span>
+                  ))}
                 </div>
-              </div>
+              </Section>
             )}
+
+            {/* Suggestions */}
             {ats?.suggestions && ats.suggestions.length > 0 && (
-              <div>
-                <div style={S.sectionLabel}>Suggestions</div>
-                {ats.suggestions.map((s, i) => (
-                  <div key={i} style={{ fontSize: 11, color: "#9ca3af", marginBottom: 4, lineHeight: 1.4 }}>• {s}</div>
+              <Section label="Suggestions">
+                {ats.suggestions.slice(0, 3).map((s, i) => (
+                  <div key={i} style={{
+                    display: "flex",
+                    gap: 6,
+                    fontSize: 11,
+                    color: "#94a3b8",
+                    lineHeight: 1.5,
+                    padding: "4px 0",
+                    borderBottom: i < Math.min(ats.suggestions.length, 3) - 1 ? "1px solid #1a1a2e" : "none",
+                  }}>
+                    <span style={{ color: "#7c3aed", flexShrink: 0 }}>›</span>
+                    <span>{s}</span>
+                  </div>
                 ))}
-              </div>
+              </Section>
             )}
-            <div style={S.sectionLabel}>Past Resumes for {context.company}</div>
-            {loading && <div style={S.emptyState}>Loading...</div>}
-            {!loading && resumes.length === 0 && (
-              <div style={S.emptyState}>No past resumes for this company yet.<br />Generate one to get started.</div>
-            )}
-            {resumes.map((r) => (
-              <ResumeCardComponent key={r.resumeId} resume={r} onAttach={() => handleAttach(r)} />
-            ))}
+
+            <Section label={`Past Resumes · ${context.company}`}>
+              {loading && <LoadingRow />}
+              {!loading && resumes.length === 0 && (
+                <EmptyState message="No past resumes for this company yet." hint="Generate one to get started." />
+              )}
+              {resumes.map((r) => (
+                <ResumeCardComponent key={r.resumeId} resume={r} onAttach={() => handleAttach(r)} />
+              ))}
+            </Section>
           </>
         )}
 
-        {/* Fields tab */}
+        {/* FIELDS TAB */}
         {tab === "fields" && (
-          <>
-            <div style={S.sectionLabel}>Detected Form Fields</div>
-            {context.detectedFields.length === 0 && (
-              <div style={S.emptyState}>No fillable fields detected on this page.</div>
+          <Section label="Detected Form Fields">
+            {context.detectedFields.length === 0 ? (
+              <EmptyState message="No fillable fields detected." hint="Fields appear once you navigate to the application form." />
+            ) : (
+              context.detectedFields.map((f) => (
+                <div key={f.fieldId} style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "7px 10px",
+                  background: "#12121e",
+                  border: "1px solid #1f1f38",
+                  borderRadius: 8,
+                }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12, color: "#cbd5e1", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {f.label || f.fieldType}
+                    </div>
+                    <div style={{ fontSize: 10, color: "#475569", marginTop: 1 }}>
+                      {f.fieldType.replace(/_/g, " ")}
+                    </div>
+                  </div>
+                  {f.fieldType === "resume_upload" ? (
+                    <span style={{ fontSize: 10, background: "#4f46e5", color: "#fff", borderRadius: 4, padding: "2px 7px", fontWeight: 600 }}>
+                      PDF
+                    </span>
+                  ) : null}
+                  {f.suggestedValue ? (
+                    <button
+                      onClick={() => handleFillField(f.fieldId, f.suggestedValue)}
+                      style={btnStyle("fill")}
+                    >
+                      Fill
+                    </button>
+                  ) : null}
+                </div>
+              ))
             )}
-            {context.detectedFields.map((f) => (
-              <div key={f.fieldId} style={S.fieldRow}>
-                <span style={S.fieldLabel}>{f.label || f.fieldType}</span>
-                <span style={S.fieldBadge(f.fieldType)}>{f.fieldType.replace("_", " ")}</span>
-                {f.suggestedValue && (
-                  <button
-                    style={{ ...S.generateBtn, marginLeft: 6 }}
-                    onClick={() => handleFillField(f.fieldId, f.suggestedValue)}
-                  >
-                    Fill
-                  </button>
-                )}
-              </div>
-            ))}
-          </>
+          </Section>
         )}
 
-        {/* Questions tab */}
+        {/* Q&A TAB */}
         {tab === "questions" && (
-          <>
-            <div style={S.sectionLabel}>Open-Ended Questions</div>
-            {context.openQuestions.length === 0 && (
-              <div style={S.emptyState}>No open-ended questions detected.</div>
-            )}
-            {context.openQuestions.map((q) => {
-              const drafts = answerDrafts[q.questionId];
-              const selectedIdx = selectedAnswers[q.questionId] ?? 0;
-              return (
-                <div key={q.questionId} style={S.questionCard}>
-                  <div style={S.questionText}>{q.questionText.slice(0, 120)}{q.questionText.length > 120 ? "…" : ""}</div>
-                  <div style={{ fontSize: 10, color: "#6b7280" }}>{q.category} · max {q.maxLength ?? "—"} chars</div>
-                  {!drafts ? (
-                    <button style={S.generateBtn} onClick={() => handleGenerateAnswers(q.questionId, q.questionText, q.category)}>
-                      Generate 3 Drafts
-                    </button>
-                  ) : (
-                    <>
-                      <div style={S.draftTabs}>
-                        {drafts.map((_, i) => (
-                          <button key={i} style={S.draftTabBtn(selectedIdx === i)} onClick={() => setSelectedAnswers((p) => ({ ...p, [q.questionId]: i }))}>
-                            Draft {i + 1}
+          <Section label="Open-Ended Questions">
+            {context.openQuestions.length === 0 ? (
+              <EmptyState message="No open questions detected." hint="Questions appear on forms with text areas." />
+            ) : (
+              context.openQuestions.map((q) => {
+                const drafts = answerDrafts[q.questionId];
+                const selectedIdx = selectedAnswers[q.questionId] ?? 0;
+                const isGenerating = generatingAnswer === q.questionId;
+                return (
+                  <div key={q.questionId} style={{
+                    background: "#12121e",
+                    border: "1px solid #1f1f38",
+                    borderRadius: 10,
+                    padding: "10px 12px",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 8,
+                  }}>
+                    <div style={{ fontSize: 12, color: "#c4b5fd", fontWeight: 600, lineHeight: 1.4 }}>
+                      {q.questionText.slice(0, 130)}{q.questionText.length > 130 ? "…" : ""}
+                    </div>
+                    <div style={{ display: "flex", gap: 6, fontSize: 10, color: "#475569" }}>
+                      <span style={{ background: "#1a1a2e", borderRadius: 4, padding: "1px 6px" }}>{q.category.replace(/_/g, " ")}</span>
+                      {q.maxLength && (
+                        <span style={{ background: "#1a1a2e", borderRadius: 4, padding: "1px 6px" }}>max {q.maxLength}</span>
+                      )}
+                    </div>
+
+                    {!drafts ? (
+                      <button
+                        onClick={() => handleGenerateAnswers(q.questionId, q.questionText, q.category)}
+                        disabled={isGenerating}
+                        style={btnStyle("generate", isGenerating)}
+                      >
+                        {isGenerating ? "Generating…" : "✦ Generate 3 Drafts"}
+                      </button>
+                    ) : (
+                      <>
+                        <div style={{ display: "flex", gap: 4 }}>
+                          {drafts.map((_, i) => (
+                            <button
+                              key={i}
+                              onClick={() => setSelectedAnswers((p) => ({ ...p, [q.questionId]: i }))}
+                              style={{
+                                padding: "3px 10px",
+                                borderRadius: 6,
+                                border: "none",
+                                cursor: "pointer",
+                                fontSize: 11,
+                                fontWeight: 600,
+                                background: selectedIdx === i ? "#4f46e5" : "#1a1a2e",
+                                color: selectedIdx === i ? "#fff" : "#64748b",
+                              }}
+                            >
+                              {i + 1}
+                            </button>
+                          ))}
+                        </div>
+                        <div style={{
+                          fontSize: 12,
+                          color: "#d1d5db",
+                          lineHeight: 1.6,
+                          background: "#0a0a14",
+                          borderRadius: 8,
+                          padding: "8px 10px",
+                          border: "1px solid #1f1f38",
+                          maxHeight: 140,
+                          overflowY: "auto",
+                        }}>
+                          {drafts[selectedIdx]}
+                        </div>
+                        <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                          <button
+                            onClick={() => handleGenerateAnswers(q.questionId, q.questionText, q.category)}
+                            disabled={isGenerating}
+                            style={btnStyle("ghost", isGenerating)}
+                          >
+                            Regenerate
                           </button>
-                        ))}
-                      </div>
-                      <div style={S.draftText}>{drafts[selectedIdx]}</div>
-                      <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
-                        <button style={S.generateBtn} onClick={() => handleGenerateAnswers(q.questionId, q.questionText, q.category)}>
-                          Regenerate
-                        </button>
-                        <button
-                          style={S.saveBtn}
-                          onClick={() => handleSaveAnswer(q.questionId, q.questionText, q.category)}
-                          disabled={savingAnswer === q.questionId}
-                        >
-                          {savingAnswer === q.questionId ? "Saving…" : "Use & Save"}
-                        </button>
-                      </div>
-                    </>
-                  )}
-                </div>
-              );
-            })}
-          </>
+                          <button
+                            onClick={() => handleSaveAnswer(q.questionId, q.questionText, q.category)}
+                            disabled={savingAnswer === q.questionId}
+                            style={btnStyle("primary", savingAnswer === q.questionId)}
+                          >
+                            {savingAnswer === q.questionId ? "Saving…" : "Use & Fill"}
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </Section>
         )}
       </div>
     </div>
   );
+}
+
+// ── Shared sub-components ─────────────────────────────────────────────────
+
+function Section({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <div style={{
+        fontSize: 10,
+        fontWeight: 700,
+        letterSpacing: "0.08em",
+        textTransform: "uppercase",
+        color: "#475569",
+        paddingLeft: 2,
+      }}>
+        {label}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function EmptyState({ message, hint }: { message: string; hint: string }) {
+  return (
+    <div style={{
+      padding: "20px 16px",
+      textAlign: "center",
+      background: "#12121e",
+      border: "1px dashed #1f1f38",
+      borderRadius: 10,
+    }}>
+      <div style={{ fontSize: 12, color: "#475569", marginBottom: 4 }}>{message}</div>
+      <div style={{ fontSize: 11, color: "#334155" }}>{hint}</div>
+    </div>
+  );
+}
+
+function LoadingRow() {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {[1, 2].map((i) => (
+        <div key={i} style={{
+          height: 60,
+          background: "linear-gradient(90deg, #12121e 25%, #1a1a2e 50%, #12121e 75%)",
+          borderRadius: 10,
+          border: "1px solid #1f1f38",
+          animation: "pulse 1.5s ease infinite",
+        }} />
+      ))}
+    </div>
+  );
+}
+
+function btnStyle(variant: "primary" | "ghost" | "generate" | "fill", disabled = false): React.CSSProperties {
+  const base: React.CSSProperties = {
+    border: "none",
+    borderRadius: 7,
+    cursor: disabled ? "not-allowed" : "pointer",
+    fontWeight: 600,
+    fontSize: 11,
+    opacity: disabled ? 0.6 : 1,
+    transition: "opacity 0.15s",
+  };
+  if (variant === "primary") return { ...base, background: "#6d28d9", color: "#fff", padding: "5px 14px" };
+  if (variant === "ghost") return { ...base, background: "#1a1a2e", color: "#8b5cf6", padding: "5px 12px" };
+  if (variant === "generate") return { ...base, background: "#1e1335", color: "#a78bfa", padding: "6px 12px", width: "100%", outline: "1px solid #2d1b69" };
+  return { ...base, background: "#1e1b4b", color: "#a5b4fc", padding: "3px 10px" };
 }
