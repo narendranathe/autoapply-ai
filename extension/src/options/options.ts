@@ -27,11 +27,32 @@ async function loadSettings() {
     "apiBaseUrl",
     "llmApiKey",
     "llmProvider",
+    "profile",
   ]);
   if (data.clerkUserId) getInput("clerk-user-id").value = data.clerkUserId as string;
   if (data.apiBaseUrl) getInput("api-base").value = data.apiBaseUrl as string;
   if (data.llmApiKey) getInput("llm-key").value = data.llmApiKey as string;
   if (data.llmProvider) getSelect("llm-provider").value = data.llmProvider as string;
+
+  if (data.profile) {
+    const p = data.profile as Record<string, string>;
+    const setVal = (id: string, val: string | undefined) => {
+      const el = document.getElementById(id);
+      if (el && val) (el as HTMLInputElement | HTMLSelectElement).value = val;
+    };
+    setVal("profile-first", p.firstName);
+    setVal("profile-last", p.lastName);
+    setVal("profile-email", p.email);
+    setVal("profile-phone", p.phone);
+    setVal("profile-city", p.city);
+    setVal("profile-state", p.state);
+    setVal("profile-zip", p.zip);
+    setVal("profile-linkedin", p.linkedinUrl);
+    setVal("profile-portfolio", p.portfolioUrl);
+    setVal("profile-yoe", p.yearsExperience);
+    setVal("profile-salary", p.salary);
+    setVal("profile-sponsorship", p.sponsorship);
+  }
 
   const apiBase = (data.apiBaseUrl as string | undefined) || API_DEFAULT;
   const hasUser = !!data.clerkUserId;
@@ -100,9 +121,29 @@ async function saveLlm() {
   showStatus("llm-status", "Saved.", "ok");
 }
 
+async function saveProfile() {
+  const profile = {
+    firstName: getInput("profile-first").value.trim(),
+    lastName: getInput("profile-last").value.trim(),
+    email: getInput("profile-email").value.trim(),
+    phone: getInput("profile-phone").value.trim(),
+    city: getInput("profile-city").value.trim(),
+    state: getInput("profile-state").value.trim(),
+    zip: getInput("profile-zip").value.trim(),
+    linkedinUrl: getInput("profile-linkedin").value.trim(),
+    portfolioUrl: getInput("profile-portfolio").value.trim(),
+    yearsExperience: getInput("profile-yoe").value.trim(),
+    salary: getInput("profile-salary").value.trim(),
+    sponsorship: (document.getElementById("profile-sponsorship") as HTMLSelectElement).value,
+  };
+  await chrome.storage.local.set({ profile });
+  showStatus("profile-status", "Profile saved.", "ok");
+}
+
 // Module scripts are deferred — DOM is fully parsed when this runs.
 loadSettings();
 get("save-auth").addEventListener("click", saveAuth);
 get("test-api").addEventListener("click", testApi);
 get("save-api").addEventListener("click", saveApi);
 get("save-llm").addEventListener("click", saveLlm);
+get("save-profile").addEventListener("click", saveProfile);

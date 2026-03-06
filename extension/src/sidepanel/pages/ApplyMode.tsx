@@ -38,6 +38,43 @@ function CompanyAvatar({ name }: { name: string }) {
   );
 }
 
+interface UserProfile {
+  firstName?: string;
+  lastName?: string;
+  email?: string;
+  phone?: string;
+  city?: string;
+  state?: string;
+  zip?: string;
+  linkedinUrl?: string;
+  portfolioUrl?: string;
+  yearsExperience?: string;
+  sponsorship?: string;
+  salary?: string;
+}
+
+function getProfileValue(fieldType: string, profile: UserProfile | null): string {
+  if (!profile) return "";
+  const map: Record<string, string | undefined> = {
+    first_name: profile.firstName,
+    last_name: profile.lastName,
+    full_name: [profile.firstName, profile.lastName].filter(Boolean).join(" "),
+    email: profile.email,
+    phone: profile.phone,
+    address: profile.city && profile.state ? `${profile.city}, ${profile.state}` : profile.city,
+    city: profile.city,
+    state: profile.state,
+    zip: profile.zip,
+    linkedin: profile.linkedinUrl,
+    portfolio: profile.portfolioUrl,
+    website: profile.portfolioUrl,
+    years_experience: profile.yearsExperience,
+    salary: profile.salary,
+    sponsorship: profile.sponsorship,
+  };
+  return map[fieldType] ?? "";
+}
+
 export default function ApplyMode({ context }: Props) {
   const [tab, setTab] = useState<Tab>("resumes");
   const [resumes, setResumes] = useState<ResumeCard[]>([]);
@@ -47,6 +84,13 @@ export default function ApplyMode({ context }: Props) {
   const [selectedAnswers, setSelectedAnswers] = useState<Record<string, number>>({});
   const [savingAnswer, setSavingAnswer] = useState<string | null>(null);
   const [generatingAnswer, setGeneratingAnswer] = useState<string | null>(null);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+
+  useEffect(() => {
+    chrome.storage.local.get(["profile"], (data) => {
+      if (data.profile) setProfile(data.profile as UserProfile);
+    });
+  }, []);
 
   useEffect(() => {
     if (!context.company) return;
@@ -60,6 +104,13 @@ export default function ApplyMode({ context }: Props) {
       .catch(console.error)
       .finally(() => setLoading(false));
   }, [context.company]);
+
+  const handleFillAll = () => {
+    context.detectedFields.forEach((f) => {
+      const value = getProfileValue(f.fieldType, profile);
+      if (value) chrome.runtime.sendMessage({ type: "FILL_FIELD", payload: { fieldId: f.fieldId, value } });
+    });
+  };
 
   const handleAttach = (resume: ResumeCard) => {
     if (!resume.githubPath) return;
@@ -269,45 +320,74 @@ export default function ApplyMode({ context }: Props) {
 
         {/* FIELDS TAB */}
         {tab === "fields" && (
-          <Section label="Detected Form Fields">
-            {context.detectedFields.length === 0 ? (
-              <EmptyState message="No fillable fields detected." hint="Fields appear once you navigate to the application form." />
-            ) : (
-              context.detectedFields.map((f) => (
-                <div key={f.fieldId} style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  padding: "7px 10px",
-                  background: "#12121e",
-                  border: "1px solid #1f1f38",
-                  borderRadius: 8,
-                }}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 12, color: "#cbd5e1", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {f.label || f.fieldType}
-                    </div>
-                    <div style={{ fontSize: 10, color: "#475569", marginTop: 1 }}>
-                      {f.fieldType.replace(/_/g, " ")}
-                    </div>
-                  </div>
-                  {f.fieldType === "resume_upload" ? (
-                    <span style={{ fontSize: 10, background: "#4f46e5", color: "#fff", borderRadius: 4, padding: "2px 7px", fontWeight: 600 }}>
-                      PDF
-                    </span>
-                  ) : null}
-                  {f.suggestedValue ? (
-                    <button
-                      onClick={() => handleFillField(f.fieldId, f.suggestedValue)}
-                      style={btnStyle("fill")}
-                    >
-                      Fill
-                    </button>
-                  ) : null}
-                </div>
-              ))
+          <>
+            {context.detectedFields.length > 0 && profile && (
+              <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 4 }}>
+                <button onClick={handleFillAll} style={{ ...btnStyle("primary"), fontSize: 11, padding: "5px 14px" }}>
+                  Fill All Fields
+                </button>
+              </div>
             )}
-          </Section>
+            {!profile && context.detectedFields.length > 0 && (
+              <div style={{
+                padding: "8px 12px",
+                background: "#1a1200",
+                border: "1px solid #78350f",
+                borderRadius: 8,
+                fontSize: 11,
+                color: "#fbbf24",
+                marginBottom: 4,
+              }}>
+                No profile saved. Open <strong>Settings</strong> (extension options) to add your name, email, phone, etc.
+              </div>
+            )}
+            <Section label="Detected Form Fields">
+              {context.detectedFields.length === 0 ? (
+                <EmptyState message="No fillable fields detected." hint="Fields appear once you navigate to the application form." />
+              ) : (
+                context.detectedFields.map((f) => {
+                  const profileVal = getProfileValue(f.fieldType, profile);
+                  return (
+                    <div key={f.fieldId} style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      padding: "7px 10px",
+                      background: "#12121e",
+                      border: "1px solid #1f1f38",
+                      borderRadius: 8,
+                    }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 12, color: "#cbd5e1", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {f.label || f.fieldType}
+                        </div>
+                        <div style={{ fontSize: 10, color: "#475569", marginTop: 1 }}>
+                          {profileVal ? (
+                            <span style={{ color: "#6ee7b7" }}>{profileVal.slice(0, 40)}{profileVal.length > 40 ? "…" : ""}</span>
+                          ) : (
+                            f.fieldType.replace(/_/g, " ")
+                          )}
+                        </div>
+                      </div>
+                      {f.fieldType === "resume_upload" ? (
+                        <span style={{ fontSize: 10, background: "#4f46e5", color: "#fff", borderRadius: 4, padding: "2px 7px", fontWeight: 600 }}>
+                          PDF
+                        </span>
+                      ) : null}
+                      {profileVal ? (
+                        <button
+                          onClick={() => handleFillField(f.fieldId, profileVal)}
+                          style={btnStyle("fill")}
+                        >
+                          Fill
+                        </button>
+                      ) : null}
+                    </div>
+                  );
+                })
+              )}
+            </Section>
+          </>
         )}
 
         {/* Q&A TAB */}
