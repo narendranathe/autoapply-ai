@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import type { ATSScoreResult, PageContext, ResumeCard } from "../../shared/types";
-import { vaultApi, type RetrieveResponse } from "../../shared/api";
+import { vaultApi, type RetrieveResponse, type SimilarAnswer } from "../../shared/api";
 import ATSScoreBar from "../components/ATSScoreBar";
 import ResumeCardComponent from "../components/ResumeCard";
 
@@ -85,6 +85,10 @@ export default function ApplyMode({ context }: Props) {
   const [savingAnswer, setSavingAnswer] = useState<string | null>(null);
   const [generatingAnswer, setGeneratingAnswer] = useState<string | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
+  // answerId is set after saveAnswer — needed to record feedback
+  const [savedAnswerIds, setSavedAnswerIds] = useState<Record<string, string>>({});
+  // "From Memory" similar answers per question
+  const [memoryAnswers, setMemoryAnswers] = useState<Record<string, SimilarAnswer[]>>({});
 
   useEffect(() => {
     // Load profile on mount
@@ -115,6 +119,21 @@ export default function ApplyMode({ context }: Props) {
       .finally(() => setLoading(false));
   }, [context.company]);
 
+  // Fetch "From Memory" similar answers whenever questions change
+  useEffect(() => {
+    if (context.openQuestions.length === 0) return;
+    context.openQuestions.forEach((q) => {
+      vaultApi
+        .getSimilarAnswers({ questionText: q.questionText, questionCategory: q.category, topK: 3 })
+        .then((res) => {
+          if (res.answers.length > 0) {
+            setMemoryAnswers((prev) => ({ ...prev, [q.questionId]: res.answers }));
+          }
+        })
+        .catch(() => {}); // silently fail — no history yet
+    });
+  }, [context.openQuestions]);
+
   const handleFillAll = () => {
     context.detectedFields.forEach((f) => {
       const value = getProfileValue(f.fieldType, profile);
@@ -133,7 +152,11 @@ export default function ApplyMode({ context }: Props) {
     chrome.runtime.sendMessage({ type: "FILL_FIELD", payload: { fieldId, value } });
   };
 
-  const handleGenerateAnswers = async (questionId: string, questionText: string, category: string) => {
+  const handleGenerateAnswers = async (questionId: string, questionText: string, category: string, isRegenerate = false) => {
+    // If regenerating an existing saved answer, record that feedback
+    if (isRegenerate && savedAnswerIds[questionId]) {
+      vaultApi.recordFeedback({ answerId: savedAnswerIds[questionId], feedback: "regenerated" }).catch(() => {});
+    }
     setGeneratingAnswer(questionId);
     try {
       const res = await vaultApi.generateAnswers({
@@ -159,17 +182,35 @@ export default function ApplyMode({ context }: Props) {
     if (!text) return;
     setSavingAnswer(questionId);
     try {
-      await vaultApi.saveAnswer({
+      const saved = await vaultApi.saveAnswer({
         questionText,
         questionCategory: category,
         answerText: text,
         companyName: context.company,
         roleTitle: context.roleTitle,
       });
+      // Store answer_id so we can record feedback later
+      setSavedAnswerIds((prev) => ({ ...prev, [questionId]: saved.answer_id }));
+      // Record immediate "used_as_is" feedback
+      vaultApi.recordFeedback({ answerId: saved.answer_id, feedback: "used_as_is" }).catch(() => {});
       chrome.runtime.sendMessage({ type: "FILL_ANSWER", payload: { questionId, text } });
     } finally {
       setSavingAnswer(null);
     }
+  };
+
+  const handleUseMemoryAnswer = (questionId: string, questionText: string, category: string, memory: SimilarAnswer) => {
+    // Fill the textarea with this memory answer and record feedback on the original
+    vaultApi.recordFeedback({ answerId: memory.answer_id, feedback: "used_as_is" }).catch(() => {});
+    // Also save it as a new answer for the current context
+    vaultApi.saveAnswer({
+      questionText,
+      questionCategory: category,
+      answerText: memory.answer_text,
+      companyName: context.company,
+      roleTitle: context.roleTitle,
+    }).catch(() => {});
+    chrome.runtime.sendMessage({ type: "FILL_ANSWER", payload: { questionId, text: memory.answer_text } });
   };
 
   const tabs: Array<{ key: Tab; label: string; count: number }> = [
@@ -430,6 +471,42 @@ export default function ApplyMode({ context }: Props) {
                       )}
                     </div>
 
+                    {/* From Memory section */}
+                    {memoryAnswers[q.questionId] && memoryAnswers[q.questionId].length > 0 && !drafts && (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                        <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", color: "#6ee7b7", textTransform: "uppercase" }}>
+                          From Memory · {memoryAnswers[q.questionId].length} past answers
+                        </div>
+                        {memoryAnswers[q.questionId].map((mem, mi) => (
+                          <div key={mem.answer_id} style={{
+                            background: "#071a12",
+                            border: "1px solid #064e3b",
+                            borderRadius: 8,
+                            padding: "8px 10px",
+                          }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                              <span style={{ fontSize: 10, color: "#34d399" }}>
+                                {mem.company_name} · {mem.feedback === "used_as_is" ? "★ Used as-is" : mem.feedback === "edited" ? "✎ Edited" : "saved"}
+                              </span>
+                              <span style={{ fontSize: 10, color: "#6b7280" }}>
+                                {mem.reward_score != null ? `${(mem.reward_score * 100).toFixed(0)}% quality` : ""}
+                              </span>
+                            </div>
+                            <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5, maxHeight: 80, overflowY: "auto", marginBottom: 6 }}>
+                              {mem.answer_text.slice(0, 200)}{mem.answer_text.length > 200 ? "…" : ""}
+                            </div>
+                            <button
+                              onClick={() => handleUseMemoryAnswer(q.questionId, q.questionText, q.category, mem)}
+                              style={{ ...btnStyle("fill"), fontSize: 10, background: "#064e3b", color: "#6ee7b7" }}
+                            >
+                              Use This
+                            </button>
+                          </div>
+                        ))}
+                        <div style={{ height: 1, background: "#1a1a2e", margin: "2px 0" }} />
+                      </div>
+                    )}
+
                     {!drafts ? (
                       <button
                         onClick={() => handleGenerateAnswers(q.questionId, q.questionText, q.category)}
@@ -475,7 +552,7 @@ export default function ApplyMode({ context }: Props) {
                         </div>
                         <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
                           <button
-                            onClick={() => handleGenerateAnswers(q.questionId, q.questionText, q.category)}
+                            onClick={() => handleGenerateAnswers(q.questionId, q.questionText, q.category, true)}
                             disabled={isGenerating}
                             style={btnStyle("ghost", isGenerating)}
                           >

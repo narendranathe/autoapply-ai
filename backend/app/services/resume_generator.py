@@ -363,14 +363,32 @@ async def generate_answer_drafts(
     provider: str,
     api_key: str = "",
     ollama_model: str = "llama3.1:8b",
+    past_accepted_answers: list[str] | None = None,
 ) -> list[str]:
     """
     Generate 3 draft answers to an open-ended application question.
     Returns list of 3 answer strings, each ≤ 250 words.
+
+    past_accepted_answers: high-reward answers to similar questions from history.
+    Injected as style/voice examples so the LLM learns the user's preferred tone.
     """
     # Load answering framework for this category
     config = _load_doc("resume_personal_config.md")
     framework_snippet = _extract_category_framework(config, question_category)
+
+    # Build "From Memory" context block if we have good past answers
+    memory_block = ""
+    if past_accepted_answers:
+        examples = "\n\n---\n".join(
+            f"EXAMPLE {i+1}:\n{a[:400]}" for i, a in enumerate(past_accepted_answers[:3])
+        )
+        memory_block = f"""
+PREVIOUSLY ACCEPTED ANSWERS (high quality — mirror this voice and style):
+{examples}
+
+Adapt the voice and structure above to the current question/company.
+Do NOT copy verbatim — generate fresh content grounded in work history.
+"""
 
     user_prompt = f"""QUESTION: {question_text}
 CATEGORY: {question_category}
@@ -385,7 +403,7 @@ CANDIDATE WORK HISTORY (use ONLY these facts — no fabrication):
 
 ANSWERING FRAMEWORK FOR THIS CATEGORY:
 {framework_snippet}
-
+{memory_block}
 Generate exactly 3 different draft answers. Each must:
 - Be ≤ 250 words (180-220 words ideal)
 - Use a different angle or emphasis while staying factual

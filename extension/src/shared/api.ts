@@ -72,6 +72,19 @@ async function get<T>(path: string, params?: Record<string, string>): Promise<T>
   return resp.json() as Promise<T>;
 }
 
+async function patch<T>(path: string, body: FormData): Promise<T> {
+  const resp = await fetch(`${getApiBase()}${path}`, {
+    method: "PATCH",
+    headers: authHeaders(),
+    body,
+  });
+  if (!resp.ok) {
+    const err = await resp.text();
+    throw new Error(`API PATCH ${path} failed (${resp.status}): ${err}`);
+  }
+  return resp.json() as Promise<T>;
+}
+
 // ── Response types ─────────────────────────────────────────────────────────
 
 export interface RetrieveResponse {
@@ -94,6 +107,23 @@ export interface SaveAnswerResponse {
   word_count: number;
   question_hash: string;
   saved: boolean;
+}
+
+export interface SimilarAnswer {
+  answer_id: string;
+  question_text: string;
+  answer_text: string;
+  company_name: string;
+  question_category: string;
+  reward_score: number | null;
+  feedback: string;
+  word_count: number;
+  created_at: string;
+}
+
+export interface SimilarAnswersResponse {
+  answers: SimilarAnswer[];
+  total: number;
 }
 
 export interface ResumeListResponse {
@@ -191,6 +221,32 @@ export const vaultApi = {
     fd.append("was_default", params.wasDefault ? "true" : "false");
     if (params.llmProviderUsed) fd.append("llm_provider_used", params.llmProviderUsed);
     return post("/vault/answers/save", fd);
+  },
+
+  /** Record outcome of a generated answer (RL reward signal) */
+  recordFeedback(params: {
+    answerId: string;
+    feedback: "used_as_is" | "edited" | "regenerated" | "skipped";
+    editedAnswer?: string;
+  }): Promise<{ answer_id: string; feedback: string; reward_score: number; edit_distance: number }> {
+    const fd = new FormData();
+    fd.append("feedback", params.feedback);
+    if (params.editedAnswer) fd.append("edited_answer", params.editedAnswer);
+    return patch(`/vault/answers/${params.answerId}/feedback`, fd);
+  },
+
+  /** Find best past answers for a question category (bandit policy) */
+  getSimilarAnswers(params: {
+    questionText: string;
+    questionCategory: string;
+    topK?: number;
+  }): Promise<SimilarAnswersResponse> {
+    const p = new URLSearchParams({
+      question_text: params.questionText,
+      question_category: params.questionCategory,
+      top_k: String(params.topK ?? 3),
+    });
+    return get(`/vault/answers/similar?${p.toString()}`);
   },
 
   /** All resumes and answers for a company (recruiter callback reference) */

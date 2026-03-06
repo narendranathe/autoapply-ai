@@ -334,6 +334,53 @@ class RetrievalAgent:
         result = await db.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_best_answers_for_question(
+        self,
+        db: AsyncSession,
+        user_id: uuid.UUID,
+        question_text: str,
+        question_category: str,
+        top_k: int = 5,
+    ) -> list[ApplicationAnswer]:
+        """
+        Find the best historical answers for this question category.
+
+        Ranking = reward_score * 0.7  +  tfidf_similarity(question_text) * 0.3
+        Falls back to recency when no feedback exists yet.
+        Only returns answers with feedback != "skipped" and != "regenerated".
+        """
+        # Pull all category answers (limit 50 for TF-IDF scoring)
+        stmt = (
+            select(ApplicationAnswer)
+            .where(
+                ApplicationAnswer.user_id == user_id,
+                ApplicationAnswer.question_category == question_category,
+                ApplicationAnswer.feedback.notin_(["skipped", "regenerated"]),
+            )
+            .order_by(
+                ApplicationAnswer.reward_score.desc().nulls_last(),
+                ApplicationAnswer.created_at.desc(),
+            )
+            .limit(50)
+        )
+        result = await db.execute(stmt)
+        candidates: list[ApplicationAnswer] = list(result.scalars().all())
+
+        if not candidates:
+            return []
+
+        # Score each candidate: reward * 0.7 + tfidf_sim * 0.3
+        q_vec = build_tfidf_vector(question_text)
+        scored: list[tuple[float, ApplicationAnswer]] = []
+        for ans in candidates:
+            reward = ans.reward_score if ans.reward_score is not None else 0.5
+            sim = cosine_similarity_tfidf(q_vec, build_tfidf_vector(ans.question_text))
+            composite = reward * 0.7 + sim * 0.3
+            scored.append((composite, ans))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [ans for _, ans in scored[:top_k]]
+
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
