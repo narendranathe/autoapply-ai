@@ -295,7 +295,7 @@ class FloatingPanel {
   private host: HTMLDivElement;
   private shadow: ShadowRoot;
   private isOpen: boolean = false;
-  private apiBase: string = "http://localhost:8000/api/v1";
+  private apiBase: string = "https://autoapply-ai-api.fly.dev/api/v1";
   private clerkUserId: string | null = null;
   private profile: Profile = {
     firstName: "", lastName: "", email: "", phone: "",
@@ -309,6 +309,7 @@ class FloatingPanel {
   private questionStates: QuestionState[] = [];
   private atsScore: number | null = null;
   private loadingAts: boolean = false;
+  private workHistoryText: string = "";
 
   constructor() {
     this.host = document.createElement("div");
@@ -329,6 +330,19 @@ class FloatingPanel {
     if (data.apiBaseUrl) this.apiBase = data.apiBaseUrl as string;
     if (data.clerkUserId) this.clerkUserId = data.clerkUserId as string;
     if (data.profile) this.profile = data.profile as Profile;
+
+    // Fetch full work history text for LLM context
+    try {
+      const whResp = await fetch(`${this.apiBase}/work-history/text`, {
+        headers: this.clerkUserId ? { "X-Clerk-User-Id": this.clerkUserId } : {},
+      });
+      if (whResp.ok) {
+        const whJson = await whResp.json() as { text?: string };
+        if (whJson.text) this.workHistoryText = whJson.text;
+      }
+    } catch {
+      // non-fatal — falls back to empty string; LLM will use JD context only
+    }
 
     this.company = extractCompanyFromPage();
     this.roleTitle = extractRoleFromPage();
@@ -386,10 +400,7 @@ class FloatingPanel {
       fd.append("company_name", this.company);
       fd.append("role_title", this.roleTitle);
       fd.append("jd_text", this.jdText);
-      fd.append(
-        "work_history_text",
-        `${this.profile.firstName} ${this.profile.lastName} — ${this.profile.yearsExperience} years experience`
-      );
+      fd.append("work_history_text", this.workHistoryText);
       const headers: Record<string, string> = {};
       if (this.clerkUserId) headers["X-Clerk-User-Id"] = this.clerkUserId;
       const resp = await fetch(`${this.apiBase}/vault/generate/answers`, {
