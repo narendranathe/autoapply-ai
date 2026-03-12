@@ -586,14 +586,26 @@ class FloatingPanel {
 
   private observeMutations(): void {
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-    const observer = new MutationObserver(() => {
+    const observer = new MutationObserver((mutations) => {
       // Re-append host if SPA framework removed it from <html>
       if (!document.documentElement.contains(this.host)) {
         document.documentElement.appendChild(this.host);
       }
+      // Only re-detect when form elements actually appear/disappear (step navigation)
+      // This avoids expensive re-renders on every cosmetic DOM update
+      const hasFormChange = mutations.some((m) =>
+        Array.from(m.addedNodes).concat(Array.from(m.removedNodes)).some((node) => {
+          if (!(node instanceof HTMLElement)) return false;
+          return (
+            node.matches("input, textarea, select, [contenteditable=true]") ||
+            !!node.querySelector("input:not([type=hidden]), textarea, select, [contenteditable=true]")
+          );
+        })
+      );
+      if (!hasFormChange) return;
       if (debounceTimer !== null) clearTimeout(debounceTimer);
-      // 1 200 ms gives SPA frameworks enough time to finish a render cycle
-      debounceTimer = setTimeout(() => this.redetect(), 1200);
+      // 800ms gives SPA frameworks enough time to finish rendering the next step
+      debounceTimer = setTimeout(() => this.redetect(), 800);
     });
     if (document.body) {
       observer.observe(document.body, { childList: true, subtree: true });

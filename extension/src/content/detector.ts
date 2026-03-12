@@ -519,10 +519,29 @@ buildAndSendContext();
 
 // Re-scan when SPA frameworks (React/Vue) render form fields after document_idle.
 // Greenhouse, Lever, Workday all inject inputs 1-3s after the initial script run.
+// Multi-step forms (Workday steps, Greenhouse stages) add new questions on each step.
 let _mutationDebounce: ReturnType<typeof setTimeout> | null = null;
-const _fieldObserver = new MutationObserver(() => {
+
+function hasSignificantFormChange(mutations: MutationRecord[]): boolean {
+  for (const m of mutations) {
+    for (const node of Array.from(m.addedNodes)) {
+      if (!(node instanceof HTMLElement)) continue;
+      // Significant if the added subtree contains a form input, textarea, or contenteditable
+      if (
+        node.matches("input, textarea, select, [contenteditable=true]") ||
+        node.querySelector("input:not([type=hidden]), textarea, select, [contenteditable=true]")
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+const _fieldObserver = new MutationObserver((mutations) => {
+  if (!hasSignificantFormChange(mutations)) return; // skip cosmetic DOM updates
   if (_mutationDebounce !== null) clearTimeout(_mutationDebounce);
-  _mutationDebounce = setTimeout(buildAndSendContext, 1000);
+  _mutationDebounce = setTimeout(buildAndSendContext, 600);
 });
 if (document.body) {
   _fieldObserver.observe(document.body, { childList: true, subtree: true });
