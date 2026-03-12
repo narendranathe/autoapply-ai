@@ -473,12 +473,46 @@ async function importFromResume() {
 
     const result = await workHistoryApi.importFromResume(_importFile, providers);
 
+    // Auto-populate profile fields that are currently empty
+    const dp = result.detected_profile;
+    if (dp && Object.keys(dp).length > 0) {
+      const profileData = await chrome.storage.local.get("profile");
+      const existingProfile = (profileData.profile as Record<string, string> | undefined) ?? {};
+      let profileUpdated = false;
+      const mergedProfile = { ...existingProfile };
+      const fieldMap: Record<string, string> = {
+        firstName: "profile-first",
+        lastName: "profile-last",
+        email: "profile-email",
+        phone: "profile-phone",
+        linkedinUrl: "profile-linkedin",
+        githubUrl: "profile-github",
+        portfolioUrl: "profile-portfolio",
+      };
+      for (const [key, inputId] of Object.entries(fieldMap)) {
+        const detected = dp[key as keyof typeof dp];
+        if (detected && !existingProfile[key]) {
+          mergedProfile[key] = detected;
+          const el = document.getElementById(inputId) as HTMLInputElement | null;
+          if (el) el.value = detected;
+          profileUpdated = true;
+        }
+      }
+      if (profileUpdated) {
+        await chrome.storage.local.set({ profile: mergedProfile });
+      }
+    }
+
+    const profileMsg = dp && Object.keys(dp).length > 0
+      ? ` Profile fields auto-populated.`
+      : "";
+
     if (result.created === 0 && result.skipped > 0) {
-      showStatus("wh-import-status", `All ${result.skipped} extracted entries already exist — nothing new added.`, "info");
+      showStatus("wh-import-status", `All ${result.skipped} extracted entries already exist — nothing new added.${profileMsg}`, "info");
     } else {
       showStatus(
         "wh-import-status",
-        `Imported ${result.created} entr${result.created !== 1 ? "ies" : "y"} from ${result.total_extracted} detected (${result.skipped} already existed). Powered by ${result.provider_used}.`,
+        `Imported ${result.created} entr${result.created !== 1 ? "ies" : "y"} from ${result.total_extracted} detected (${result.skipped} already existed). Powered by ${result.provider_used}.${profileMsg}`,
         "ok"
       );
     }

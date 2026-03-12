@@ -12,6 +12,7 @@ Endpoints:
 """
 
 import json
+import re
 import uuid
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
@@ -216,6 +217,60 @@ async def seed_work_history(
 
 # ── Import from Resume ─────────────────────────────────────────────────────
 
+
+def _extract_contact_info(text: str) -> dict:
+    """
+    Regex-based extraction of contact fields from resume raw text.
+    Returns only fields that were confidently detected.
+    """
+    info: dict = {}
+
+    # Email
+    email_m = re.search(r"[\w.+\-]+@[\w\-]+\.[a-z]{2,}", text, re.IGNORECASE)
+    if email_m:
+        info["email"] = email_m.group(0)
+
+    # Phone — various formats
+    phone_m = re.search(
+        r"(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4}",
+        text,
+    )
+    if phone_m:
+        info["phone"] = re.sub(r"[^\d+]", "", phone_m.group(0))
+
+    # LinkedIn URL
+    li_m = re.search(r"linkedin\.com/in/[\w\-]+", text, re.IGNORECASE)
+    if li_m:
+        info["linkedinUrl"] = f"https://{li_m.group(0)}"
+
+    # GitHub URL
+    gh_m = re.search(r"github\.com/[\w\-]+", text, re.IGNORECASE)
+    if gh_m:
+        info["githubUrl"] = f"https://{gh_m.group(0)}"
+
+    # Portfolio / personal website (simple heuristic — not email, not linkedin/github)
+    site_m = re.search(
+        r"https?://(?!.*linkedin|.*github|.*mail)[\w\-]+\.[a-z]{2,}(?:/[\w\-./]*)?",
+        text,
+        re.IGNORECASE,
+    )
+    if site_m:
+        info["portfolioUrl"] = site_m.group(0)
+
+    # Name — first non-empty line that looks like a proper name (2-4 words, title-cased)
+    for line in text.split("\n")[:10]:
+        line = line.strip()
+        if not line or "@" in line or re.search(r"\d", line):
+            continue
+        words = line.split()
+        if 2 <= len(words) <= 4 and all(w[0].isupper() for w in words if w.isalpha()):
+            info["firstName"] = words[0]
+            info["lastName"] = words[-1]
+            break
+
+    return info
+
+
 _IMPORT_SYSTEM = """You are a structured data extractor specializing in resumes.
 
 Given resume text, extract ALL work experience entries (jobs, internships, co-ops).
@@ -411,6 +466,10 @@ async def import_work_history_from_resume(
         created += 1
 
     await db.commit()
+
+    # Extract contact info from raw text for the extension to optionally save to profile
+    contact_info = _extract_contact_info(raw_text)
+
     logger.info(
         f"[import-from-resume] user={user.id} created={created} skipped={skipped} provider={used_provider}"
     )
@@ -419,4 +478,5 @@ async def import_work_history_from_resume(
         "skipped": skipped,
         "total_extracted": len(extracted_entries),
         "provider_used": used_provider,
+        "detected_profile": contact_info,  # extension can pre-fill profile fields
     }

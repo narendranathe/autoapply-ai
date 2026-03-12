@@ -512,7 +512,16 @@ export const workHistoryApi = {
   importFromResume(
     file: File,
     providers?: Array<{ name: string; apiKey: string; model?: string }>
-  ): Promise<{ created: number; skipped: number; total_extracted: number; provider_used: string }> {
+  ): Promise<{
+    created: number;
+    skipped: number;
+    total_extracted: number;
+    provider_used: string;
+    detected_profile: Partial<{
+      firstName: string; lastName: string; email: string; phone: string;
+      linkedinUrl: string; githubUrl: string; portfolioUrl: string;
+    }>;
+  }> {
     const fd = new FormData();
     fd.append("file", file, file.name);
     if (providers?.length) {
