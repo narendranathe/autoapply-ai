@@ -547,6 +547,7 @@ async def generate_answers(
     ollama_model: str = Form("llama3.1:8b"),
     providers_json: str = Form(""),  # JSON: [{"name":"groq","api_key":"...","model":"..."}]
     max_length: int = Form(0),  # textarea maxlength — 0 means no limit
+    category_instructions: str = Form(""),  # per-category style instructions from user settings
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -555,6 +556,7 @@ async def generate_answers(
     Each draft is ≤ 250 words, grounded in the user's real work history.
     High-reward past answers are injected as style examples (RL grounding).
     If work_history_text is empty, pulls structured history from the DB automatically.
+    category_instructions: extra style instructions per category from the user's settings page.
     """
     # 0. Auto-fetch work history from DB if not provided by the client
     if not work_history_text.strip():
@@ -606,6 +608,7 @@ async def generate_answers(
             past_accepted_answers=past_texts or None,
             candidate_name=candidate_name,
             max_length=max_length if max_length > 0 else None,
+            category_instructions=category_instructions.strip() or None,
         )
     else:
         drafts = await generate_answer_drafts(

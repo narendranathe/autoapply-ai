@@ -109,6 +109,8 @@ export default function ApplyMode({ context }: Props) {
   const [uploadSuccess, setUploadSuccess] = useState<string>("");
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // L3: per-category prompt style instructions
+  const [promptTemplates, setPromptTemplates] = useState<Record<string, string>>({});
   // C5/C6: application tracking
   const [trackedAppId, setTrackedAppId] = useState<string | null>(null);
   const [pastApplications, setPastApplications] = useState<TrackedApplication[]>([]);
@@ -143,9 +145,10 @@ export default function ApplyMode({ context }: Props) {
   }
 
   useEffect(() => {
-    chrome.storage.local.get(["profile", "providerConfigs"], (data) => {
+    chrome.storage.local.get(["profile", "providerConfigs", "promptTemplates"], (data) => {
       if (data.profile) setProfile(data.profile as UserProfile);
       if (data.providerConfigs) setProviders(buildProviderList(data.providerConfigs as Record<string, { enabled: boolean; apiKey: string; model: string }>));
+      if (data.promptTemplates) setPromptTemplates(data.promptTemplates as Record<string, string>);
       setProvidersLoaded(true);
     });
 
@@ -153,6 +156,7 @@ export default function ApplyMode({ context }: Props) {
       if (area !== "local") return;
       if (changes.profile?.newValue) setProfile(changes.profile.newValue as UserProfile);
       if (changes.providerConfigs?.newValue) setProviders(buildProviderList(changes.providerConfigs.newValue as Record<string, { enabled: boolean; apiKey: string; model: string }>));
+      if (changes.promptTemplates?.newValue) setPromptTemplates(changes.promptTemplates.newValue as Record<string, string>);
     };
     chrome.storage.onChanged.addListener(onChanged);
     return () => chrome.storage.onChanged.removeListener(onChanged);
@@ -382,6 +386,7 @@ export default function ApplyMode({ context }: Props) {
         workHistoryText,
         maxLength,
         providers: freshProviders,
+        categoryInstructions: promptTemplates[category] || promptTemplates["custom"],
       });
       if (!res.drafts?.length) {
         setGenerationErrors((prev) => ({ ...prev, [questionId]: "All providers failed — check your API keys in Settings." }));
@@ -489,6 +494,7 @@ export default function ApplyMode({ context }: Props) {
           workHistoryText: currentWorkHistory,
           maxLength: q.maxLength,
           providers: freshProviders,
+          categoryInstructions: promptTemplates[q.category] || promptTemplates["custom"],
         }).then((res) => {
           if (!res.drafts?.length) {
             setGenerationErrors((prev) => ({ ...prev, [q.questionId]: "All providers failed — check your API keys in Settings." }));

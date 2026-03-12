@@ -367,6 +367,63 @@
         </div>
       </div>
 
+      <!-- Answer Style Instructions (per category) -->
+      <div class="card">
+        <h2>Answer Style Instructions</h2>
+        <p class="hint" style="margin-bottom:14px">
+          Optional: add extra instructions the LLM must follow when writing answers for each category.
+          Examples: "Always quantify impact with metrics", "Mention my AWS certification in technical answers",
+          "Keep cover letters conversational, not corporate".
+        </p>
+
+        <style>
+          .pt-row { margin-bottom: 14px; }
+          .pt-label { font-size: 12px; font-weight: 700; color: #a78bfa; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 5px; }
+          .pt-row textarea {
+            width: 100%; padding: 8px 10px; background: #0f0f1a; border: 1px solid #1e1e3a;
+            border-radius: 8px; color: #f1f5f9; font-size: 12px; outline: none;
+            resize: vertical; font-family: system-ui, sans-serif; line-height: 1.5;
+          }
+          .pt-row textarea:focus { border-color: #4f46e5; }
+        </style>
+
+        <div class="pt-row">
+          <div class="pt-label">General / Custom</div>
+          <textarea id="pt-custom" rows="2" placeholder="e.g. Always cite quantifiable outcomes. Write in first person."></textarea>
+        </div>
+        <div class="pt-row">
+          <div class="pt-label">Experience</div>
+          <textarea id="pt-experience" rows="2" placeholder="e.g. Focus on data engineering projects. Emphasize Python and cloud experience."></textarea>
+        </div>
+        <div class="pt-row">
+          <div class="pt-label">Motivation / Why This Role</div>
+          <textarea id="pt-motivation" rows="2" placeholder="e.g. Mention interest in large-scale data systems. Tie to my MS in CS."></textarea>
+        </div>
+        <div class="pt-row">
+          <div class="pt-label">Behavioral (STAR)</div>
+          <textarea id="pt-behavioral" rows="2" placeholder="e.g. Always use the STAR format. Pull examples from the last 2 years only."></textarea>
+        </div>
+        <div class="pt-row">
+          <div class="pt-label">Technical</div>
+          <textarea id="pt-technical" rows="2" placeholder="e.g. Mention Spark, dbt, and Airflow when relevant. Reference my AWS Solutions Architect cert."></textarea>
+        </div>
+        <div class="pt-row">
+          <div class="pt-label">Salary / Compensation</div>
+          <textarea id="pt-salary" rows="2" placeholder="e.g. Express flexibility but anchor to market rate for my level and location."></textarea>
+        </div>
+        <div class="pt-row">
+          <div class="pt-label">Work Authorization</div>
+          <textarea id="pt-work_authorization" rows="2" placeholder="e.g. State I am authorized to work in the US without sponsorship."></textarea>
+        </div>
+        <div class="pt-row">
+          <div class="pt-label">Cover Letter</div>
+          <textarea id="pt-cover_letter" rows="3" placeholder="e.g. Open with a specific achievement. Use a confident but not arrogant tone. Max 350 words."></textarea>
+        </div>
+
+        <button class="btn btn-primary" id="save-prompts">Save Style Instructions</button>
+        <div id="prompts-status" class="status"></div>
+      </div>
+
       <!-- Status -->
       <div class="card">
         <h2>Status</h2>

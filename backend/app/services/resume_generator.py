@@ -672,6 +672,7 @@ async def generate_answer_drafts_cascade(
     past_accepted_answers: list[str] | None = None,
     candidate_name: str = "",
     max_length: int | None = None,
+    category_instructions: str | None = None,  # extra style instructions from user settings
 ) -> tuple[list[str], str]:
     """
     Try providers in priority order. Use the first working one to generate 3 drafts.
@@ -726,6 +727,13 @@ Do NOT copy verbatim — generate fresh content grounded in work history.
         else:
             length_instruction = "Target 150-220 words per answer."
 
+        # Inject per-category style instructions if provided by the user
+        style_block = ""
+        if category_instructions and category_instructions.strip():
+            style_block = (
+                f"\nUSER STYLE INSTRUCTIONS (MUST follow):\n{category_instructions.strip()}\n"
+            )
+
         user_prompt = f"""QUESTION: {question_text}
 CATEGORY: {question_category}
 COMPANY: {company_name}
@@ -738,7 +746,7 @@ JOB DESCRIPTION (first 2000 chars):
 
 ANSWERING FRAMEWORK FOR THIS CATEGORY:
 {framework_snippet}
-{memory_block}
+{memory_block}{style_block}
 Generate exactly 3 different draft answers. Each answer must use a DIFFERENT angle or emphasis.
 {length_instruction}
 

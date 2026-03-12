@@ -227,6 +227,7 @@ export const vaultApi = {
     jdText: string;
     workHistoryText: string;
     maxLength?: number;    // textarea character limit — passed to LLM to respect
+    categoryInstructions?: string;  // per-category style instructions from settings
     providers?: Array<{ name: string; apiKey: string; model?: string }>;
     // legacy single-provider fallback
     llmProvider?: string;
@@ -241,6 +242,7 @@ export const vaultApi = {
     fd.append("jd_text", params.jdText);
     fd.append("work_history_text", params.workHistoryText);
     if (params.maxLength) fd.append("max_length", String(params.maxLength));
+    if (params.categoryInstructions) fd.append("category_instructions", params.categoryInstructions);
     if (params.providers && params.providers.length > 0) {
       fd.append("providers_json", JSON.stringify(
         params.providers.map((p) => ({ name: p.name, api_key: p.apiKey, model: p.model ?? "" }))

@@ -353,13 +353,51 @@ async function deleteWorkHistoryEntry(entryId: string, el: HTMLElement) {
   }
 }
 
+// ── Prompt Templates ─────────────────────────────────────────────────────────
+
+const PROMPT_TEMPLATE_CATEGORIES = [
+  "custom",
+  "experience",
+  "motivation",
+  "behavioral",
+  "technical",
+  "salary",
+  "work_authorization",
+  "cover_letter",
+] as const;
+
+type PromptTemplates = Record<string, string>;
+
+async function loadPromptTemplates() {
+  const data = await chrome.storage.local.get("promptTemplates");
+  const templates = (data.promptTemplates as PromptTemplates | undefined) ?? {};
+  for (const cat of PROMPT_TEMPLATE_CATEGORIES) {
+    const el = document.getElementById(`pt-${cat}`) as HTMLTextAreaElement | null;
+    if (el && templates[cat]) el.value = templates[cat];
+  }
+}
+
+async function savePromptTemplates() {
+  const templates: PromptTemplates = {};
+  for (const cat of PROMPT_TEMPLATE_CATEGORIES) {
+    const el = document.getElementById(`pt-${cat}`) as HTMLTextAreaElement | null;
+    const val = el?.value.trim() ?? "";
+    if (val) templates[cat] = val;
+  }
+  await chrome.storage.local.set({ promptTemplates: templates });
+  const count = Object.keys(templates).length;
+  showStatus("prompts-status", `Saved — ${count} category instruction${count !== 1 ? "s" : ""} active.`, "ok");
+}
+
 // Module scripts are deferred — DOM is fully parsed when this runs.
 wireProviderAutoEnable();
 loadSettings();
 loadWorkHistory();
+loadPromptTemplates();
 get("save-auth").addEventListener("click", saveAuth);
 get("test-api").addEventListener("click", testApi);
 get("save-api").addEventListener("click", saveApi);
 get("save-llm").addEventListener("click", saveLlm);
 get("save-profile").addEventListener("click", saveProfile);
 get("wh-add-btn").addEventListener("click", addWorkHistoryEntry);
+get("save-prompts").addEventListener("click", savePromptTemplates);
