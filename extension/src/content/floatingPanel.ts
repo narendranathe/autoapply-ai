@@ -1387,13 +1387,39 @@ class FloatingPanel {
       });
     });
 
-    // Attach resume buttons
+    // Attach resume buttons — open a local file picker then transfer the file via blob URL
     this.shadow.querySelectorAll<HTMLButtonElement>(".attach-btn").forEach((btn) => {
       btn.addEventListener("click", () => {
         const idx = parseInt(btn.dataset.fieldIdx ?? "0", 10);
         const field = this.fields[idx];
         if (!field) return;
-        chrome.runtime.sendMessage({ type: "ATTACH_RESUME", payload: { fieldId: field.fieldId, pdfUrl: "" } });
+
+        // Create a hidden file input to open the OS file picker
+        const picker = document.createElement("input");
+        picker.type = "file";
+        picker.accept = ".pdf,.docx,.doc";
+        picker.style.display = "none";
+        document.body.appendChild(picker);
+
+        picker.addEventListener("change", () => {
+          const file = picker.files?.[0];
+          if (!file) { picker.remove(); return; }
+
+          // Create an object URL so detector.ts can fetch the bytes
+          const blobUrl = URL.createObjectURL(file);
+          chrome.runtime.sendMessage({
+            type: "ATTACH_RESUME",
+            payload: { fieldId: field.fieldId, pdfUrl: blobUrl },
+          });
+
+          // Revoke after a short delay
+          setTimeout(() => URL.revokeObjectURL(blobUrl), 30000);
+          picker.remove();
+          btn.textContent = "✓ Attached";
+          setTimeout(() => { btn.textContent = "Attach"; }, 3000);
+        });
+
+        picker.click();
       });
     });
 
