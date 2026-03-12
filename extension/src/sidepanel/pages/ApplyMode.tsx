@@ -123,6 +123,8 @@ export default function ApplyMode({ context }: Props) {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [appStats, setAppStats] = useState<{ total: number; by_status: Record<string, number>; unique_companies: number } | null>(null);
   const [updatingStatus, setUpdatingStatus] = useState<string | null>(null);
+  const [historySearch, setHistorySearch] = useState("");
+  const [historyStatusFilter, setHistoryStatusFilter] = useState<string>("all");
   // T3: interview prep
   const [interviewQuestions, setInterviewQuestions] = useState<InterviewQuestion[]>([]);
   const [interviewLoading, setInterviewLoading] = useState(false);
@@ -1054,19 +1056,73 @@ export default function ApplyMode({ context }: Props) {
               </div>
             )}
 
+            {/* Search + Filter bar */}
+            <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+              <input
+                type="text"
+                placeholder="Search company or role…"
+                value={historySearch}
+                onChange={(e) => setHistorySearch(e.target.value)}
+                style={{
+                  flex: 1,
+                  background: "#12121e",
+                  border: "1px solid #1f1f38",
+                  borderRadius: 6,
+                  color: "#e2e8f0",
+                  fontSize: 11,
+                  padding: "5px 8px",
+                  outline: "none",
+                }}
+              />
+              <select
+                value={historyStatusFilter}
+                onChange={(e) => setHistoryStatusFilter(e.target.value)}
+                style={{
+                  background: "#12121e",
+                  border: "1px solid #1f1f38",
+                  borderRadius: 6,
+                  color: "#9ca3af",
+                  fontSize: 11,
+                  padding: "5px 6px",
+                  outline: "none",
+                }}
+              >
+                <option value="all">All</option>
+                <option value="discovered">Discovered</option>
+                <option value="applied">Applied</option>
+                <option value="tailored">Tailored</option>
+                <option value="interview">Interview</option>
+                <option value="offer">Offer</option>
+                <option value="rejected">Rejected</option>
+              </select>
+            </div>
+
             <Section label="All Applications">
               {historyLoading && <LoadingRow />}
               {!historyLoading && allApplications.length === 0 && (
                 <EmptyState message="No applications tracked yet." hint="Applications are recorded automatically when you visit job pages." />
               )}
-              {allApplications.map((app) => (
-                <ApplicationRow
-                  key={app.id}
-                  app={app}
-                  updating={updatingStatus === app.id}
-                  onStatusChange={(s) => handleStatusUpdate(app.id, s)}
-                />
-              ))}
+              {(() => {
+                const q = historySearch.toLowerCase();
+                const filtered = allApplications.filter((app) => {
+                  const matchesSearch = !q ||
+                    app.company_name.toLowerCase().includes(q) ||
+                    app.role_title.toLowerCase().includes(q);
+                  const matchesStatus = historyStatusFilter === "all" || app.status === historyStatusFilter;
+                  return matchesSearch && matchesStatus;
+                });
+                if (!historyLoading && filtered.length === 0 && allApplications.length > 0) {
+                  return <EmptyState message="No matches." hint="Try adjusting the search or filter." />;
+                }
+                return filtered.map((app) => (
+                  <ApplicationRow
+                    key={app.id}
+                    app={app}
+                    updating={updatingStatus === app.id}
+                    onStatusChange={(s) => handleStatusUpdate(app.id, s)}
+                  />
+                ));
+              })()}
             </Section>
           </>
         )}
@@ -1249,9 +1305,19 @@ function ApplicationRow({
         <div style={{ fontSize: 10, color: "#64748b", marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {app.role_title}
         </div>
-        <div style={{ fontSize: 9, color: "#374151", marginTop: 2 }}>
-          {new Date(app.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
-          {app.platform && app.platform !== "generic" && ` · ${app.platform}`}
+        <div style={{ fontSize: 9, color: "#374151", marginTop: 2, display: "flex", alignItems: "center", gap: 6 }}>
+          <span>{new Date(app.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span>
+          {app.platform && app.platform !== "generic" && <span>· {app.platform}</span>}
+          {app.job_url && (
+            <a
+              href={app.job_url}
+              target="_blank"
+              rel="noreferrer"
+              title="Open job posting"
+              style={{ color: "#4f46e5", textDecoration: "none", fontSize: 10, lineHeight: 1 }}
+              onClick={(e) => { e.stopPropagation(); chrome.tabs.create({ url: app.job_url! }); e.preventDefault(); }}
+            >↗</a>
+          )}
         </div>
       </div>
       <div style={{ position: "relative", flexShrink: 0 }}>
