@@ -9,6 +9,7 @@ import type { DetectedField, DetectedQuestion, FieldType, QuestionCategory } fro
 import { initAshbyApply } from "./ashbyApply";
 import { initIndeedApply } from "./indeedApply";
 import { initLinkedInEasyApply } from "./linkedinEasyApply";
+import { initSmartRecruitersApply } from "./smartRecruitersApply";
 import { initWorkdayApply } from "./workdayApply";
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -1506,11 +1507,12 @@ function bootstrap() {
   if (document.getElementById("__autoapply_host__")) return;
   panelInstance = new FloatingPanel();
   void panelInstance.init();
-  // P2: LinkedIn Easy Apply + Indeed Apply + Workday + Ashby modal auto-fill
+  // P2: LinkedIn Easy Apply + Indeed Apply + Workday + Ashby + SmartRecruiters modal auto-fill
   initLinkedInEasyApply();
   initIndeedApply();
   initWorkdayApply();
   initAshbyApply();
+  initSmartRecruitersApply();
 }
 
 // Run after DOM is ready

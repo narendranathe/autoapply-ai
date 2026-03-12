@@ -348,6 +348,30 @@ export default function ApplyMode({ context }: Props) {
     }
   };
 
+  // Quick "Mark as Applied" from context bar
+  const [markingApplied, setMarkingApplied] = useState(false);
+  const [appliedMarked, setAppliedMarked] = useState(false);
+  const handleMarkApplied = async () => {
+    if (!context.company) return;
+    setMarkingApplied(true);
+    try {
+      const result = await applicationsApi.track({
+        companyName: context.company,
+        roleTitle: context.roleTitle,
+        jobUrl: context.jobUrl,
+        platform: context.platform,
+      });
+      await applicationsApi.updateStatus(result.application_id, "applied");
+      setAppliedMarked(true);
+      setTrackedAppId(result.application_id);
+      setTimeout(() => setAppliedMarked(false), 3000);
+    } catch {
+      // ignore
+    } finally {
+      setMarkingApplied(false);
+    }
+  };
+
   const handleInterviewPrep = async () => {
     if (!context.company) return;
     setInterviewLoading(true);
@@ -578,6 +602,27 @@ export default function ApplyMode({ context }: Props) {
             {context.roleTitle}
           </div>
         </div>
+        {/* Quick "Mark as Applied" button */}
+        <button
+          onClick={handleMarkApplied}
+          disabled={markingApplied || appliedMarked}
+          title="Mark this job as Applied in your tracker"
+          style={{
+            flexShrink: 0,
+            background: appliedMarked ? "#166534" : "#0a1628",
+            color: appliedMarked ? "#86efac" : "#60a5fa",
+            border: `1px solid ${appliedMarked ? "#166534" : "#1e3a5f"}`,
+            borderRadius: 8,
+            padding: "4px 8px",
+            fontSize: 10,
+            fontWeight: 700,
+            cursor: markingApplied ? "wait" : "pointer",
+            transition: "all .2s",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {appliedMarked ? "✓ Applied" : markingApplied ? "…" : "✓ Mark Applied"}
+        </button>
         {ats && (
           <div style={{
             flexShrink: 0,
