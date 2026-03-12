@@ -34,6 +34,8 @@ export default defineConfig({
         "content/detector": resolve(__dirname, "src/content/detector.ts"),
         // Content script — in-page floating panel for form fill + Q&A (job pages only)
         "content/floatingPanel": resolve(__dirname, "src/content/floatingPanel.ts"),
+        // Content script — Gmail email-status tracker (mail.google.com only)
+        "content/gmailContent": resolve(__dirname, "src/content/gmailContent.ts"),
         // Side panel React app
         "sidepanel/index": resolve(__dirname, "src/sidepanel/index.html"),
         // Options / settings page
