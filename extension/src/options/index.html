@@ -361,6 +361,19 @@
           <div id="wh-add-status" class="status"></div>
         </div>
 
+        <!-- Import from Resume -->
+        <div style="border:1px dashed #2d2d52;border-radius:8px;padding:14px;margin-bottom:16px;background:#0f0f1a;">
+          <div style="font-size:12px;font-weight:700;color:#a78bfa;margin-bottom:8px;">⚡ Import from Resume</div>
+          <p class="hint" style="margin-bottom:10px">Upload a PDF or DOCX — the AI will extract all your work history entries automatically. Existing entries are never overwritten.</p>
+          <input type="file" id="wh-import-file" accept=".pdf,.docx,.txt" style="display:none" />
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <button class="btn" id="wh-import-pick-btn" style="background:#1e1e3a;color:#c4b5fd;border:1px solid #3730a3;font-size:12px;padding:7px 14px;">Choose File</button>
+            <span id="wh-import-filename" style="font-size:12px;color:#6b7280;">No file chosen</span>
+            <button class="btn btn-primary" id="wh-import-btn" style="font-size:12px;padding:7px 14px;" disabled>Import</button>
+          </div>
+          <div id="wh-import-status" class="status" style="margin-top:8px;"></div>
+        </div>
+
         <!-- Entries list -->
         <div id="wh-list" style="display:flex;flex-direction:column;gap:8px;">
           <div style="font-size:12px;color:#4b5563;" id="wh-empty">Loading…</div>

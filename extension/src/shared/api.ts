@@ -508,4 +508,18 @@ export const workHistoryApi = {
       headers: authHeaders(),
     });
   },
+
+  importFromResume(
+    file: File,
+    providers?: Array<{ name: string; apiKey: string; model?: string }>
+  ): Promise<{ created: number; skipped: number; total_extracted: number; provider_used: string }> {
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    if (providers?.length) {
+      fd.append("providers_json", JSON.stringify(
+        providers.map((p) => ({ name: p.name, api_key: p.apiKey, model: p.model ?? "" }))
+      ));
+    }
+    return post("/work-history/import-from-resume", fd);
+  },
 };

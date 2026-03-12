@@ -423,12 +423,81 @@ async function saveModelRoutes() {
   showStatus("mr-status", count > 0 ? `Saved — ${count} custom route${count !== 1 ? "s" : ""} set.` : "Saved — using default priority order for all categories.", "ok");
 }
 
+// ── Import from Resume ────────────────────────────────────────────────────────
+
+let _importFile: File | null = null;
+
+function wireImportFromResume() {
+  const pickBtn = get("wh-import-pick-btn");
+  const fileInput = document.getElementById("wh-import-file") as HTMLInputElement;
+  const importBtn = document.getElementById("wh-import-btn") as HTMLButtonElement;
+  const filenameEl = get("wh-import-filename");
+
+  pickBtn.addEventListener("click", () => fileInput.click());
+
+  fileInput.addEventListener("change", () => {
+    const f = fileInput.files?.[0] ?? null;
+    _importFile = f;
+    if (f) {
+      filenameEl.textContent = f.name;
+      importBtn.disabled = false;
+    } else {
+      filenameEl.textContent = "No file chosen";
+      importBtn.disabled = true;
+    }
+  });
+
+  importBtn.addEventListener("click", importFromResume);
+}
+
+async function importFromResume() {
+  if (!_importFile) return;
+
+  const { clerkUserId } = await chrome.storage.local.get("clerkUserId");
+  if (!clerkUserId) {
+    showStatus("wh-import-status", "Save your User ID in Authentication first.", "err");
+    return;
+  }
+
+  const importBtn = document.getElementById("wh-import-btn") as HTMLButtonElement;
+  importBtn.disabled = true;
+  showStatus("wh-import-status", "Parsing resume…", "info");
+
+  try {
+    // Read enabled providers from storage for LLM extraction
+    const data = await chrome.storage.local.get("providerConfigs");
+    const configs = (data.providerConfigs as Record<string, { enabled: boolean; apiKey: string; model: string }> | undefined) ?? {};
+    const providers = Object.entries(configs)
+      .filter(([, cfg]) => cfg.enabled && cfg.apiKey)
+      .map(([name, cfg]) => ({ name, apiKey: cfg.apiKey, model: cfg.model }));
+
+    const result = await workHistoryApi.importFromResume(_importFile, providers);
+
+    if (result.created === 0 && result.skipped > 0) {
+      showStatus("wh-import-status", `All ${result.skipped} extracted entries already exist — nothing new added.`, "info");
+    } else {
+      showStatus(
+        "wh-import-status",
+        `Imported ${result.created} entr${result.created !== 1 ? "ies" : "y"} from ${result.total_extracted} detected (${result.skipped} already existed). Powered by ${result.provider_used}.`,
+        "ok"
+      );
+    }
+
+    loadWorkHistory();
+  } catch (e) {
+    showStatus("wh-import-status", `Import failed: ${e instanceof Error ? e.message : "unknown error"}`, "err");
+  } finally {
+    importBtn.disabled = false;
+  }
+}
+
 // Module scripts are deferred — DOM is fully parsed when this runs.
 wireProviderAutoEnable();
 loadSettings();
 loadWorkHistory();
 loadPromptTemplates();
 loadModelRoutes();
+wireImportFromResume();
 get("save-auth").addEventListener("click", saveAuth);
 get("test-api").addEventListener("click", testApi);
 get("save-api").addEventListener("click", saveApi);
