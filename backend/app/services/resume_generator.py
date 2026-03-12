@@ -671,6 +671,7 @@ async def generate_answer_drafts_cascade(
     providers: list[dict],  # [{"name": "groq", "api_key": "...", "model": "..."}], priority-ordered
     past_accepted_answers: list[str] | None = None,
     candidate_name: str = "",
+    max_length: int | None = None,
 ) -> tuple[list[str], str]:
     """
     Try providers in priority order. Use the first working one to generate 3 drafts.
@@ -717,6 +718,14 @@ Do NOT copy verbatim — generate fresh content grounded in work history.
             else "CANDIDATE WORK HISTORY: Not provided — write compelling, honest general answers about professional growth, teamwork, and problem-solving that any experienced engineer could claim."
         )
 
+        # Build length constraint instruction based on textarea maxlength
+        if max_length and max_length > 0:
+            # Convert char limit to approximate word limit (avg 5 chars/word)
+            max_words = max(50, (max_length // 5) - 20)  # leave headroom for safety
+            length_instruction = f"CRITICAL: The application field has a {max_length}-character limit. Keep each answer under {max_words} words."
+        else:
+            length_instruction = "Target 150-220 words per answer."
+
         user_prompt = f"""QUESTION: {question_text}
 CATEGORY: {question_category}
 COMPANY: {company_name}
@@ -731,16 +740,17 @@ ANSWERING FRAMEWORK FOR THIS CATEGORY:
 {framework_snippet}
 {memory_block}
 Generate exactly 3 different draft answers. Each answer must use a DIFFERENT angle or emphasis.
+{length_instruction}
 
 Respond in EXACTLY this format — no other text:
 DRAFT_1:
-[answer text here — 150-220 words]
+[answer text here]
 
 DRAFT_2:
-[answer text here — 150-220 words, different angle from Draft 1]
+[answer text here, different angle from Draft 1]
 
 DRAFT_3:
-[answer text here — 150-220 words, different angle from Drafts 1 and 2]
+[answer text here, different angle from Drafts 1 and 2]
 """
 
     for p in sorted_providers:

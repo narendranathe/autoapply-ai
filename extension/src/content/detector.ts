@@ -243,6 +243,66 @@ function detectApplyButton(): boolean {
 
 // ── Main detection orchestrator ────────────────────────────────────────────
 
+// ── JD text extraction ─────────────────────────────────────────────────────
+// Scrapes the visible job description text from the page.
+// Used to ground LLM answer generation in the actual JD — improves relevance.
+
+function extractJdText(): string {
+  // Priority selectors: platform-specific containers first, then generic fallbacks
+  const JD_SELECTORS = [
+    // Greenhouse
+    "[data-testid='job-description']",
+    ".job-post__body",
+    ".job-description",
+    // Lever
+    ".content[data-qa='job-description']",
+    ".posting-description",
+    // Workday
+    "[data-automation-id='jobPostingDescription']",
+    // Ashby
+    "[class*='JobPosting-jobDescription']",
+    "[class*='job-description']",
+    // SmartRecruiters
+    ".job-description",
+    // LinkedIn (job details page, not listings)
+    ".jobs-description__content",
+    ".jobs-description-content__text",
+    // Indeed
+    "#jobDescriptionText",
+    "[data-testid='jobsearch-JobComponent-description']",
+    // Generic high-signal selectors
+    "article.job",
+    "[class*='JobDescription']",
+    "[class*='description-body']",
+    "[id*='job-description']",
+    "[id*='jobDescription']",
+    "main article",
+  ];
+
+  for (const selector of JD_SELECTORS) {
+    const el = document.querySelector(selector);
+    if (el) {
+      const text = el.textContent?.trim() ?? "";
+      if (text.length > 200) return text.slice(0, 5000); // cap at 5K chars
+    }
+  }
+
+  // Last resort: grab the largest block of text on the page that looks like a JD
+  // (contains job-related keywords and is at least 300 chars)
+  const candidates = Array.from(document.querySelectorAll("div, section, article"))
+    .filter((el) => {
+      const t = el.textContent ?? "";
+      return (
+        t.length >= 300 &&
+        t.length <= 10000 &&
+        /\b(responsibilities|requirements|qualifications|experience|skills|about the role|what you.ll do|we are looking for)\b/i.test(t)
+      );
+    })
+    .sort((a, b) => (b.textContent?.length ?? 0) - (a.textContent?.length ?? 0));
+
+  return (candidates[0]?.textContent?.trim() ?? "").slice(0, 5000);
+}
+
 function buildAndSendContext() {
   const url = window.location.href;
   const title = document.title;
@@ -262,6 +322,7 @@ function buildAndSendContext() {
 
   const fields = mode === "apply" ? detectFields() : [];
   const questions = mode === "apply" ? detectQuestions() : [];
+  const jdText = mode === "apply" ? extractJdText() : "";
 
   // Extract company from URL / title
   let company = "";
@@ -276,6 +337,7 @@ function buildAndSendContext() {
     platform: detectPlatform(url),
     detectedFields: fields,
     openQuestions: questions,
+    jdText,
   };
 
   chrome.runtime.sendMessage<Message>({ type: "PAGE_CONTEXT_UPDATE", payload: context });

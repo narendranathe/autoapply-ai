@@ -163,7 +163,7 @@ export default function ApplyMode({ context }: Props) {
     if (!context.company) return;
     setLoading(true);
     vaultApi
-      .retrieve(context.company)
+      .retrieve(context.company, context.jdText)
       .then((res: RetrieveResponse) => {
         setResumes(res.company_history ?? []);
         if (res.ats_result) setAts(res.ats_result);
@@ -286,7 +286,7 @@ export default function ApplyMode({ context }: Props) {
     chrome.runtime.sendMessage({ type: "FILL_FIELD", payload: { fieldId, value } });
   };
 
-  const handleGenerateAnswers = async (questionId: string, questionText: string, category: string, isRegenerate = false) => {
+  const handleGenerateAnswers = async (questionId: string, questionText: string, category: string, isRegenerate = false, maxLength?: number) => {
     // Read providers directly from storage — never relies on potentially-stale React state
     const freshProviders = await getFreshProviders();
     if (freshProviders.length === 0) {
@@ -309,8 +309,9 @@ export default function ApplyMode({ context }: Props) {
         questionCategory: category,
         companyName: context.company,
         roleTitle: context.roleTitle,
-        jdText: "",
+        jdText: context.jdText ?? "",
         workHistoryText,
+        maxLength,
         providers: freshProviders,
       });
       if (!res.drafts?.length) {
@@ -415,8 +416,9 @@ export default function ApplyMode({ context }: Props) {
           questionCategory: q.category,
           companyName: context.company,
           roleTitle: context.roleTitle,
-          jdText: "",
+          jdText: context.jdText ?? "",
           workHistoryText: currentWorkHistory,
+          maxLength: q.maxLength,
           providers: freshProviders,
         }).then((res) => {
           if (!res.drafts?.length) {
@@ -808,7 +810,7 @@ export default function ApplyMode({ context }: Props) {
                     {!drafts?.length ? (
                       <>
                         <button
-                          onClick={() => handleGenerateAnswers(q.questionId, q.questionText, q.category)}
+                          onClick={() => handleGenerateAnswers(q.questionId, q.questionText, q.category, false, q.maxLength)}
                           disabled={isGenerating}
                           style={btnStyle("generate", isGenerating)}
                         >
@@ -885,7 +887,7 @@ export default function ApplyMode({ context }: Props) {
                         )}
                         <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
                           <button
-                            onClick={() => handleGenerateAnswers(q.questionId, q.questionText, q.category, true)}
+                            onClick={() => handleGenerateAnswers(q.questionId, q.questionText, q.category, true, q.maxLength)}
                             disabled={isGenerating}
                             style={btnStyle("ghost", isGenerating)}
                           >

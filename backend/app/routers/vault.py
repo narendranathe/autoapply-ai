@@ -414,6 +414,7 @@ async def generate_answers(
     llm_api_key: str | None = Form(None),
     ollama_model: str = Form("llama3.1:8b"),
     providers_json: str = Form(""),  # JSON: [{"name":"groq","api_key":"...","model":"..."}]
+    max_length: int = Form(0),  # textarea maxlength — 0 means no limit
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -472,6 +473,7 @@ async def generate_answers(
             providers=providers_list,
             past_accepted_answers=past_texts or None,
             candidate_name=candidate_name,
+            max_length=max_length if max_length > 0 else None,
         )
     else:
         drafts = await generate_answer_drafts(

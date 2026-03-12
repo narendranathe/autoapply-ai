@@ -11,6 +11,7 @@ export interface PageContext {
   platform: string; // linkedin | greenhouse | lever | workday | indeed | glassdoor | generic
   detectedFields: DetectedField[];
   openQuestions: DetectedQuestion[];
+  jdText?: string;   // extracted job description text — used to ground LLM answers
 }
 
 export interface DetectedField {
