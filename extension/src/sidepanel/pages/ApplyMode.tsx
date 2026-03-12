@@ -1,12 +1,12 @@
 import React, { useEffect, useRef, useState } from "react";
 import type { ATSScoreResult, PageContext, ResumeCard } from "../../shared/types";
-import { applicationsApi, vaultApi, workHistoryApi, type RetrieveResponse, type SimilarAnswer, type TrackedApplication } from "../../shared/api";
+import { applicationsApi, vaultApi, workHistoryApi, type GenerateTailoredResponse, type RetrieveResponse, type SimilarAnswer, type TrackedApplication } from "../../shared/api";
 import ATSScoreBar from "../components/ATSScoreBar";
 import ResumeCardComponent from "../components/ResumeCard";
 
 interface Props { context: PageContext }
 
-type Tab = "resumes" | "fields" | "questions";
+type Tab = "resumes" | "fields" | "questions" | "history";
 
 function scoreColor(s: number): string {
   if (s >= 80) return "#10b981";
@@ -112,6 +112,15 @@ export default function ApplyMode({ context }: Props) {
   // C5/C6: application tracking
   const [trackedAppId, setTrackedAppId] = useState<string | null>(null);
   const [pastApplications, setPastApplications] = useState<TrackedApplication[]>([]);
+  // L6: resume tailoring
+  const [tailoringResumeId, setTailoringResumeId] = useState<string | null>(null);
+  const [tailorResults, setTailorResults] = useState<Record<string, GenerateTailoredResponse>>({});
+  const [tailorErrors, setTailorErrors] = useState<Record<string, string>>({});
+  // T1: application history (all apps)
+  const [allApplications, setAllApplications] = useState<TrackedApplication[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [appStats, setAppStats] = useState<{ total: number; by_status: Record<string, number>; unique_companies: number } | null>(null);
+  const [updatingStatus, setUpdatingStatus] = useState<string | null>(null);
 
   const PROVIDER_RANK: Record<string, number> = { anthropic: 1, openai: 2, gemini: 3, groq: 4, perplexity: 5, kimi: 6 };
   const PROVIDER_MODELS: Record<string, string> = { anthropic: "claude-sonnet-4-6", openai: "gpt-4o", gemini: "gemini-1.5-flash", groq: "llama-3.3-70b-versatile", perplexity: "sonar", kimi: "moonshot-v1-32k" };
@@ -203,6 +212,19 @@ export default function ApplyMode({ context }: Props) {
       .catch(() => {});
   }, [context.company]);
 
+  // T1: Fetch all applications when History tab is activated
+  useEffect(() => {
+    if (tab !== "history") return;
+    setHistoryLoading(true);
+    Promise.all([
+      applicationsApi.list(),
+      applicationsApi.getStats(),
+    ]).then(([listRes, statsRes]) => {
+      setAllApplications(listRes.items);
+      setAppStats(statsRes);
+    }).catch(() => {}).finally(() => setHistoryLoading(false));
+  }, [tab]);
+
   // Fetch "From Memory" similar answers whenever questions change
   useEffect(() => {
     if (context.openQuestions.length === 0) return;
@@ -265,6 +287,53 @@ export default function ApplyMode({ context }: Props) {
       setResumes((prev) => prev.filter((r) => r.resumeId !== resumeId));
     } catch {
       // Silently fail — resume still shows
+    }
+  };
+
+  // L6: Generate a tailored resume from a vault resume + current JD
+  const handleTailorResume = async (resumeId: string) => {
+    if (!context.jdText) {
+      setTailorErrors((prev) => ({ ...prev, [resumeId]: "No job description detected. Navigate to the job posting page first." }));
+      return;
+    }
+    const freshProviders = await getFreshProviders();
+    if (freshProviders.length === 0) {
+      setTailorErrors((prev) => ({ ...prev, [resumeId]: "No API key found. Open Settings and add a Groq or Gemini key." }));
+      return;
+    }
+    setTailoringResumeId(resumeId);
+    setTailorErrors((prev) => { const n = { ...prev }; delete n[resumeId]; return n; });
+    try {
+      const result = await vaultApi.generateTailored({
+        baseResumeId: resumeId,
+        jdText: context.jdText,
+        companyName: context.company,
+        roleTitle: context.roleTitle,
+        providers: freshProviders,
+      });
+      setTailorResults((prev) => ({ ...prev, [resumeId]: result }));
+      // Refresh resume list to show newly generated resume
+      vaultApi.retrieve(context.company, context.jdText).then((res) => {
+        setResumes(res.company_history ?? []);
+        if (res.ats_result) setAts(res.ats_result);
+      }).catch(() => {});
+    } catch (err) {
+      setTailorErrors((prev) => ({ ...prev, [resumeId]: err instanceof Error ? err.message : "Tailoring failed" }));
+    } finally {
+      setTailoringResumeId(null);
+    }
+  };
+
+  // T1: Update application status from History tab
+  const handleStatusUpdate = async (appId: string, newStatus: string) => {
+    setUpdatingStatus(appId);
+    try {
+      await applicationsApi.updateStatus(appId, newStatus);
+      setAllApplications((prev) => prev.map((a) => a.id === appId ? { ...a, status: newStatus } : a));
+    } catch {
+      // silently fail — status badge will show stale value
+    } finally {
+      setUpdatingStatus(null);
     }
   };
 
@@ -449,6 +518,7 @@ export default function ApplyMode({ context }: Props) {
     { key: "resumes", label: "Resumes", count: resumes.length },
     { key: "fields", label: "Fields", count: context.detectedFields.length },
     { key: "questions", label: "Q&A", count: context.openQuestions.length },
+    { key: "history", label: "History", count: allApplications.length },
   ];
 
   return (
@@ -647,7 +717,29 @@ export default function ApplyMode({ context }: Props) {
                 <EmptyState message="No past resumes for this company yet." hint="Upload one above or generate a tailored resume." />
               )}
               {resumes.map((r) => (
-                <ResumeCardComponent key={r.resumeId} resume={r} onAttach={() => handleAttach(r)} />
+                <div key={r.resumeId}>
+                  <ResumeCardComponent resume={r} onAttach={() => handleAttach(r)} />
+                  {/* L6: Tailor for this job button */}
+                  {context.jdText && (
+                    <div style={{ marginTop: 4, marginBottom: 8 }}>
+                      <button
+                        onClick={() => handleTailorResume(r.resumeId)}
+                        disabled={tailoringResumeId === r.resumeId}
+                        style={{ ...btnStyle("generate", tailoringResumeId === r.resumeId), fontSize: 10, padding: "4px 10px", width: "auto" }}
+                      >
+                        {tailoringResumeId === r.resumeId ? "Tailoring…" : "✦ Tailor for this Job"}
+                      </button>
+                      {tailorErrors[r.resumeId] && (
+                        <div style={{ fontSize: 10, color: "#f87171", marginTop: 3, padding: "3px 6px", background: "#1a0808", borderRadius: 5, border: "1px solid #7f1d1d" }}>
+                          {tailorErrors[r.resumeId]}
+                        </div>
+                      )}
+                      {tailorResults[r.resumeId] && (
+                        <TailoredResumeResult result={tailorResults[r.resumeId]} />
+                      )}
+                    </div>
+                  )}
+                </div>
               ))}
             </Section>
           </>
@@ -909,6 +1001,43 @@ export default function ApplyMode({ context }: Props) {
             )}
           </Section>
         )}
+        {/* HISTORY TAB */}
+        {tab === "history" && (
+          <>
+            {/* Stats row */}
+            {appStats && (
+              <div style={{ display: "flex", gap: 8, marginBottom: 2 }}>
+                {[
+                  { label: "Total", value: appStats.total },
+                  { label: "Companies", value: appStats.unique_companies },
+                  { label: "Interviews", value: appStats.by_status?.interview ?? 0 },
+                  { label: "Offers", value: appStats.by_status?.offer ?? 0 },
+                ].map(({ label, value }) => (
+                  <div key={label} style={{ flex: 1, textAlign: "center", background: "#12121e", border: "1px solid #1f1f38", borderRadius: 8, padding: "6px 4px" }}>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: "#c4b5fd" }}>{value}</div>
+                    <div style={{ fontSize: 9, color: "#475569", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>{label}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <Section label="All Applications">
+              {historyLoading && <LoadingRow />}
+              {!historyLoading && allApplications.length === 0 && (
+                <EmptyState message="No applications tracked yet." hint="Applications are recorded automatically when you visit job pages." />
+              )}
+              {allApplications.map((app) => (
+                <ApplicationRow
+                  key={app.id}
+                  app={app}
+                  updating={updatingStatus === app.id}
+                  onStatusChange={(s) => handleStatusUpdate(app.id, s)}
+                />
+              ))}
+            </Section>
+          </>
+        )}
+
       </div>
     </div>
   );
@@ -961,6 +1090,147 @@ function LoadingRow() {
           animation: "pulse 1.5s ease infinite",
         }} />
       ))}
+    </div>
+  );
+}
+
+function TailoredResumeResult({ result }: { result: GenerateTailoredResponse }) {
+  const [expanded, setExpanded] = React.useState(false);
+  const scoreBefore = result.ats_score_before;
+  const scoreAfter = result.ats_score_estimate;
+  const improved = scoreAfter != null && scoreBefore != null && scoreAfter > scoreBefore;
+
+  return (
+    <div style={{ background: "#071a12", border: "1px solid #064e3b", borderRadius: 8, padding: "8px 10px", marginTop: 4, display: "flex", flexDirection: "column", gap: 6 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span style={{ fontSize: 11, color: "#34d399", fontWeight: 700 }}>
+          ✓ Tailored · {result.version_tag}
+        </span>
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          {scoreBefore != null && scoreAfter != null && (
+            <span style={{ fontSize: 10, color: improved ? "#6ee7b7" : "#94a3b8", fontWeight: 600 }}>
+              ATS: {scoreBefore.toFixed(0)} → {scoreAfter.toFixed(0)} {improved ? "↑" : ""}
+            </span>
+          )}
+          <button onClick={() => setExpanded((v) => !v)} style={{ ...btnStyle("ghost"), fontSize: 10, padding: "2px 8px" }}>
+            {expanded ? "Hide" : "Preview"}
+          </button>
+        </div>
+      </div>
+      {result.changes_summary && (
+        <div style={{ fontSize: 10, color: "#64748b", lineHeight: 1.5 }}>{result.changes_summary.slice(0, 150)}{result.changes_summary.length > 150 ? "…" : ""}</div>
+      )}
+      {result.skills_gap.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
+          {result.skills_gap.slice(0, 5).map((s) => (
+            <span key={s} style={{ fontSize: 9, background: "#2d1b4e", color: "#c4b5fd", borderRadius: 99, padding: "1px 7px", border: "1px solid #3d2560" }}>{s}</span>
+          ))}
+        </div>
+      )}
+      {expanded && result.markdown_preview && (
+        <div style={{ fontSize: 10, color: "#94a3b8", lineHeight: 1.6, maxHeight: 200, overflowY: "auto", whiteSpace: "pre-wrap", background: "#0a0a14", borderRadius: 6, padding: "8px", fontFamily: "monospace", border: "1px solid #1a1a2e" }}>
+          {result.markdown_preview}
+        </div>
+      )}
+      {result.warnings.length > 0 && (
+        <div style={{ fontSize: 9, color: "#f59e0b", lineHeight: 1.4 }}>{result.warnings[0]}</div>
+      )}
+    </div>
+  );
+}
+
+const STATUS_ORDER = ["discovered", "applied", "tailored", "interview", "offer", "rejected"];
+const STATUS_COLORS: Record<string, { bg: string; text: string; border: string }> = {
+  discovered: { bg: "#12121e", text: "#475569", border: "#1f1f38" },
+  applied:    { bg: "#0a1628", text: "#60a5fa", border: "#1e3a5f" },
+  tailored:   { bg: "#0d1a2e", text: "#818cf8", border: "#1e2d55" },
+  interview:  { bg: "#071a12", text: "#34d399", border: "#064e3b" },
+  offer:      { bg: "#0e1a04", text: "#86efac", border: "#166534" },
+  rejected:   { bg: "#1a0808", text: "#f87171", border: "#7f1d1d" },
+};
+
+function ApplicationRow({
+  app,
+  updating,
+  onStatusChange,
+}: {
+  app: TrackedApplication;
+  updating: boolean;
+  onStatusChange: (s: string) => void;
+}) {
+  const [showMenu, setShowMenu] = React.useState(false);
+  const colors = STATUS_COLORS[app.status] ?? STATUS_COLORS.discovered;
+
+  return (
+    <div style={{ background: "#12121e", border: "1px solid #1f1f38", borderRadius: 8, padding: "8px 10px", display: "flex", gap: 8, alignItems: "flex-start" }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 12, color: "#e2e8f0", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {app.company_name}
+        </div>
+        <div style={{ fontSize: 10, color: "#64748b", marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {app.role_title}
+        </div>
+        <div style={{ fontSize: 9, color: "#374151", marginTop: 2 }}>
+          {new Date(app.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+          {app.platform && app.platform !== "generic" && ` · ${app.platform}`}
+        </div>
+      </div>
+      <div style={{ position: "relative", flexShrink: 0 }}>
+        <button
+          onClick={() => setShowMenu((v) => !v)}
+          disabled={updating}
+          style={{
+            fontSize: 10,
+            fontWeight: 700,
+            background: colors.bg,
+            color: colors.text,
+            border: `1px solid ${colors.border}`,
+            borderRadius: 99,
+            padding: "2px 8px",
+            cursor: updating ? "wait" : "pointer",
+            opacity: updating ? 0.6 : 1,
+          }}
+        >
+          {updating ? "…" : app.status}
+        </button>
+        {showMenu && (
+          <div style={{
+            position: "absolute",
+            right: 0,
+            top: "calc(100% + 4px)",
+            background: "#12121e",
+            border: "1px solid #1f1f38",
+            borderRadius: 8,
+            zIndex: 100,
+            display: "flex",
+            flexDirection: "column",
+            minWidth: 120,
+            boxShadow: "0 4px 20px #000a",
+          }}>
+            {STATUS_ORDER.filter((s) => s !== app.status).map((s) => {
+              const c = STATUS_COLORS[s] ?? STATUS_COLORS.discovered;
+              return (
+                <button
+                  key={s}
+                  onClick={() => { setShowMenu(false); onStatusChange(s); }}
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    cursor: "pointer",
+                    padding: "6px 12px",
+                    fontSize: 11,
+                    color: c.text,
+                    textAlign: "left",
+                    fontWeight: 600,
+                  }}
+                >
+                  {s}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

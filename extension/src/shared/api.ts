@@ -99,6 +99,20 @@ async function patch<T>(path: string, body: FormData): Promise<T> {
   return resp.json() as Promise<T>;
 }
 
+async function patchJson<T>(path: string, body: Record<string, unknown>): Promise<T> {
+  await ensureInit();
+  const resp = await fetch(`${getApiBase()}${path}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) {
+    const err = await resp.text();
+    throw new Error(`API PATCH ${path} failed (${resp.status}): ${err}`);
+  }
+  return resp.json() as Promise<T>;
+}
+
 // ── Response types ─────────────────────────────────────────────────────────
 
 export interface RetrieveResponse {
@@ -166,6 +180,18 @@ export interface GenerateResumeResponse {
   latex_content: string;
   markdown_preview: string;
   ats_score_estimate: number | null;
+  skills_gap: string[];
+  changes_summary: string;
+  llm_provider_used: string;
+  warnings: string[];
+}
+
+export interface GenerateTailoredResponse {
+  resume_id: string;
+  version_tag: string;
+  markdown_preview: string;
+  ats_score_estimate: number | null;
+  ats_score_before: number | null;
   skills_gap: string[];
   changes_summary: string;
   llm_provider_used: string;
@@ -318,6 +344,27 @@ export const vaultApi = {
       }).then(() => undefined)
     );
   },
+
+  /** Generate a tailored resume from an existing vault resume + JD context */
+  generateTailored(params: {
+    baseResumeId: string;
+    jdText: string;
+    companyName: string;
+    roleTitle?: string;
+    providers?: Array<{ name: string; apiKey: string; model?: string }>;
+  }): Promise<GenerateTailoredResponse> {
+    const fd = new FormData();
+    fd.append("base_resume_id", params.baseResumeId);
+    fd.append("jd_text", params.jdText);
+    fd.append("company_name", params.companyName);
+    if (params.roleTitle) fd.append("role_title", params.roleTitle);
+    if (params.providers?.length) {
+      fd.append("providers_json", JSON.stringify(
+        params.providers.map((p) => ({ name: p.name, api_key: p.apiKey, model: p.model ?? "" }))
+      ));
+    }
+    return post("/vault/generate/tailored", fd);
+  },
 };
 
 // ── Application Tracking API ────────────────────────────────────────────────
@@ -360,8 +407,13 @@ export const applicationsApi = {
   },
 
   /** Update status of an application */
-  updateStatus(applicationId: string, status: string): Promise<void> {
-    return post(`/applications/${applicationId}`, { status } as Record<string, unknown>);
+  updateStatus(applicationId: string, status: string): Promise<{ id: string; status: string }> {
+    return patchJson(`/applications/${applicationId}`, { status });
+  },
+
+  /** Get application statistics */
+  getStats(): Promise<{ total: number; by_status: Record<string, number>; unique_companies: number }> {
+    return get("/applications/stats");
   },
 };
 

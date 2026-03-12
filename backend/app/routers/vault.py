@@ -399,6 +399,138 @@ async def generate_resume(
     }
 
 
+# ── Generate tailored resume (simplified — no personal profile needed) ─────
+
+
+@router.post("/generate/tailored")
+async def generate_tailored_resume(
+    base_resume_id: str = Form(...),
+    jd_text: str = Form(...),
+    company_name: str = Form(...),
+    role_title: str = Form(""),
+    providers_json: str = Form(""),  # JSON: [{"name":"groq","api_key":"...","model":"..."}]
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Generate a tailored resume from a stored base resume.
+
+    Simpler than /generate — caller does not need to provide personal profile fields.
+    Uses the stored resume text + user's DB work history as the grounding context.
+
+    Returns: markdown_preview, ats_score_before/after, skills_gap, changes_summary.
+    Contact info (name/phone/email) appears as placeholders — user fills those in manually.
+    """
+    # Load the base resume
+    res = await db.execute(
+        select(Resume).where(
+            Resume.id == uuid.UUID(base_resume_id),
+            Resume.user_id == user.id,
+        )
+    )
+    base_resume = res.scalar_one_or_none()
+    if not base_resume:
+        raise HTTPException(status_code=404, detail="Base resume not found in vault")
+
+    # Auto-load structured work history from DB for richer grounding
+    wh_stmt = (
+        select(WorkHistoryEntry)
+        .where(WorkHistoryEntry.user_id == user.id)
+        .order_by(WorkHistoryEntry.sort_order, WorkHistoryEntry.created_at.desc())
+    )
+    wh_result = await db.execute(wh_stmt)
+    wh_entries = list(wh_result.scalars().all())
+    work_history_text = (
+        "\n\n".join(e.to_text_block() for e in wh_entries)
+        if wh_entries
+        else (base_resume.raw_text or "")
+    )
+
+    # ATS score baseline (before tailoring)
+    ats_before: ATSResult | None = None
+    if base_resume.raw_text and jd_text:
+        ats_before = score_resume(jd_text, base_resume.raw_text)
+
+    # Build PersonalProfile with placeholder contact info — user will supply real values
+    # when they download/compile the .tex output.  The important grounding is work_history_text.
+    profile = PersonalProfile(
+        name="[Your Name]",
+        phone="[Phone]",
+        email="[Email]",
+        linkedin_url="[LinkedIn URL]",
+        linkedin_label="LinkedIn",
+        portfolio_url="",
+        portfolio_label="",
+        work_history_text=work_history_text,
+        education_text="",
+    )
+
+    # Resolve provider — use first entry in providers_json, fallback to user's stored key
+    providers_list: list[dict] = []
+    if providers_json.strip():
+        try:
+            providers_list = _json.loads(providers_json)
+        except Exception:
+            logger.warning("generate/tailored: invalid providers_json — using fallback")
+
+    provider = "anthropic"
+    api_key = user.encrypted_llm_api_key or ""
+    if providers_list:
+        provider = providers_list[0].get("name", "anthropic")
+        api_key = providers_list[0].get("api_key", "") or api_key
+
+    generated = await generate_full_latex_resume(
+        profile=profile,
+        jd_text=jd_text,
+        company_name=company_name,
+        role_title=role_title,
+        job_id=None,
+        ats_result=ats_before,
+        provider=provider,
+        api_key=api_key,
+        ollama_model="llama3.1:8b",
+    )
+
+    # Persist the generated resume in the vault
+    tfidf = build_tfidf_vector(work_history_text)
+    new_resume = Resume(
+        user_id=user.id,
+        filename=f"{generated.version_tag}.tex",
+        file_type="tex",
+        raw_text=work_history_text[:50000],
+        latex_content=generated.latex_content,
+        markdown_content=generated.markdown_preview,
+        tfidf_vector=tfidf,
+        version_tag=generated.version_tag,
+        recruiter_filename=generated.recruiter_filename,
+        is_generated=True,
+        target_company=company_name,
+        target_role=role_title,
+        target_jd_hash=hashlib.sha256(jd_text.encode()).hexdigest(),
+        ats_score=generated.ats_score_estimate,
+    )
+    db.add(new_resume)
+    await db.commit()
+    await db.refresh(new_resume)
+
+    logger.info(
+        f"Tailored resume {generated.version_tag} for {company_name} / {role_title} "
+        f"(base={base_resume_id})"
+    )
+
+    return {
+        "resume_id": str(new_resume.id),
+        "version_tag": generated.version_tag,
+        "markdown_preview": generated.markdown_preview,
+        "ats_score_estimate": generated.ats_score_estimate,
+        "ats_score_before": ats_before.overall_score if ats_before else None,
+        "skills_gap": generated.skills_gap,
+        "changes_summary": generated.changes_summary,
+        "llm_provider_used": generated.llm_provider_used,
+        "warnings": generated.generation_warnings,
+    }
+
+
 # ── Generate answers ───────────────────────────────────────────────────────
 
 
