@@ -123,21 +123,54 @@ function extractRoleFromPage(): string {
 
 function extractJdText(): string {
   const selectors = [
+    // Greenhouse
+    "[data-testid='job-description']",
+    ".job-post__body",
+    ".job-description",
+    // Lever
+    ".content[data-qa='job-description']",
+    ".posting-description",
+    // Workday
+    "[data-automation-id='jobPostingDescription']",
+    // Ashby
+    "[class*='JobPosting-jobDescription']",
     "[class*='job-description']",
+    // SmartRecruiters
+    ".job-description",
+    // LinkedIn
+    ".jobs-description__content",
+    ".jobs-description-content__text",
+    // Indeed
+    "#jobDescriptionText",
+    "[data-testid='jobsearch-JobComponent-description']",
+    // Generic
     "[id*='job-description']",
-    ".jobs-description",
-    "#content",
-    ".content-wrapper",
+    "[id*='jobDescription']",
+    "[class*='JobDescription']",
+    "[class*='description-body']",
     "[class*='posting-body']",
     "[class*='job-details']",
+    ".content-wrapper",
+    "main article",
   ];
   for (const sel of selectors) {
     const el = document.querySelector(sel);
     if (el && (el.textContent?.length ?? 0) > 200) {
-      return (el.textContent ?? "").slice(0, 3000);
+      return (el.textContent ?? "").slice(0, 5000);
     }
   }
-  return "";
+  // Heuristic fallback: largest div/section with job-related keywords
+  const candidates = Array.from(document.querySelectorAll("div, section, article"))
+    .filter((el) => {
+      const t = el.textContent ?? "";
+      return (
+        t.length >= 300 &&
+        t.length <= 10000 &&
+        /\b(responsibilities|requirements|qualifications|experience|skills|about the role)\b/i.test(t)
+      );
+    })
+    .sort((a, b) => (b.textContent?.length ?? 0) - (a.textContent?.length ?? 0));
+  return (candidates[0]?.textContent?.trim() ?? "").slice(0, 5000);
 }
 
 function getFieldLabel(el: HTMLElement): string {
@@ -439,6 +472,9 @@ class FloatingPanel {
       fd.append("work_history_text", this.workHistoryText);
       if (this.providers.length > 0) {
         fd.append("providers_json", JSON.stringify(this.providers));
+      }
+      if (state.question.maxLength && state.question.maxLength > 0) {
+        fd.append("max_length", String(state.question.maxLength));
       }
       const headers: Record<string, string> = {};
       if (this.clerkUserId) headers["X-Clerk-User-Id"] = this.clerkUserId;
