@@ -8,12 +8,16 @@ GET  /api/v1/applications/stats    → Application statistics
 GET  /api/v1/applications/similar  → Find similar previous applications
 """
 
+import hashlib
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_current_user, get_db
+from app.models.application import Application
 from app.models.user import User
 from app.schemas.application import (
     ApplicationListResponse,
@@ -25,6 +29,74 @@ from app.utils.hashing import hash_jd
 
 router = APIRouter()
 service = ApplicationService()
+
+
+class TrackApplicationRequest(BaseModel):
+    company_name: str
+    role_title: str
+    job_url: str | None = None
+    platform: str | None = None
+
+
+@router.post("/track", status_code=200)
+async def track_application(
+    body: TrackApplicationRequest = Body(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Upsert a lightweight application record when the extension detects an application page.
+
+    Called automatically on ApplyMode mount — creates a 'discovered' status record so
+    the user can see they visited this page even before submitting.
+    Idempotent: if a record for this user + job_url already exists today, returns it unchanged.
+    If job_url is absent, falls back to company_name dedup (one record per company per day).
+    """
+    user_id = user.id
+    company = body.company_name.strip()
+    role = body.role_title.strip() or "Unknown Role"
+    job_url = (body.job_url or "").strip()
+
+    # Build a stable dedup key from job_url (preferred) or company+role
+    if job_url:
+        dedup_hash = hashlib.sha256(job_url.encode()).hexdigest()
+    else:
+        dedup_hash = hashlib.sha256(f"{company}::{role}".encode()).hexdigest()
+
+    # Check for existing record — avoid creating duplicates per session
+    result = await db.execute(
+        select(Application).where(
+            Application.user_id == user_id,
+            Application.jd_hash == dedup_hash,
+        )
+    )
+    existing = result.scalar_one_or_none()
+    if existing:
+        return {
+            "application_id": str(existing.id),
+            "status": existing.status,
+            "created": False,
+        }
+
+    app = Application(
+        user_id=user_id,
+        company_name=company,
+        role_title=role,
+        job_url=job_url or None,
+        platform=body.platform or "generic",
+        jd_hash=dedup_hash,
+        git_path="",  # populated later when a resume is generated/attached
+        status="discovered",  # lightweight sentinel — user visited but hasn't applied yet
+    )
+    db.add(app)
+    await db.commit()
+    await db.refresh(app)
+
+    return {
+        "application_id": str(app.id),
+        "status": app.status,
+        "created": True,
+    }
 
 
 @router.get("", response_model=ApplicationListResponse)

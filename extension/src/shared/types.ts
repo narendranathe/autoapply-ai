@@ -11,6 +11,7 @@ export interface PageContext {
   platform: string; // linkedin | greenhouse | lever | workday | indeed | glassdoor | generic
   detectedFields: DetectedField[];
   openQuestions: DetectedQuestion[];
+  jdText?: string;   // extracted job description text — used to ground LLM answers
 }
 
 export interface DetectedField {
@@ -25,11 +26,11 @@ export interface DetectedField {
 export type FieldType =
   | "first_name" | "last_name" | "full_name"
   | "email" | "phone"
-  | "address" | "city" | "state" | "zip"
-  | "linkedin" | "portfolio" | "website"
+  | "address" | "city" | "state" | "zip" | "country"
+  | "linkedin" | "github" | "portfolio" | "website"
   | "resume_upload" | "cover_letter_upload"
-  | "skills" | "years_experience" | "salary"
-  | "sponsorship" | "demographic"
+  | "degree" | "skills" | "years_experience" | "salary"
+  | "sponsorship" | "us_resident" | "demographic"
   | "unknown";
 
 export interface DetectedQuestion {
@@ -41,6 +42,7 @@ export interface DetectedQuestion {
 }
 
 export type QuestionCategory =
+  | "cover_letter"
   | "why_company" | "why_hire" | "about_yourself"
   | "strength" | "weakness" | "challenge" | "leadership"
   | "conflict" | "motivation" | "five_years" | "impact"
@@ -93,7 +95,8 @@ export type Message =
   | { type: "ATTACH_RESUME"; payload: { fieldId: string; pdfUrl: string } }
   | { type: "JOB_CARDS_UPDATE"; payload: JobCard[] }
   | { type: "GET_CONTEXT" }
-  | { type: "CONTEXT_RESPONSE"; payload: PageContext | null };
+  | { type: "CONTEXT_RESPONSE"; payload: PageContext | null }
+  | { type: "APPLICATION_SUBMITTED"; payload: { url: string } };
 
 // Offline sync queue entry
 export interface OfflineEdit {

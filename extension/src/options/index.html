@@ -76,6 +76,20 @@
       .wh-entry-meta { font-size:11px; color:#6b7280; margin-top:2px; }
       .wh-del-btn { background:none; border:none; color:#4b5563; cursor:pointer; font-size:16px; padding:0 4px; flex-shrink:0; margin-left:8px; transition:color 0.15s; }
       .wh-del-btn:hover { color:#f87171; }
+      /* Provider cards */
+      .provider-row { border:1px solid #1e1e3a; border-radius:8px; padding:12px 14px; margin-bottom:8px; transition:border-color 0.15s; }
+      .provider-row:has(input[type=checkbox]:checked) { border-color:#4f46e5; background:#0d0d20; }
+      .provider-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
+      .provider-toggle { display:flex; align-items:center; gap:8px; cursor:pointer; }
+      .provider-toggle input[type=checkbox] { width:16px; height:16px; accent-color:#6d28d9; cursor:pointer; }
+      .provider-name { font-size:13px; font-weight:600; color:#e2e8f0; }
+      .provider-model-hint { font-size:11px; color:#4b5563; }
+      .provider-key-row { display:flex; gap:8px; align-items:center; }
+      .provider-key-row input { flex:1; }
+      .badge-free { background:#064e3b; color:#6ee7b7; border-radius:4px; padding:1px 6px; font-size:10px; font-weight:700; letter-spacing:0.04em; margin-left:4px; }
+      .badge-priority { background:#3b1d6e; color:#c4b5fd; border-radius:4px; padding:1px 6px; font-size:10px; font-weight:700; letter-spacing:0.04em; margin-left:4px; }
+      .get-key-link { font-size:11px; color:#a78bfa; text-decoration:none; flex-shrink:0; white-space:nowrap; }
+      .get-key-link:hover { text-decoration:underline; }
     </style>
   </head>
   <body>
@@ -110,21 +124,97 @@
         <button class="btn btn-primary" id="save-api" style="margin-left: 8px;">Save</button>
       </div>
 
-      <!-- LLM Key -->
+      <!-- LLM Providers -->
       <div class="card">
-        <h2>LLM API Key (optional)</h2>
-        <label for="llm-key">Anthropic / OpenAI / Kimi API Key</label>
-        <input type="password" id="llm-key" placeholder="sk-ant-..." />
-        <p class="hint">Used for resume generation. If blank, the backend falls back to Ollama (if configured) or keyword mode.</p>
-        <div>
-          <label style="margin-top:12px">Provider</label>
-          <select id="llm-provider" style="width:100%;padding:10px 12px;background:#0f0f1a;border:1px solid #1e1e3a;border-radius:8px;color:#f1f5f9;font-size:13px;outline:none;">
-            <option value="anthropic">Anthropic (claude-sonnet-4-6)</option>
-            <option value="openai">OpenAI (gpt-4o)</option>
-            <option value="kimi">Kimi / Moonshot (moonshot-v1-32k)</option>
-            <option value="ollama">Ollama (local)</option>
-          </select>
+        <h2>LLM Providers</h2>
+        <p class="hint" style="margin-bottom:14px">Enable providers you have keys for. The best available provider is used first — falls back automatically if it fails.</p>
+
+        <!-- Anthropic (Priority 1) -->
+        <div class="provider-row" id="provider-anthropic">
+          <div class="provider-header">
+            <label class="provider-toggle">
+              <input type="checkbox" id="anthropic-enabled" />
+              <span class="provider-name">Anthropic <span class="badge-priority">★ Best</span></span>
+            </label>
+            <span class="provider-model-hint">claude-sonnet-4-6</span>
+          </div>
+          <div class="provider-key-row">
+            <input type="password" id="anthropic-key" placeholder="sk-ant-..." />
+          </div>
         </div>
+
+        <!-- OpenAI (Priority 2) -->
+        <div class="provider-row" id="provider-openai">
+          <div class="provider-header">
+            <label class="provider-toggle">
+              <input type="checkbox" id="openai-enabled" />
+              <span class="provider-name">OpenAI</span>
+            </label>
+            <span class="provider-model-hint">gpt-4o</span>
+          </div>
+          <div class="provider-key-row">
+            <input type="password" id="openai-key" placeholder="sk-..." />
+          </div>
+        </div>
+
+        <!-- Gemini (Priority 3, FREE) -->
+        <div class="provider-row" id="provider-gemini">
+          <div class="provider-header">
+            <label class="provider-toggle">
+              <input type="checkbox" id="gemini-enabled" />
+              <span class="provider-name">Google Gemini <span class="badge-free">FREE</span></span>
+            </label>
+            <span class="provider-model-hint">gemini-1.5-flash · 1 500 req/day</span>
+          </div>
+          <div class="provider-key-row">
+            <input type="password" id="gemini-key" placeholder="AIza..." />
+            <a href="https://aistudio.google.com/apikey" target="_blank" class="get-key-link">Get key →</a>
+          </div>
+        </div>
+
+        <!-- Groq (Priority 4, FREE) -->
+        <div class="provider-row" id="provider-groq">
+          <div class="provider-header">
+            <label class="provider-toggle">
+              <input type="checkbox" id="groq-enabled" />
+              <span class="provider-name">Groq <span class="badge-free">FREE</span></span>
+            </label>
+            <span class="provider-model-hint">llama-3.3-70b-versatile · 14 400 req/day</span>
+          </div>
+          <div class="provider-key-row">
+            <input type="password" id="groq-key" placeholder="gsk_..." />
+            <a href="https://console.groq.com" target="_blank" class="get-key-link">Get key →</a>
+          </div>
+        </div>
+
+        <!-- Perplexity (Priority 5) -->
+        <div class="provider-row" id="provider-perplexity">
+          <div class="provider-header">
+            <label class="provider-toggle">
+              <input type="checkbox" id="perplexity-enabled" />
+              <span class="provider-name">Perplexity</span>
+            </label>
+            <span class="provider-model-hint">sonar</span>
+          </div>
+          <div class="provider-key-row">
+            <input type="password" id="perplexity-key" placeholder="pplx-..." />
+          </div>
+        </div>
+
+        <!-- Kimi -->
+        <div class="provider-row" id="provider-kimi">
+          <div class="provider-header">
+            <label class="provider-toggle">
+              <input type="checkbox" id="kimi-enabled" />
+              <span class="provider-name">Kimi / Moonshot</span>
+            </label>
+            <span class="provider-model-hint">moonshot-v1-32k (long context)</span>
+          </div>
+          <div class="provider-key-row">
+            <input type="password" id="kimi-key" placeholder="sk-..." />
+          </div>
+        </div>
+
         <button class="btn btn-primary" id="save-llm" style="margin-top:16px">Save LLM Settings</button>
         <div id="llm-status" class="status"></div>
       </div>
@@ -176,18 +266,34 @@
         </div>
 
         <div style="margin-top:12px">
-          <label for="profile-portfolio">Portfolio / GitHub URL</label>
-          <input type="text" id="profile-portfolio" placeholder="https://github.com/yourusername" />
+          <label for="profile-github">GitHub URL</label>
+          <input type="text" id="profile-github" placeholder="https://github.com/yourusername" />
+        </div>
+
+        <div style="margin-top:12px">
+          <label for="profile-portfolio">Portfolio URL</label>
+          <input type="text" id="profile-portfolio" placeholder="https://yourportfolio.com" />
         </div>
 
         <div class="row" style="margin-top:12px">
+          <div style="flex:2">
+            <label for="profile-degree">Highest Degree</label>
+            <input type="text" id="profile-degree" placeholder="Master of Science in Computer Science" />
+          </div>
           <div style="flex:1">
             <label for="profile-yoe">Years of Experience</label>
             <input type="text" id="profile-yoe" placeholder="4" />
           </div>
+        </div>
+
+        <div class="row" style="margin-top:12px">
           <div style="flex:2">
             <label for="profile-salary">Salary Expectation</label>
             <input type="text" id="profile-salary" placeholder="140000" />
+          </div>
+          <div style="flex:1">
+            <label for="profile-country">Country</label>
+            <input type="text" id="profile-country" placeholder="United States" />
           </div>
         </div>
 
@@ -259,6 +365,103 @@
         <div id="wh-list" style="display:flex;flex-direction:column;gap:8px;">
           <div style="font-size:12px;color:#4b5563;" id="wh-empty">Loading…</div>
         </div>
+      </div>
+
+      <!-- Answer Style Instructions (per category) -->
+      <div class="card">
+        <h2>Answer Style Instructions</h2>
+        <p class="hint" style="margin-bottom:14px">
+          Optional: add extra instructions the LLM must follow when writing answers for each category.
+          Examples: "Always quantify impact with metrics", "Mention my AWS certification in technical answers",
+          "Keep cover letters conversational, not corporate".
+        </p>
+
+        <style>
+          .pt-row { margin-bottom: 14px; }
+          .pt-label { font-size: 12px; font-weight: 700; color: #a78bfa; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 5px; }
+          .pt-row textarea {
+            width: 100%; padding: 8px 10px; background: #0f0f1a; border: 1px solid #1e1e3a;
+            border-radius: 8px; color: #f1f5f9; font-size: 12px; outline: none;
+            resize: vertical; font-family: system-ui, sans-serif; line-height: 1.5;
+          }
+          .pt-row textarea:focus { border-color: #4f46e5; }
+        </style>
+
+        <div class="pt-row">
+          <div class="pt-label">General / Custom</div>
+          <textarea id="pt-custom" rows="2" placeholder="e.g. Always cite quantifiable outcomes. Write in first person."></textarea>
+        </div>
+        <div class="pt-row">
+          <div class="pt-label">Experience</div>
+          <textarea id="pt-experience" rows="2" placeholder="e.g. Focus on data engineering projects. Emphasize Python and cloud experience."></textarea>
+        </div>
+        <div class="pt-row">
+          <div class="pt-label">Motivation / Why This Role</div>
+          <textarea id="pt-motivation" rows="2" placeholder="e.g. Mention interest in large-scale data systems. Tie to my MS in CS."></textarea>
+        </div>
+        <div class="pt-row">
+          <div class="pt-label">Behavioral (STAR)</div>
+          <textarea id="pt-behavioral" rows="2" placeholder="e.g. Always use the STAR format. Pull examples from the last 2 years only."></textarea>
+        </div>
+        <div class="pt-row">
+          <div class="pt-label">Technical</div>
+          <textarea id="pt-technical" rows="2" placeholder="e.g. Mention Spark, dbt, and Airflow when relevant. Reference my AWS Solutions Architect cert."></textarea>
+        </div>
+        <div class="pt-row">
+          <div class="pt-label">Salary / Compensation</div>
+          <textarea id="pt-salary" rows="2" placeholder="e.g. Express flexibility but anchor to market rate for my level and location."></textarea>
+        </div>
+        <div class="pt-row">
+          <div class="pt-label">Work Authorization</div>
+          <textarea id="pt-work_authorization" rows="2" placeholder="e.g. State I am authorized to work in the US without sponsorship."></textarea>
+        </div>
+        <div class="pt-row">
+          <div class="pt-label">Cover Letter</div>
+          <textarea id="pt-cover_letter" rows="3" placeholder="e.g. Open with a specific achievement. Use a confident but not arrogant tone. Max 350 words."></textarea>
+        </div>
+
+        <button class="btn btn-primary" id="save-prompts">Save Style Instructions</button>
+        <div id="prompts-status" class="status"></div>
+      </div>
+
+      <!-- Model Routing per Category (L5) -->
+      <div class="card">
+        <h2>Model Routing <span style="font-size:11px;color:#64748b;font-weight:400;">(L5 — optional)</span></h2>
+        <p style="font-size:12px;color:#94a3b8;margin-bottom:14px;">
+          Choose which AI provider to prefer for each question type. Leave on "Default (priority order)" to use the ranked list from above.
+        </p>
+
+        <style>
+          .mr-row { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+          .mr-label { flex:1; font-size:12px; color:#cbd5e1; }
+          .mr-row select {
+            flex:1; padding:6px 8px; background:#0f0f1a; border:1px solid #1e1e3a;
+            border-radius:6px; color:#f1f5f9; font-size:12px; outline:none; cursor:pointer;
+          }
+          .mr-row select:focus { border-color:#4f46e5; }
+        </style>
+
+        <div class="mr-row"><div class="mr-label">Cover Letter</div>
+          <select id="mr-cover_letter"><option value="">Default (priority order)</option><option value="anthropic">Anthropic (Claude)</option><option value="openai">OpenAI (GPT)</option><option value="gemini">Google (Gemini)</option><option value="groq">Groq (Llama)</option><option value="perplexity">Perplexity</option><option value="kimi">Kimi</option></select>
+        </div>
+        <div class="mr-row"><div class="mr-label">Why This Company</div>
+          <select id="mr-why_company"><option value="">Default</option><option value="anthropic">Anthropic</option><option value="openai">OpenAI</option><option value="gemini">Gemini</option><option value="groq">Groq</option><option value="perplexity">Perplexity</option><option value="kimi">Kimi</option></select>
+        </div>
+        <div class="mr-row"><div class="mr-label">Why Hire You</div>
+          <select id="mr-why_hire"><option value="">Default</option><option value="anthropic">Anthropic</option><option value="openai">OpenAI</option><option value="gemini">Gemini</option><option value="groq">Groq</option><option value="perplexity">Perplexity</option><option value="kimi">Kimi</option></select>
+        </div>
+        <div class="mr-row"><div class="mr-label">Behavioral (STAR)</div>
+          <select id="mr-challenge"><option value="">Default</option><option value="anthropic">Anthropic</option><option value="openai">OpenAI</option><option value="gemini">Gemini</option><option value="groq">Groq</option><option value="perplexity">Perplexity</option><option value="kimi">Kimi</option></select>
+        </div>
+        <div class="mr-row"><div class="mr-label">About Yourself</div>
+          <select id="mr-about_yourself"><option value="">Default</option><option value="anthropic">Anthropic</option><option value="openai">OpenAI</option><option value="gemini">Gemini</option><option value="groq">Groq</option><option value="perplexity">Perplexity</option><option value="kimi">Kimi</option></select>
+        </div>
+        <div class="mr-row"><div class="mr-label">Custom / Other</div>
+          <select id="mr-custom"><option value="">Default</option><option value="anthropic">Anthropic</option><option value="openai">OpenAI</option><option value="gemini">Gemini</option><option value="groq">Groq</option><option value="perplexity">Perplexity</option><option value="kimi">Kimi</option></select>
+        </div>
+
+        <button class="btn btn-primary" id="save-model-routes">Save Routing</button>
+        <div id="mr-status" class="status"></div>
       </div>
 
       <!-- Status -->

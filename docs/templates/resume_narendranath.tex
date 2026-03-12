@@ -1,0 +1,185 @@
+%-------------------------
+% Resume in Latex
+% Author : Narendranath Edara
+% Based off of: https://github.com/narendranathe/resume2
+% License : MIT
+%------------------------
+
+\documentclass[letterpaper,11pt]{article}
+
+\usepackage{latexsym}
+\usepackage[empty]{fullpage}
+\usepackage{titlesec}
+\usepackage{marvosym}
+\usepackage[usenames,dvipsnames]{color}
+\usepackage{verbatim}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+\usepackage{fancyhdr}
+\usepackage[english]{babel}
+\usepackage{tabularx}
+\input{glyphtounicode}
+
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot{}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+
+% Adjust margins
+\addtolength{\oddsidemargin}{-0.5in}
+\addtolength{\evensidemargin}{-0.5in}
+\addtolength{\textwidth}{1in}
+\addtolength{\topmargin}{-.7in}
+\addtolength{\textheight}{1.4in}
+\setlength{\parskip}{0pt}
+
+\urlstyle{same}
+
+\raggedbottom
+\raggedright
+\setlength{\tabcolsep}{0in}
+
+% Sections formatting
+\titleformat{\section}{
+  \vspace{-4pt}\scshape\raggedright\large
+}{}{0em}{}[\color{black}\titlerule \vspace{-5pt}]
+
+\pdfgentounicode=1
+
+%-------------------------
+% Custom commands
+\newcommand{\resumeItem}[1]{
+  \item\small{
+    {#1 \vspace{-2pt}}
+  }
+}
+
+\newcommand{\resumeSubheading}[4]{
+  \vspace{-2pt}\item
+    \begin{tabular*}{0.97\textwidth}[t]{l@{\extracolsep{\fill}}r}
+      \textbf{#1} & #2 \\
+      \textit{\small#3} & \textit{\small #4} \\
+    \end{tabular*}\vspace{-7pt}
+}
+
+\newcommand{\resumeSubSubheading}[2]{
+    \item
+    \begin{tabular*}{0.97\textwidth}{l@{\extracolsep{\fill}}r}
+      \textit{\small#1} & \textit{\small #2} \\
+    \end{tabular*}\vspace{-7pt}
+}
+
+\newcommand{\resumeProjectHeading}[2]{
+    \item
+    \begin{tabular*}{0.97\textwidth}{l@{\extracolsep{\fill}}r}
+      \small#1 & #2 \\
+    \end{tabular*}\vspace{-7pt}
+}
+
+\newcommand{\resumeSubItem}[1]{\resumeItem{#1}\vspace{-4pt}}
+
+\renewcommand\labelitemii{$\vcenter{\hbox{\tiny$\bullet$}}$}
+
+\newcommand{\resumeSubHeadingListStart}{\begin{itemize}[leftmargin=0.15in, label={}]}
+\newcommand{\resumeSubHeadingListEnd}{\end{itemize}}
+\newcommand{\resumeItemListStart}{\begin{itemize}}
+\newcommand{\resumeItemListEnd}{\end{itemize}\vspace{-5pt}}
+
+%-------------------------------------------
+\begin{document}
+
+%----------HEADING----------
+\begin{center}
+    \textbf{\Huge \scshape Narendranath Edara} \\ \vspace{1pt}
+    \small +1 (573) 466-6656 $|$ \href{mailto:edara.narendranath@gmail.com}{\underline{edara.narendranath@gmail.com}} $|$
+    \href{https://www.linkedin.com/in/narendranathe/}{\underline{linkedin.com/in/narendranathe}} $|$
+    \href{https://narendranathe.github.io}{\underline{narendranathe.github.io}}
+\end{center}
+
+
+%-----------EDUCATION-----------
+\section{Education}
+  \resumeSubHeadingListStart
+    \resumeSubheading
+      {Missouri University of Science and Technology}{Rolla, MO}
+      {Master of Science in Information Science and Technology; GPA: 4.0/4.0}{Jan. 2022 -- Dec. 2023}
+  \resumeSubHeadingListEnd
+
+
+%-----------EXPERIENCE-----------
+\section{Experience}
+  \resumeSubHeadingListStart
+
+    \resumeSubheading
+      {Data Engineer}{July 2024 -- Present}
+      {ExponentHR}{Dallas, TX}
+      \resumeItemListStart
+        \resumeItem{Architected governed semantic layer on Microsoft Fabric with DAX metrics and AI agents translating business questions to SQL, cutting support tickets by \textasciitilde40\% and query response from 12s to under 4s}
+        \resumeItem{Compressed deployment cycles from 3 months to 14 days by owning CI/CD end-to-end through Azure DevOps, restructuring cross-team handoffs that accounted for 11 weeks of idle time}
+        \resumeItem{Reengineered CDC-based ETL from full-table reloads to incremental capture with merge upserts, cutting batch runtime from \textasciitilde30 min to under 8 min and compute costs by \textasciitilde67\% by eliminating full-table I/O and data shuffling}
+        \resumeItem{Engineered one-click Azure DevOps pipeline with idempotent provisioning for Contained AAG databases (restore, security, recovery, listener validation, CDC), eliminating \textasciitilde1 hour per request across 20+ daily copy-downs}
+        \resumeItem{Owned payroll-critical database recovery using containerized AAG failover, maintaining 98\% uptime SLA with sub-hour restore targets including CDC capture job recovery after failover events}
+      \resumeItemListEnd
+
+    \resumeSubheading
+      {Data Engineer}{Aug. 2023 -- July 2024}
+      {Missouri S\&T}{Rolla, MO}
+      \resumeItemListStart
+        \resumeItem{Engineered Azure AI Anomaly Detector pipelines selecting optimal algorithms per time-series profile, achieving 95\%+ accuracy --- caught a production memory leak 4 hours before outage}
+        \resumeItem{Implemented tunable thresholds per service, filtering \textasciitilde250 weekly non-actionable P3 alerts, moving signal-to-noise from 1:5 to 1:1.2 --- ended alert blindness during on-call rotations}
+        \resumeItem{Migrated from static D-Series VMs to AKS with HPA, raising CPU utilization 12\% to 64\%, consolidating 20 nodes to 4--8 dynamic, cutting monthly Azure spend by \$3,200}
+    \resumeItemListEnd
+
+    \resumeSubheading
+      {Business Analyst}{Mar. 2018 -- Sept. 2020}
+      {Zomato}{Hyderabad, India}
+      \resumeItemListStart
+        \resumeItem{Built real-time competitor analytics platform tracking pricing, delivery times, and coverage, feeding pricing changes that contributed to 9\% market share gain in contested metros}
+        \resumeItem{Optimized search relevance with ranking models using contextual signals (time, location, cuisine affinity), improving search-to-conversion across millions of daily queries}
+        \resumeItem{Built Elasticsearch enterprise search indexing 100K+ documents, reducing Support Desk volume by \textasciitilde80\% through self-serve query resolution}
+      \resumeItemListEnd
+
+  \resumeSubHeadingListEnd
+
+
+%-----------PROJECTS-----------
+\section{Projects}
+    \resumeSubHeadingListStart
+      \resumeProjectHeading
+          {\textbf{Real-Time Fraud Detection ML Platform} $|$ \emph{PySpark, Kafka, Airflow, MLflow, Docker, Prometheus}}{2026}
+          \resumeItemListStart
+            \resumeItem{Built streaming inference serving 100+ TPS with sub-ms latency using Kafka and containerized LightGBM endpoints trained on 100K transactions with MLflow tracking}
+            \resumeItem{Implemented Prometheus + Grafana observability with Airflow-orchestrated training/inference in fully Dockerized infrastructure}
+          \resumeItemListEnd
+      \resumeProjectHeading
+          {\textbf{JobScout --- AI Job Discovery \& Auto-Apply Agent} $|$ \emph{Python, LangChain, RAG, FastAPI, React}}{2025}
+          \resumeItemListStart
+            \resumeItem{Built production LLM app scraping 109 career pages with multi-signal relevance scoring, TF-IDF resume matching across 95+ PDFs, and instant alerts via Discord/Telegram webhooks}
+            \resumeItem{Designed \$0/month architecture with batch scheduling, SQLite WAL, GitHub Actions orchestration, and circuit breakers isolating failing scrapers without pipeline downtime}
+          \resumeItemListEnd
+    \resumeSubHeadingListEnd
+
+
+%-----------CERTIFICATIONS & PUBLICATIONS-----------
+\section{Certifications \& Publications}
+ \begin{itemize}[leftmargin=0.15in, label={}]
+    \small{\item{
+     \textbf{DP-700}{: Microsoft Certified Data Engineer Associate $|$} \textbf{Publication}{: Sentiment Analysis for Visitor Insights -- \href{https://doi.org/10.1080/10495142.2025.2525123}{\underline{DOI}}}
+    }}
+ \end{itemize}
+
+
+%-----------TECHNICAL SKILLS-----------
+\section{Technical Skills}
+ \begin{itemize}[leftmargin=0.15in, label={}]
+    \small{\item{
+     \textbf{Languages \& ML}{: Python, SQL, Bash, Pytest, MLflow, Airflow, Feature Engineering, Model Serving, LangChain, RAG} \\
+     \textbf{Data \& Cloud}{: Spark, Kafka, Databricks, Delta Lake, PostgreSQL, ETL/ELT, Data Modeling, Azure (AKS, DevOps), AWS (S3), Microsoft Fabric, Docker, Kubernetes} \\
+     \textbf{Tools}{: FastAPI, Streamlit, Elasticsearch, Power BI, DAX, Git, CI/CD, Prometheus, Grafana, Swagger/OpenAPI} \\
+    }}
+ \end{itemize}
+
+%-------------------------------------------
+\end{document}

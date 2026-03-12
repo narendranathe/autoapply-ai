@@ -58,6 +58,7 @@ select = [
 ]
 ignore = [
     "B008",  # FastAPI: Depends/File/Form in function defaults is idiomatic and intentional
+    "E501",  # Line too long — LLM prompt strings and f-strings legitimately exceed 100 chars
 ]
 
 [tool.black]

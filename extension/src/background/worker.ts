@@ -141,12 +141,42 @@ chrome.runtime.onMessage.addListener(
       }
 
       case "PAGE_CONTEXT_UPDATE": {
-        // Content script sends enriched context (detected fields, questions)
+        // Content script sends enriched context (detected fields, questions).
+        // If the message comes from a sub-frame (frameId != 0), MERGE its fields
+        // and questions into the existing top-level context so Workday iframes
+        // contribute their form inputs without overwriting the company/role detected
+        // from the main frame.
         if (sender.tab?.id) {
-          tabContexts.set(sender.tab.id, message.payload);
+          const tabId = sender.tab.id;
+          const isSubFrame = (sender.frameId ?? 0) !== 0;
+          const incoming: PageContext = message.payload;
+
+          if (isSubFrame) {
+            const existing = tabContexts.get(tabId);
+            if (existing) {
+              // Merge: deduplicate by fieldId / questionId
+              const existingFieldIds = new Set(existing.detectedFields.map((f) => f.fieldId));
+              const existingQIds = new Set(existing.openQuestions.map((q) => q.questionId));
+              const newFields = incoming.detectedFields.filter((f) => !existingFieldIds.has(f.fieldId));
+              const newQuestions = incoming.openQuestions.filter((q) => !existingQIds.has(q.questionId));
+              const merged: PageContext = {
+                ...existing,
+                detectedFields: [...existing.detectedFields, ...newFields],
+                openQuestions: [...existing.openQuestions, ...newQuestions],
+              };
+              tabContexts.set(tabId, merged);
+              chrome.runtime.sendMessage<Message>({ type: "PAGE_CONTEXT_UPDATE", payload: merged }).catch(() => {});
+            } else {
+              // No existing context yet — treat sub-frame as primary
+              tabContexts.set(tabId, incoming);
+              chrome.runtime.sendMessage(message).catch(() => {});
+            }
+          } else {
+            // Main frame: replace wholesale (authoritative company/role/mode)
+            tabContexts.set(tabId, incoming);
+            chrome.runtime.sendMessage(message).catch(() => {});
+          }
         }
-        // Relay to sidepanel
-        chrome.runtime.sendMessage(message).catch(() => {});
         break;
       }
 
@@ -184,6 +214,46 @@ chrome.runtime.onMessage.addListener(
       case "JOB_CARDS_UPDATE": {
         // Content script sends scraped job cards; relay to sidepanel
         chrome.runtime.sendMessage(message).catch(() => {});
+        break;
+      }
+
+      case "APPLICATION_SUBMITTED": {
+        // Content script detected a form submission — update tracked application to "applied".
+        // We look up the tracked context for this tab, find the application_id via the URL
+        // and call PATCH /applications/:id with status=applied.
+        const tabId = sender.tab?.id;
+        if (!tabId) break;
+        const ctx = tabContexts.get(tabId);
+        if (!ctx) break;
+
+        // Notify sidepanel so it can update its History tab state
+        chrome.runtime.sendMessage<Message>({ type: "PAGE_CONTEXT_UPDATE", payload: ctx }).catch(() => {});
+
+        // Fire-and-forget: update via API using stored credentials
+        chrome.storage.local.get(["clerkUserId", "apiBaseUrl"]).then((data) => {
+          const userId = data.clerkUserId as string | undefined;
+          const apiBase = (data.apiBaseUrl as string | undefined) || "https://autoapply-ai-api.fly.dev/api/v1";
+          if (!userId || !ctx.jobUrl) return;
+
+          // Use the track endpoint to get/create the application record first, then patch status
+          fetch(`${apiBase}/applications/track`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-Clerk-User-Id": userId },
+            body: JSON.stringify({
+              company_name: ctx.company,
+              role_title: ctx.roleTitle,
+              job_url: ctx.jobUrl,
+              platform: ctx.platform ?? "generic",
+            }),
+          }).then((r) => r.json()).then((res: { application_id: string }) => {
+            if (!res.application_id) return;
+            return fetch(`${apiBase}/applications/${res.application_id}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json", "X-Clerk-User-Id": userId },
+              body: JSON.stringify({ status: "applied" }),
+            });
+          }).catch(() => {});
+        }).catch(() => {});
         break;
       }
     }

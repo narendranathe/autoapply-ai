@@ -43,3 +43,6 @@ coverage.xml
 # Build artifacts
 *.zip
 *.crx
+
+# Claude Code local settings (may contain tokens/secrets)
+.claude/
