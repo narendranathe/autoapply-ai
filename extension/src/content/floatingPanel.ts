@@ -287,11 +287,27 @@ function profileValue(fieldType: FieldType, profile: Profile): string {
 
 function fillDomField(fieldId: string, value: string): void {
   const el =
-    document.querySelector<HTMLInputElement | HTMLTextAreaElement>(`[data-aap-id="${fieldId}"]`) ??
-    (document.getElementById(fieldId) as HTMLInputElement | null) ??
-    document.querySelector<HTMLInputElement>(`[name="${fieldId}"]`);
+    document.querySelector<HTMLElement>(`[data-aap-id="${fieldId}"]`) ??
+    (document.getElementById(fieldId) as HTMLElement | null) ??
+    document.querySelector<HTMLElement>(`[name="${fieldId}"]`);
   if (!el) return;
-  // Handle React-controlled inputs via native value setter
+
+  // Handle contenteditable divs (Ashby, newer Greenhouse, etc.)
+  if (el.getAttribute("contenteditable") === "true" || el.contentEditable === "true") {
+    el.focus();
+    // Select all existing content and replace
+    document.execCommand("selectAll", false);
+    document.execCommand("insertText", false, value);
+    // Fallback: set innerHTML if execCommand didn't work
+    if (!el.textContent?.includes(value.slice(0, 20))) {
+      el.textContent = value;
+      el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+    }
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    return;
+  }
+
+  // Handle React-controlled inputs and textareas via native value setter
   const nativeInputValueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
   const nativeTextAreaValueSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
   if (el instanceof HTMLTextAreaElement && nativeTextAreaValueSetter) {

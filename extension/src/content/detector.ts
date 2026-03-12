@@ -132,30 +132,77 @@ function isEssayQuestion(label: string): boolean {
 }
 
 function detectQuestions(): DetectedQuestion[] {
-  const textareas = Array.from(document.querySelectorAll<HTMLTextAreaElement>("textarea"));
   const questions: DetectedQuestion[] = [];
+  const seen = new Set<string>(); // dedup by questionId
 
+  // Scan standard <textarea> elements
+  const textareas = Array.from(document.querySelectorAll<HTMLTextAreaElement>("textarea"));
   for (const ta of textareas) {
     const label = getFieldLabel(ta);
     if (!label) continue;
     if (!isEssayQuestion(label)) continue;
 
+    const qId = ta.id || ta.name || `q_${questions.length}`;
+    if (seen.has(qId)) continue;
+    seen.add(qId);
+
     let category: QuestionCategory = "custom";
     for (const { category: cat, patterns } of QUESTION_CATEGORY_PATTERNS) {
-      if (patterns.some((p) => p.test(label))) {
-        category = cat;
-        break;
-      }
+      if (patterns.some((p) => p.test(label))) { category = cat; break; }
     }
 
     questions.push({
-      questionId: ta.id || `q_${questions.length}`,
+      questionId: qId,
       questionText: label,
       category,
       fieldType: "textarea",
       maxLength: ta.maxLength > 0 ? ta.maxLength : undefined,
     });
   }
+
+  // Scan contenteditable divs — used by Ashby, newer Greenhouse, Notion-style ATSes
+  const contenteditables = Array.from(
+    document.querySelectorAll<HTMLElement>('[contenteditable="true"], [contenteditable=""]')
+  );
+  for (const ce of contenteditables) {
+    // Skip tiny/invisible contenteditable elements (toolbars, etc.)
+    const rect = ce.getBoundingClientRect();
+    if (rect.height < 30 || rect.width < 100) continue;
+    // Skip elements that look like rich text toolbars or navigation
+    const role = (ce.getAttribute("role") || "").toLowerCase();
+    if (["toolbar", "navigation", "menu", "menuitem", "combobox"].includes(role)) continue;
+
+    const label = getFieldLabel(ce);
+    if (!label) continue;
+    if (!isEssayQuestion(label)) continue;
+
+    const qId = ce.id || `ce_${questions.length}`;
+    if (seen.has(qId)) continue;
+    seen.add(qId);
+
+    let category: QuestionCategory = "custom";
+    for (const { category: cat, patterns } of QUESTION_CATEGORY_PATTERNS) {
+      if (patterns.some((p) => p.test(label))) { category = cat; break; }
+    }
+
+    // Contenteditable elements rarely have maxLength — use aria-describedby hint if available
+    const describedBy = ce.getAttribute("aria-describedby");
+    let maxLength: number | undefined;
+    if (describedBy) {
+      const hint = document.getElementById(describedBy)?.textContent || "";
+      const limitMatch = hint.match(/(\d+)\s*(char|character|word)/i);
+      if (limitMatch) maxLength = parseInt(limitMatch[1], 10);
+    }
+
+    questions.push({
+      questionId: qId,
+      questionText: label,
+      category,
+      fieldType: "textarea",
+      maxLength,
+    });
+  }
+
   return questions;
 }
 
@@ -389,15 +436,26 @@ chrome.runtime.onMessage.addListener((message: Message) => {
 
   if (message.type === "FILL_ANSWER") {
     const { questionId, text } = message.payload;
-    const el =
-      (document.getElementById(questionId) as HTMLTextAreaElement | null) ||
-      document.querySelector<HTMLTextAreaElement>(`[name="${questionId}"]`) ||
+    const el: HTMLElement | null =
+      (document.getElementById(questionId) as HTMLElement | null) ||
+      document.querySelector<HTMLElement>(`[name="${questionId}"]`) ||
       document.querySelector<HTMLTextAreaElement>("textarea");
-    if (el) {
-      el.focus();
+    if (!el) return;
+    el.focus();
+
+    // Handle contenteditable (Ashby, newer Greenhouse, etc.)
+    if (el.getAttribute("contenteditable") === "true" || el.contentEditable === "true") {
+      document.execCommand("selectAll", false);
+      document.execCommand("insertText", false, text);
+      if (!el.textContent?.includes(text.slice(0, 20))) {
+        el.textContent = text;
+        el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
+      }
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    } else {
       const nativeSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
       if (nativeSetter) nativeSetter.call(el, text);
-      else el.value = text;
+      else (el as HTMLTextAreaElement).value = text;
       el.dispatchEvent(new Event("input", { bubbles: true }));
       el.dispatchEvent(new Event("change", { bubbles: true }));
     }
@@ -443,10 +501,10 @@ function shouldRunInFrame(): boolean {
   ];
   if (ATS_FRAME_PATTERNS.some((p) => p.test(frameUrl))) return true;
 
-  // Unknown frame URL: scan only if the frame already has form inputs or textareas
-  // (avoids running on ad iframes, tracking pixels, OAuth popups, etc.)
+  // Unknown frame URL: scan only if the frame already has form inputs, textareas, or
+  // contenteditable fields (avoids running on ad iframes, tracking pixels, OAuth popups, etc.)
   const hasFormInputs =
-    document.querySelectorAll("input:not([type=hidden]), textarea, select").length > 0;
+    document.querySelectorAll("input:not([type=hidden]), textarea, select, [contenteditable=true]").length > 0;
   return hasFormInputs;
 }
 
