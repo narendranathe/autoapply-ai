@@ -371,6 +371,20 @@ function fillDomField(fieldId: string, value: string): void {
   el.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
+function detectPlatform(url: string): string {
+  if (/linkedin\.com/.test(url)) return "linkedin";
+  if (/greenhouse\.io/.test(url)) return "greenhouse";
+  if (/lever\.co/.test(url)) return "lever";
+  if (/workday\.com|myworkday\.com/.test(url)) return "workday";
+  if (/ashbyhq\.com/.test(url)) return "ashby";
+  if (/smartrecruiters\.com/.test(url)) return "smartrecruiters";
+  if (/bamboohr\.com/.test(url)) return "bamboohr";
+  if (/icims\.com/.test(url)) return "icims";
+  if (/taleo\.net/.test(url)) return "taleo";
+  if (/indeed\.com/.test(url)) return "indeed";
+  return "generic";
+}
+
 function scoreColor(score: number): string {
   if (score >= 80) return "#10b981";
   if (score >= 65) return "#f59e0b";
@@ -432,6 +446,8 @@ class FloatingPanel {
   private atsScore: number | null = null;
   private loadingAts: boolean = false;
   private workHistoryText: string = "";
+  private promptTemplates: Record<string, string> = {};
+  private trackedAppId: string | null = null;
 
   constructor() {
     this.host = document.createElement("div");
@@ -448,14 +464,15 @@ class FloatingPanel {
   }
 
   async init(): Promise<void> {
-    const data = await chrome.storage.local.get(["apiBaseUrl", "clerkUserId", "profile", "providerConfigs"]);
+    const data = await chrome.storage.local.get(["apiBaseUrl", "clerkUserId", "profile", "providerConfigs", "promptTemplates"]);
     if (data.apiBaseUrl) this.apiBase = data.apiBaseUrl as string;
     if (data.clerkUserId) this.clerkUserId = data.clerkUserId as string;
     if (data.profile) this.profile = data.profile as Profile;
+    if (data.promptTemplates) this.promptTemplates = data.promptTemplates as Record<string, string>;
     if (data.providerConfigs) {
       const RANK: Record<string, number> = { anthropic: 1, openai: 2, gemini: 3, groq: 4, perplexity: 5, kimi: 6 };
       this.providers = Object.entries(data.providerConfigs as Record<string, { enabled: boolean; apiKey: string; model: string }>)
-        .filter(([, cfg]) => cfg.enabled)
+        .filter(([, cfg]) => !!cfg.apiKey)  // enabled = has a key
         .map(([name, cfg]) => ({ name, api_key: cfg.apiKey, model: cfg.model }))
         .sort((a, b) => (RANK[a.name] ?? 50) - (RANK[b.name] ?? 50));
     }
@@ -493,6 +510,60 @@ class FloatingPanel {
     // Retry detection at 1s and 3s so we catch late-rendering fields/questions.
     setTimeout(() => this.redetect(), 1000);
     setTimeout(() => this.redetect(), 3000);
+
+    // Track this application visit (idempotent — safe to call on every page load)
+    this.trackApplication();
+
+    // Auto-mark as "applied" when the form is submitted
+    this.watchFormSubmission();
+  }
+
+  private async trackApplication(): Promise<void> {
+    if (!this.clerkUserId || !this.company) return;
+    try {
+      const resp = await fetch(`${this.apiBase}/applications/track`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Clerk-User-Id": this.clerkUserId },
+        body: JSON.stringify({
+          company_name: this.company,
+          role_title: this.roleTitle,
+          job_url: window.location.href,
+          platform: detectPlatform(window.location.href),
+        }),
+      });
+      if (resp.ok) {
+        const json = await resp.json() as { application_id: string };
+        this.trackedAppId = json.application_id;
+      }
+    } catch {
+      // non-fatal
+    }
+  }
+
+  private watchFormSubmission(): void {
+    // Listen for form submit events and "Submit Application" button clicks
+    const markApplied = () => {
+      if (!this.clerkUserId || !this.trackedAppId) return;
+      // Mark as "applied" — fire-and-forget, non-blocking
+      fetch(`${this.apiBase}/applications/${this.trackedAppId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", "X-Clerk-User-Id": this.clerkUserId },
+        body: JSON.stringify({ status: "applied" }),
+      }).catch(() => {});
+    };
+
+    // Form submit event (works for traditional forms)
+    document.addEventListener("submit", markApplied, { capture: true });
+
+    // Button click heuristic: "Submit Application" / "Submit" / "Apply" buttons
+    document.addEventListener("click", (e) => {
+      const btn = (e.target as HTMLElement)?.closest("button, [type=submit], a[role=button]") as HTMLElement | null;
+      if (!btn) return;
+      const text = btn.textContent?.toLowerCase() ?? "";
+      if (/\b(submit application|submit my application|complete application|send application)\b/.test(text)) {
+        markApplied();
+      }
+    }, { capture: true });
   }
 
   private async loadAtsScore(): Promise<void> {
@@ -542,6 +613,8 @@ class FloatingPanel {
       if (state.question.maxLength && state.question.maxLength > 0) {
         fd.append("max_length", String(state.question.maxLength));
       }
+      const catInstructions = this.promptTemplates[state.question.category] || this.promptTemplates["custom"];
+      if (catInstructions) fd.append("category_instructions", catInstructions);
       const headers: Record<string, string> = {};
       if (this.clerkUserId) headers["X-Clerk-User-Id"] = this.clerkUserId;
       const resp = await fetch(`${this.apiBase}/vault/generate/answers`, {
