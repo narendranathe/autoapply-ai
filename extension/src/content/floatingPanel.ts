@@ -1035,6 +1035,19 @@ class FloatingPanel {
       }
       .generate-btn:hover { background: #12121e; border-color: #4c1d95; }
       .generate-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+      .copy-draft-btn {
+        background: none;
+        border: 1px solid #334155;
+        color: #94a3b8;
+        cursor: pointer;
+        padding: 4px 7px;
+        border-radius: 4px;
+        font-size: 13px;
+        line-height: 1;
+        transition: color 0.15s, border-color 0.15s;
+        pointer-events: all;
+      }
+      .copy-draft-btn:hover { color: #a78bfa; border-color: #6d28d9; }
       .regen-btn {
         background: none;
         border: none;
@@ -1224,6 +1237,7 @@ class FloatingPanel {
                      <div class="draft-text">${selectedText.replace(/</g, "&lt;")}</div>
                      <div class="draft-actions">
                        <button class="fill-answer-btn" data-q-idx="${qi}" data-draft-text="${encodeURIComponent(selectedText)}">Fill Answer &#8595;</button>
+                       <button class="copy-draft-btn" data-q-idx="${qi}" data-draft-text="${encodeURIComponent(selectedText)}" title="Copy to clipboard">&#9112;</button>
                        <button class="regen-btn" title="Regenerate" data-q-idx="${qi}" id="__aap_regen_${qi}__">&#8635;</button>
                      </div>`
                   : state.loading
@@ -1344,6 +1358,34 @@ class FloatingPanel {
         const encoded = btn.dataset.draftText ?? "";
         const text = decodeURIComponent(encoded);
         void this.saveAndFill(qi, text);
+      });
+    });
+
+    // Copy draft buttons
+    this.shadow.querySelectorAll<HTMLButtonElement>(".copy-draft-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const encoded = btn.dataset.draftText ?? "";
+        const text = decodeURIComponent(encoded);
+        if (!text) return;
+        navigator.clipboard.writeText(text).then(() => {
+          const orig = btn.innerHTML;
+          btn.innerHTML = "&#10003;"; // checkmark
+          btn.style.color = "#22c55e";
+          setTimeout(() => {
+            btn.innerHTML = orig;
+            btn.style.color = "";
+          }, 1500);
+        }).catch(() => {
+          // Fallback for older browser contexts
+          const ta = document.createElement("textarea");
+          ta.value = text;
+          ta.style.position = "fixed";
+          ta.style.opacity = "0";
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand("copy");
+          document.body.removeChild(ta);
+        });
       });
     });
 
