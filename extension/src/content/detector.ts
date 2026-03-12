@@ -350,6 +350,106 @@ function extractJdText(): string {
   return (candidates[0]?.textContent?.trim() ?? "").slice(0, 5000);
 }
 
+function extractCompanyAndRole(url: string, docTitle: string): { company: string; roleTitle: string } {
+  let company = "";
+  let roleTitle = docTitle;
+
+  // ── Platform-specific selectors ──────────────────────────────────────────
+
+  // Greenhouse: h1.app-title + nearby org
+  if (/greenhouse\.io/.test(url)) {
+    const role = document.querySelector<HTMLElement>("h1.app-title, h1[data-qa='job-title'], .app__role-title")?.textContent?.trim();
+    const org = document.querySelector<HTMLElement>(".company-name, .org-name, [data-qa='company-name']")?.textContent?.trim();
+    if (role) roleTitle = role;
+    if (org) company = org;
+  }
+
+  // Lever: job title in h2, company in .main-header-logo or meta
+  if (/lever\.co/.test(url)) {
+    const role = document.querySelector<HTMLElement>("h2, .posting-headline h2")?.textContent?.trim();
+    const logoAlt = document.querySelector<HTMLImageElement>(".main-header-logo img")?.alt?.trim();
+    const metaComp = document.querySelector<HTMLMetaElement>("meta[property='og:site_name']")?.content?.trim();
+    if (role) roleTitle = role;
+    company = logoAlt || metaComp || "";
+  }
+
+  // Workday: role in breadcrumb or h1
+  if (/workday\.com|myworkday\.com/.test(url)) {
+    const role = document.querySelector<HTMLElement>(
+      "[data-automation-id='jobPostingHeader'] h2, [data-automation-id='jobPostingTitle'], .job-title"
+    )?.textContent?.trim();
+    const org = document.querySelector<HTMLElement>(
+      "[data-automation-id='companyNameText'], .company-title"
+    )?.textContent?.trim();
+    // Workday subdomains: company is often in the subdomain (company.workday.com)
+    const subdomainMatch = url.match(/https?:\/\/([^.]+)\.(?:myworkday|wd\d+\.myworkdayjobs)\.com/);
+    if (role) roleTitle = role;
+    if (org) company = org;
+    else if (subdomainMatch) company = subdomainMatch[1].replace(/-/g, " ");
+  }
+
+  // Ashby
+  if (/ashbyhq\.com/.test(url)) {
+    const role = document.querySelector<HTMLElement>("h1.job-title, h1, [class*='JobTitle']")?.textContent?.trim();
+    const org = document.querySelector<HTMLElement>("[class*='CompanyName'], [class*='company-name']")?.textContent?.trim();
+    if (role) roleTitle = role;
+    if (org) company = org;
+    // Fallback: company subdomain
+    if (!company) {
+      const sub = url.match(/https?:\/\/jobs\.ashbyhq\.com\/([^/?#]+)/);
+      if (sub) company = sub[1].replace(/-/g, " ");
+    }
+  }
+
+  // SmartRecruiters
+  if (/smartrecruiters\.com/.test(url)) {
+    const role = document.querySelector<HTMLElement>(".job-title, h1")?.textContent?.trim();
+    const org = document.querySelector<HTMLElement>(".company-name, [class*='CompanyName']")?.textContent?.trim();
+    if (role) roleTitle = role;
+    if (org) company = org;
+  }
+
+  // LinkedIn job details
+  if (/linkedin\.com/.test(url)) {
+    const role = document.querySelector<HTMLElement>(".job-details-jobs-unified-top-card__job-title, h1.topcard__title, .jobs-unified-top-card__job-title")?.textContent?.trim();
+    const org = document.querySelector<HTMLElement>(".job-details-jobs-unified-top-card__company-name a, .topcard__org-name-link, .jobs-unified-top-card__company-name a")?.textContent?.trim();
+    if (role) roleTitle = role;
+    if (org) company = org;
+  }
+
+  // Indeed job details
+  if (/indeed\.com/.test(url)) {
+    const role = document.querySelector<HTMLElement>("[data-testid='jobsearch-JobInfoHeader-title'] span, h1[data-testid='simpler-jobTitle']")?.textContent?.trim();
+    const org = document.querySelector<HTMLElement>("[data-testid='inlineHeader-companyName'] a, .jobsearch-CompanyInfoContainer a")?.textContent?.trim();
+    if (role) roleTitle = role;
+    if (org) company = org;
+  }
+
+  // ── OG meta fallback (works across many career sites) ───────────────────
+  if (!company) {
+    const ogSite = document.querySelector<HTMLMetaElement>("meta[property='og:site_name']")?.content?.trim();
+    const metaAppName = document.querySelector<HTMLMetaElement>("meta[name='application-name']")?.content?.trim();
+    company = ogSite || metaAppName || "";
+  }
+
+  // ── Title-based fallback ─────────────────────────────────────────────────
+  if (!company) {
+    // "Software Engineer at Google | Careers" → "Google"
+    const atMatch = docTitle.match(/\bat\s+([A-Z][A-Za-z0-9\s&.,'()-]+?)(?:\s*[\-–|·]|$)/);
+    if (atMatch) company = atMatch[1].trim();
+  }
+  if (!roleTitle || roleTitle === docTitle) {
+    // Use first segment of title before separator
+    const titleRole = docTitle.split(/[\-–|·]/)[0].trim();
+    if (titleRole && titleRole.length > 3) roleTitle = titleRole;
+  }
+
+  // Clean up common suffixes in company names
+  company = company.replace(/\s*[-–|·].*$/, "").replace(/\s*(careers|jobs|hiring|apply)\s*$/i, "").trim();
+
+  return { company, roleTitle };
+}
+
 function buildAndSendContext() {
   const url = window.location.href;
   const title = document.title;
@@ -371,15 +471,13 @@ function buildAndSendContext() {
   const questions = mode === "apply" ? detectQuestions() : [];
   const jdText = mode === "apply" ? extractJdText() : "";
 
-  // Extract company from URL / title
-  let company = "";
-  const atMatch = title.match(/\bat\s+([A-Z][a-zA-Z\s]+?)(?:\s*[\-–|]|$)/);
-  if (atMatch) company = atMatch[1].trim();
+  // Extract company and role using platform-specific selectors, then title fallback
+  const { company, roleTitle } = extractCompanyAndRole(url, title);
 
   const context: PageContext = {
     mode,
     company,
-    roleTitle: title,
+    roleTitle,
     jobUrl: url,
     platform: detectPlatform(url),
     detectedFields: fields,
