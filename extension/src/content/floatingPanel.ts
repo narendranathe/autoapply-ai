@@ -6,6 +6,7 @@
  */
 
 import type { DetectedField, DetectedQuestion, FieldType, QuestionCategory } from "../shared/types";
+import { initLinkedInEasyApply } from "./linkedinEasyApply";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -1476,6 +1477,8 @@ function bootstrap() {
   if (document.getElementById("__autoapply_host__")) return;
   panelInstance = new FloatingPanel();
   void panelInstance.init();
+  // P2: LinkedIn Easy Apply modal auto-fill
+  initLinkedInEasyApply();
 }
 
 // Run after DOM is ready
