@@ -7,8 +7,11 @@
 
 import type { DetectedField, DetectedQuestion, FieldType, QuestionCategory } from "../shared/types";
 import { initAshbyApply } from "./ashbyApply";
+import { initBambooHRApply } from "./bamboohrApply";
+import { initGreenhouseApply } from "./greenhouseApply";
 import { initICIMSApply } from "./icimsApply";
 import { initIndeedApply } from "./indeedApply";
+import { initJobviteApply } from "./jobviteApply";
 import { initLeverApply } from "./leverApply";
 import { initLinkedInEasyApply } from "./linkedinEasyApply";
 import { initSmartRecruitersApply } from "./smartRecruitersApply";
@@ -1510,7 +1513,7 @@ function bootstrap() {
   if (document.getElementById("__autoapply_host__")) return;
   panelInstance = new FloatingPanel();
   void panelInstance.init();
-  // P2: LinkedIn + Indeed + Workday + Ashby + SmartRecruiters + Lever + iCIMS + Taleo auto-fill
+  // P2: platform-specific autofill scripts
   initLinkedInEasyApply();
   initIndeedApply();
   initWorkdayApply();
@@ -1519,6 +1522,9 @@ function bootstrap() {
   initLeverApply();
   initICIMSApply();
   initTaleoApply();
+  initGreenhouseApply();
+  initBambooHRApply();
+  initJobviteApply();
 }
 
 // Run after DOM is ready
