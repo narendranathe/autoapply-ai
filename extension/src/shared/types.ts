@@ -25,11 +25,11 @@ export interface DetectedField {
 export type FieldType =
   | "first_name" | "last_name" | "full_name"
   | "email" | "phone"
-  | "address" | "city" | "state" | "zip"
-  | "linkedin" | "portfolio" | "website"
+  | "address" | "city" | "state" | "zip" | "country"
+  | "linkedin" | "github" | "portfolio" | "website"
   | "resume_upload" | "cover_letter_upload"
-  | "skills" | "years_experience" | "salary"
-  | "sponsorship" | "demographic"
+  | "degree" | "skills" | "years_experience" | "salary"
+  | "sponsorship" | "us_resident" | "demographic"
   | "unknown";
 
 export interface DetectedQuestion {
@@ -41,6 +41,7 @@ export interface DetectedQuestion {
 }
 
 export type QuestionCategory =
+  | "cover_letter"
   | "why_company" | "why_hire" | "about_yourself"
   | "strength" | "weakness" | "challenge" | "leadership"
   | "conflict" | "motivation" | "five_years" | "impact"

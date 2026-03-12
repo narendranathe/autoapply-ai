@@ -234,6 +234,128 @@ class KimiProvider(LLMProvider):
         return len(api_key) > 10  # Kimi keys don't have a fixed prefix
 
 
+class PerplexityProvider(LLMProvider):
+    """
+    Perplexity AI — free tier with internet-search-augmented models.
+    Default model: sonar (fast, free, web-grounded).
+    Get API key at: https://www.perplexity.ai/settings/api
+    """
+
+    def __init__(self, model: str = "sonar"):
+        self.model = model
+
+    @llm_circuit
+    async def complete(self, system_prompt: str, user_prompt: str, api_key: str) -> str:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                "https://api.perplexity.ai/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": self.model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "temperature": 0.3,
+                    "max_tokens": 2048,
+                },
+            )
+            if response.status_code == 401:
+                raise InvalidAPIKeyError("Perplexity API key is invalid or expired")
+            if response.status_code == 429:
+                raise RateLimitError("Perplexity rate limit exceeded")
+            response.raise_for_status()
+            return response.json()["choices"][0]["message"]["content"]
+
+    def validate_key_format(self, api_key: str) -> bool:
+        return api_key.startswith("pplx-") and len(api_key) > 20
+
+
+class GroqProvider(LLMProvider):
+    """
+    Groq Cloud — free tier, OpenAI-compatible.
+    Best free option for production: fast inference, no cost.
+    Default model: llama-3.3-70b-versatile (free tier).
+    Get API key at: https://console.groq.com
+    """
+
+    def __init__(self, model: str = "llama-3.3-70b-versatile"):
+        self.model = model
+
+    @llm_circuit
+    async def complete(self, system_prompt: str, user_prompt: str, api_key: str) -> str:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": self.model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "temperature": 0.3,
+                    "max_tokens": 4096,
+                },
+            )
+            if response.status_code == 401:
+                raise InvalidAPIKeyError("Groq API key is invalid or expired")
+            if response.status_code == 429:
+                raise RateLimitError("Groq rate limit exceeded")
+            response.raise_for_status()
+            return response.json()["choices"][0]["message"]["content"]
+
+    def validate_key_format(self, api_key: str) -> bool:
+        return api_key.startswith("gsk_") and len(api_key) > 20
+
+
+class GeminiProvider(LLMProvider):
+    """
+    Google Gemini — free tier via AI Studio, no credit card required.
+    Get API key at: https://aistudio.google.com
+    Default model: gemini-1.5-flash (1 500 req/day free).
+    Uses the OpenAI-compatible endpoint so no extra SDK needed.
+    """
+
+    def __init__(self, model: str = "gemini-1.5-flash"):
+        self.model = model
+
+    @llm_circuit
+    async def complete(self, system_prompt: str, user_prompt: str, api_key: str) -> str:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": self.model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "temperature": 0.2,
+                    "max_tokens": 4096,
+                },
+            )
+            if response.status_code == 400:
+                raise InvalidAPIKeyError("Gemini API key is invalid")
+            if response.status_code == 429:
+                raise RateLimitError("Gemini rate limit exceeded")
+            response.raise_for_status()
+            return response.json()["choices"][0]["message"]["content"]
+
+    def validate_key_format(self, api_key: str) -> bool:
+        return api_key.startswith("AIza") and len(api_key) > 20
+
+
 class OllamaProvider(LLMProvider):
     """
     Ollama local LLM provider — no API key required.
@@ -399,6 +521,9 @@ class LLMUnavailableError(Exception):
 PROVIDERS: dict[str, LLMProvider] = {
     "anthropic": AnthropicProvider(),
     "openai": OpenAIProvider(),
+    "gemini": GeminiProvider(model="gemini-1.5-flash"),
+    "groq": GroqProvider(model="llama-3.3-70b-versatile"),
+    "perplexity": PerplexityProvider(model="sonar"),
     "kimi": KimiProvider(),
     "ollama": OllamaProvider(model="llama3.1:8b"),
     "fallback": KeywordFallback(),

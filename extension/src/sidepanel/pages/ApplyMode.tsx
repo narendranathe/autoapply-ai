@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import type { ATSScoreResult, PageContext, ResumeCard } from "../../shared/types";
-import { vaultApi, workHistoryApi, type RetrieveResponse, type SimilarAnswer } from "../../shared/api";
+import { applicationsApi, vaultApi, workHistoryApi, type RetrieveResponse, type SimilarAnswer, type TrackedApplication } from "../../shared/api";
 import ATSScoreBar from "../components/ATSScoreBar";
 import ResumeCardComponent from "../components/ResumeCard";
 
@@ -46,8 +46,11 @@ interface UserProfile {
   city?: string;
   state?: string;
   zip?: string;
+  country?: string;
   linkedinUrl?: string;
+  githubUrl?: string;
   portfolioUrl?: string;
+  degree?: string;
   yearsExperience?: string;
   sponsorship?: string;
   salary?: string;
@@ -55,6 +58,7 @@ interface UserProfile {
 
 function getProfileValue(fieldType: string, profile: UserProfile | null): string {
   if (!profile) return "";
+  const isUS = !profile.country || profile.country.toLowerCase().includes("united states") || profile.country.toLowerCase() === "us";
   const map: Record<string, string | undefined> = {
     first_name: profile.firstName,
     last_name: profile.lastName,
@@ -65,9 +69,13 @@ function getProfileValue(fieldType: string, profile: UserProfile | null): string
     city: profile.city,
     state: profile.state,
     zip: profile.zip,
+    country: profile.country || "United States",
+    us_resident: isUS ? "Yes" : "No",
     linkedin: profile.linkedinUrl,
+    github: profile.githubUrl,
     portfolio: profile.portfolioUrl,
     website: profile.portfolioUrl,
+    degree: profile.degree,
     years_experience: profile.yearsExperience,
     salary: profile.salary,
     sponsorship: profile.sponsorship,
@@ -86,22 +94,56 @@ export default function ApplyMode({ context }: Props) {
   const [generatingAnswer, setGeneratingAnswer] = useState<string | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [workHistoryText, setWorkHistoryText] = useState<string>("");
+  const [providers, setProviders] = useState<Array<{ name: string; apiKey: string; model?: string }>>([]);
+  const [providersLoaded, setProvidersLoaded] = useState(false);
+  const [draftProviders, setDraftProviders] = useState<Record<string, string[]>>({});
   // answerId is set after saveAnswer — needed to record feedback
   const [savedAnswerIds, setSavedAnswerIds] = useState<Record<string, string>>({});
+  const [generationErrors, setGenerationErrors] = useState<Record<string, string>>({});
   // "From Memory" similar answers per question
   const [memoryAnswers, setMemoryAnswers] = useState<Record<string, SimilarAnswer[]>>({});
+  // C3: edited answer text — tracks live edits to LLM drafts before saving
+  const [editedTexts, setEditedTexts] = useState<Record<string, string>>({});
+  // C2: resume upload state
+  const [uploadError, setUploadError] = useState<string>("");
+  const [uploadSuccess, setUploadSuccess] = useState<string>("");
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  // C5/C6: application tracking
+  const [trackedAppId, setTrackedAppId] = useState<string | null>(null);
+  const [pastApplications, setPastApplications] = useState<TrackedApplication[]>([]);
+
+  const PROVIDER_RANK: Record<string, number> = { anthropic: 1, openai: 2, gemini: 3, groq: 4, perplexity: 5, kimi: 6 };
+  const PROVIDER_MODELS: Record<string, string> = { anthropic: "claude-sonnet-4-6", openai: "gpt-4o", gemini: "gemini-1.5-flash", groq: "llama-3.3-70b-versatile", perplexity: "sonar", kimi: "moonshot-v1-32k" };
+
+  function buildProviderList(configs: Record<string, { enabled?: boolean; apiKey: string; model?: string }>) {
+    return Object.entries(configs)
+      .filter(([, cfg]) => !!cfg.apiKey)   // enabled = has a key, full stop
+      .map(([name, cfg]) => ({ name, apiKey: cfg.apiKey, model: cfg.model || PROVIDER_MODELS[name] || "" }))
+      .sort((a, b) => (PROVIDER_RANK[a.name] ?? 50) - (PROVIDER_RANK[b.name] ?? 50));
+  }
+
+  // Read providers fresh from storage every time — bypasses all React state race conditions
+  async function getFreshProviders(): Promise<Array<{ name: string; apiKey: string; model: string }>> {
+    return new Promise((resolve) => {
+      chrome.storage.local.get("providerConfigs", (data) => {
+        if (!data.providerConfigs) { resolve([]); return; }
+        resolve(buildProviderList(data.providerConfigs as Record<string, { enabled?: boolean; apiKey: string; model?: string }>));
+      });
+    });
+  }
 
   useEffect(() => {
-    // Load profile on mount
-    chrome.storage.local.get(["profile"], (data) => {
+    chrome.storage.local.get(["profile", "providerConfigs"], (data) => {
       if (data.profile) setProfile(data.profile as UserProfile);
+      if (data.providerConfigs) setProviders(buildProviderList(data.providerConfigs as Record<string, { enabled: boolean; apiKey: string; model: string }>));
+      setProvidersLoaded(true);
     });
 
-    // Re-load whenever the user saves profile in Options
     const onChanged = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
-      if (area === "local" && changes.profile?.newValue) {
-        setProfile(changes.profile.newValue as UserProfile);
-      }
+      if (area !== "local") return;
+      if (changes.profile?.newValue) setProfile(changes.profile.newValue as UserProfile);
+      if (changes.providerConfigs?.newValue) setProviders(buildProviderList(changes.providerConfigs.newValue as Record<string, { enabled: boolean; apiKey: string; model: string }>));
     };
     chrome.storage.onChanged.addListener(onChanged);
     return () => chrome.storage.onChanged.removeListener(onChanged);
@@ -130,6 +172,37 @@ export default function ApplyMode({ context }: Props) {
       .finally(() => setLoading(false));
   }, [context.company]);
 
+  // C5: Auto-track this application visit (upsert — idempotent)
+  useEffect(() => {
+    if (!context.company) return;
+    applicationsApi
+      .track({
+        companyName: context.company,
+        roleTitle: context.roleTitle,
+        jobUrl: context.jobUrl,
+        platform: context.platform,
+      })
+      .then((res) => {
+        setTrackedAppId(res.application_id);
+      })
+      .catch(() => {}); // non-blocking — tracking failure must never disrupt the UX
+  }, [context.company, context.jobUrl]);
+
+  // C6: Fetch past applications for this company to show the "already applied" indicator
+  useEffect(() => {
+    if (!context.company) return;
+    applicationsApi
+      .list(context.company)
+      .then((res) => {
+        // Exclude the current visit record; show previous applied/interview/offer records
+        const meaningful = res.items.filter(
+          (a) => ["applied", "tailored", "interview", "offer", "rejected"].includes(a.status)
+        );
+        setPastApplications(meaningful);
+      })
+      .catch(() => {});
+  }, [context.company]);
+
   // Fetch "From Memory" similar answers whenever questions change
   useEffect(() => {
     if (context.openQuestions.length === 0) return;
@@ -144,6 +217,56 @@ export default function ApplyMode({ context }: Props) {
         .catch(() => {}); // silently fail — no history yet
     });
   }, [context.openQuestions]);
+
+  // C2: Upload a resume file from the sidepanel
+  const handleResumeUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!e.target.files) return;
+    // Reset input so same file can be re-selected after error
+    e.target.value = "";
+    if (!file) return;
+
+    const ALLOWED = ["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/x-tex", "text/plain"];
+    const ALLOWED_EXT = /\.(pdf|docx|tex|txt)$/i;
+    if (!ALLOWED.includes(file.type) && !ALLOWED_EXT.test(file.name)) {
+      setUploadError("Unsupported file type. Please upload a PDF, DOCX, or .tex file.");
+      return;
+    }
+    const MAX_MB = 5;
+    if (file.size > MAX_MB * 1024 * 1024) {
+      setUploadError(`File too large. Maximum size is ${MAX_MB} MB.`);
+      return;
+    }
+
+    setUploading(true);
+    setUploadError("");
+    setUploadSuccess("");
+    try {
+      const res = await vaultApi.uploadResume({
+        file,
+        targetCompany: context.company || undefined,
+        targetRole: context.roleTitle || undefined,
+      });
+      setUploadSuccess(`Uploaded "${res.filename}" (${res.bullet_count} bullets detected)`);
+      // Refresh resume list
+      const updated = await vaultApi.retrieve(context.company);
+      setResumes(updated.company_history ?? []);
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : "Upload failed. Try again.");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  // C2: Delete a resume from the vault
+  const handleResumeDelete = async (resumeId: string) => {
+    try {
+      await vaultApi.deleteResume(resumeId);
+      setResumes((prev) => prev.filter((r) => r.resumeId !== resumeId));
+    } catch {
+      // Silently fail — resume still shows
+    }
+  };
 
   const handleFillAll = () => {
     context.detectedFields.forEach((f) => {
@@ -164,11 +287,22 @@ export default function ApplyMode({ context }: Props) {
   };
 
   const handleGenerateAnswers = async (questionId: string, questionText: string, category: string, isRegenerate = false) => {
-    // If regenerating an existing saved answer, record that feedback
-    if (isRegenerate && savedAnswerIds[questionId]) {
-      vaultApi.recordFeedback({ answerId: savedAnswerIds[questionId], feedback: "regenerated" }).catch(() => {});
+    // Read providers directly from storage — never relies on potentially-stale React state
+    const freshProviders = await getFreshProviders();
+    if (freshProviders.length === 0) {
+      setGenerationErrors((prev) => ({ ...prev, [questionId]: "No API key found. Open Settings → enter any Groq or Gemini key → Save LLM Settings." }));
+      return;
+    }
+    if (isRegenerate) {
+      if (savedAnswerIds[questionId]) {
+        vaultApi.recordFeedback({ answerId: savedAnswerIds[questionId], feedback: "regenerated" }).catch(() => {});
+      }
+      setAnswerDrafts((prev) => { const n = { ...prev }; delete n[questionId]; return n; });
+      setDraftProviders((prev) => { const n = { ...prev }; delete n[questionId]; return n; });
+      setEditedTexts((prev) => { const n = { ...prev }; delete n[questionId]; return n; });
     }
     setGeneratingAnswer(questionId);
+    setGenerationErrors((prev) => { const n = { ...prev }; delete n[questionId]; return n; });
     try {
       const res = await vaultApi.generateAnswers({
         questionText,
@@ -177,11 +311,24 @@ export default function ApplyMode({ context }: Props) {
         roleTitle: context.roleTitle,
         jdText: "",
         workHistoryText,
+        providers: freshProviders,
       });
+      if (!res.drafts?.length) {
+        setGenerationErrors((prev) => ({ ...prev, [questionId]: "All providers failed — check your API keys in Settings." }));
+        return;
+      }
       setAnswerDrafts((prev) => ({ ...prev, [questionId]: res.drafts }));
       setSelectedAnswers((prev) => ({ ...prev, [questionId]: 0 }));
+      // C3: pre-fill editor with first draft
+      setEditedTexts((prev) => ({ ...prev, [questionId]: res.drafts[0] ?? "" }));
+      if (res.draft_providers?.length) {
+        setDraftProviders((prev) => ({ ...prev, [questionId]: res.draft_providers! }));
+      } else {
+        setGenerationErrors((prev) => ({ ...prev, [questionId]: "⚠ LLM fallback used — showing placeholder answers. Check your API keys." }));
+      }
     } catch (e) {
-      console.error(e);
+      const msg = e instanceof Error ? e.message : "Generation failed";
+      setGenerationErrors((prev) => ({ ...prev, [questionId]: msg }));
     } finally {
       setGeneratingAnswer(null);
     }
@@ -189,22 +336,31 @@ export default function ApplyMode({ context }: Props) {
 
   const handleSaveAnswer = async (questionId: string, questionText: string, category: string) => {
     const idx = selectedAnswers[questionId] ?? 0;
-    const text = answerDrafts[questionId]?.[idx];
-    if (!text) return;
+    const originalDraft = answerDrafts[questionId]?.[idx] ?? "";
+    // C3: use the edited version if the user changed the text
+    const finalText = (editedTexts[questionId] ?? originalDraft).trim();
+    if (!finalText) return;
+
+    const wasEdited = finalText !== originalDraft.trim();
+
     setSavingAnswer(questionId);
     try {
       const saved = await vaultApi.saveAnswer({
         questionText,
         questionCategory: category,
-        answerText: text,
+        answerText: finalText,
         companyName: context.company,
         roleTitle: context.roleTitle,
+        llmProviderUsed: draftProviders[questionId]?.[0],
       });
-      // Store answer_id so we can record feedback later
       setSavedAnswerIds((prev) => ({ ...prev, [questionId]: saved.answer_id }));
-      // Record immediate "used_as_is" feedback
-      vaultApi.recordFeedback({ answerId: saved.answer_id, feedback: "used_as_is" }).catch(() => {});
-      chrome.runtime.sendMessage({ type: "FILL_ANSWER", payload: { questionId, text } });
+      // Record appropriate feedback — edited text signals lower confidence than used-as-is
+      vaultApi.recordFeedback({
+        answerId: saved.answer_id,
+        feedback: wasEdited ? "edited" : "used_as_is",
+        editedAnswer: wasEdited ? finalText : undefined,
+      }).catch(() => {});
+      chrome.runtime.sendMessage({ type: "FILL_ANSWER", payload: { questionId, text: finalText } });
     } finally {
       setSavingAnswer(null);
     }
@@ -223,6 +379,69 @@ export default function ApplyMode({ context }: Props) {
     }).catch(() => {});
     chrome.runtime.sendMessage({ type: "FILL_ANSWER", payload: { questionId, text: memory.answer_text } });
   };
+
+  // Keep a ref to the latest providers so auto-generate always uses fresh values
+  const providersRef = React.useRef(providers);
+  providersRef.current = providers;
+  const workHistoryRef = React.useRef(workHistoryText);
+  workHistoryRef.current = workHistoryText;
+
+  // Track which question IDs have been auto-triggered so we only fire once per question
+  const autoTriggeredRef = React.useRef<Set<string>>(new Set());
+
+  // Auto-generate when Q&A tab is active and new questions appear
+  useEffect(() => {
+    if (tab !== "questions") return;
+    if (context.openQuestions.length === 0) return;
+    const currentWorkHistory = workHistoryRef.current;
+
+    context.openQuestions.forEach((q) => {
+      if (autoTriggeredRef.current.has(q.questionId)) return;
+      autoTriggeredRef.current.add(q.questionId);
+
+      setGeneratingAnswer(q.questionId);
+      setGenerationErrors((prev) => { const n = { ...prev }; delete n[q.questionId]; return n; });
+
+      // Read providers fresh from storage — no React state dependency
+      getFreshProviders().then((freshProviders) => {
+        if (freshProviders.length === 0) {
+          autoTriggeredRef.current.delete(q.questionId); // allow retry once user adds a key
+          setGeneratingAnswer((cur) => cur === q.questionId ? null : cur);
+          setGenerationErrors((prev) => ({ ...prev, [q.questionId]: "No API key found. Open Settings → enter any Groq or Gemini key → Save LLM Settings." }));
+          return;
+        }
+        return vaultApi.generateAnswers({
+          questionText: q.questionText,
+          questionCategory: q.category,
+          companyName: context.company,
+          roleTitle: context.roleTitle,
+          jdText: "",
+          workHistoryText: currentWorkHistory,
+          providers: freshProviders,
+        }).then((res) => {
+          if (!res.drafts?.length) {
+            setGenerationErrors((prev) => ({ ...prev, [q.questionId]: "All providers failed — check your API keys in Settings." }));
+            return;
+          }
+          setAnswerDrafts((prev) => ({ ...prev, [q.questionId]: res.drafts }));
+          setSelectedAnswers((prev) => ({ ...prev, [q.questionId]: 0 }));
+          // C3: pre-fill editor with first draft
+          setEditedTexts((prev) => ({ ...prev, [q.questionId]: res.drafts[0] ?? "" }));
+          if (res.draft_providers?.length) {
+            setDraftProviders((prev) => ({ ...prev, [q.questionId]: res.draft_providers! }));
+          } else {
+            setGenerationErrors((prev) => ({ ...prev, [q.questionId]: "⚠ LLM fallback used — placeholder answers shown. Check your API keys." }));
+          }
+        }).catch((e) => {
+          autoTriggeredRef.current.delete(q.questionId);
+          setGenerationErrors((prev) => ({ ...prev, [q.questionId]: e instanceof Error ? e.message : "Generation failed" }));
+        }).finally(() => {
+          setGeneratingAnswer((cur) => cur === q.questionId ? null : cur);
+        });
+      });
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, context.openQuestions]);
 
   const tabs: Array<{ key: Tab; label: string; count: number }> = [
     { key: "resumes", label: "Resumes", count: resumes.length },
@@ -270,6 +489,27 @@ export default function ApplyMode({ context }: Props) {
           </div>
         )}
       </div>
+
+      {/* C6: Already applied indicator */}
+      {pastApplications.length > 0 && (
+        <div style={{
+          padding: "6px 14px",
+          background: "#071a12",
+          borderBottom: "1px solid #064e3b",
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          flexShrink: 0,
+        }}>
+          <span style={{ fontSize: 10 }}>✓</span>
+          <span style={{ fontSize: 11, color: "#34d399" }}>
+            Applied here before ·{" "}
+            {pastApplications[0].role_title}{" "}
+            · {new Date(pastApplications[0].created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+            {pastApplications.length > 1 && ` (+${pastApplications.length - 1} more)`}
+          </span>
+        </div>
+      )}
 
       {/* ATS bar (only when score exists) */}
       {ats && (
@@ -368,10 +608,41 @@ export default function ApplyMode({ context }: Props) {
               </Section>
             )}
 
+            {/* C2: Resume upload */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#475569", paddingLeft: 2 }}>
+                Upload Resume
+              </div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".pdf,.docx,.tex,.txt"
+                style={{ display: "none" }}
+                onChange={handleResumeUpload}
+              />
+              <button
+                onClick={() => { setUploadError(""); setUploadSuccess(""); fileInputRef.current?.click(); }}
+                disabled={uploading}
+                style={{ ...btnStyle("ghost", uploading), width: "100%", textAlign: "center" }}
+              >
+                {uploading ? "Uploading…" : "⬆ Upload PDF / DOCX / .tex"}
+              </button>
+              {uploadError && (
+                <div style={{ fontSize: 10, color: "#f87171", padding: "4px 8px", background: "#1a0808", borderRadius: 5, border: "1px solid #7f1d1d" }}>
+                  {uploadError}
+                </div>
+              )}
+              {uploadSuccess && (
+                <div style={{ fontSize: 10, color: "#6ee7b7", padding: "4px 8px", background: "#071a12", borderRadius: 5, border: "1px solid #064e3b" }}>
+                  ✓ {uploadSuccess}
+                </div>
+              )}
+            </div>
+
             <Section label={`Past Resumes · ${context.company}`}>
               {loading && <LoadingRow />}
               {!loading && resumes.length === 0 && (
-                <EmptyState message="No past resumes for this company yet." hint="Generate one to get started." />
+                <EmptyState message="No past resumes for this company yet." hint="Upload one above or generate a tailored resume." />
               )}
               {resumes.map((r) => (
                 <ResumeCardComponent key={r.resumeId} resume={r} onAttach={() => handleAttach(r)} />
@@ -455,6 +726,22 @@ export default function ApplyMode({ context }: Props) {
         {/* Q&A TAB */}
         {tab === "questions" && (
           <Section label="Open-Ended Questions">
+            {/* Provider status — uses React state for display only, actual generation reads storage directly */}
+            {providersLoaded && providers.length === 0 && (
+              <div style={{ padding: "8px 12px", background: "#1a0d00", border: "1px solid #92400e", borderRadius: 8, fontSize: 11, color: "#fbbf24", marginBottom: 4 }}>
+                <strong>No API key found.</strong> Open <strong>Settings</strong> (right-click extension → Options), paste a Groq or Gemini key, click <strong>Save LLM Settings</strong>.
+              </div>
+            )}
+            {providers.length > 0 && (
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, fontSize: 10, color: "#4b5563" }}>
+                <span>Using:</span>
+                {providers.map((p) => (
+                  <span key={p.name} style={{ background: "#071a12", border: "1px solid #064e3b", color: "#6ee7b7", borderRadius: 4, padding: "1px 6px", fontWeight: 700 }}>
+                    {p.name.charAt(0).toUpperCase() + p.name.slice(1)}
+                  </span>
+                ))}
+              </div>
+            )}
             {context.openQuestions.length === 0 ? (
               <EmptyState message="No open questions detected." hint="Questions appear on forms with text areas." />
             ) : (
@@ -518,21 +805,37 @@ export default function ApplyMode({ context }: Props) {
                       </div>
                     )}
 
-                    {!drafts ? (
-                      <button
-                        onClick={() => handleGenerateAnswers(q.questionId, q.questionText, q.category)}
-                        disabled={isGenerating}
-                        style={btnStyle("generate", isGenerating)}
-                      >
-                        {isGenerating ? "Generating…" : "✦ Generate 3 Drafts"}
-                      </button>
+                    {!drafts?.length ? (
+                      <>
+                        <button
+                          onClick={() => handleGenerateAnswers(q.questionId, q.questionText, q.category)}
+                          disabled={isGenerating}
+                          style={btnStyle("generate", isGenerating)}
+                        >
+                          {isGenerating ? "Generating…" : "✦ Generate 3 Drafts"}
+                        </button>
+                        {generationErrors[q.questionId] && (
+                          <div style={{ fontSize: 10, color: "#f87171", marginTop: 4, padding: "4px 6px", background: "#1a0808", borderRadius: 5, border: "1px solid #7f1d1d" }}>
+                            {generationErrors[q.questionId]}
+                          </div>
+                        )}
+                      </>
                     ) : (
                       <>
-                        <div style={{ display: "flex", gap: 4 }}>
+                        <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}>
+                          {draftProviders[q.questionId]?.[0] && (
+                            <span style={{ fontSize: 10, color: "#6ee7b7", background: "#071a12", border: "1px solid #064e3b", borderRadius: 4, padding: "1px 7px", fontWeight: 600 }}>
+                              via {draftProviders[q.questionId][0].charAt(0).toUpperCase() + draftProviders[q.questionId][0].slice(1)}
+                            </span>
+                          )}
                           {drafts.map((_, i) => (
                             <button
                               key={i}
-                              onClick={() => setSelectedAnswers((p) => ({ ...p, [q.questionId]: i }))}
+                              onClick={() => {
+                                setSelectedAnswers((p) => ({ ...p, [q.questionId]: i }));
+                                // C3: sync editor to the newly selected draft
+                                setEditedTexts((p) => ({ ...p, [q.questionId]: drafts[i] }));
+                              }}
                               style={{
                                 padding: "3px 10px",
                                 borderRadius: 6,
@@ -544,30 +847,49 @@ export default function ApplyMode({ context }: Props) {
                                 color: selectedIdx === i ? "#fff" : "#64748b",
                               }}
                             >
-                              {i + 1}
+                              Draft {i + 1}
                             </button>
                           ))}
+                          {/* C3: edited indicator */}
+                          {editedTexts[q.questionId] != null &&
+                           editedTexts[q.questionId] !== drafts[selectedIdx] && (
+                            <span style={{ fontSize: 9, color: "#fbbf24", background: "#1a1200", border: "1px solid #78350f", borderRadius: 4, padding: "1px 6px", fontWeight: 700 }}>
+                              edited
+                            </span>
+                          )}
                         </div>
-                        <div style={{
-                          fontSize: 12,
-                          color: "#d1d5db",
-                          lineHeight: 1.6,
-                          background: "#0a0a14",
-                          borderRadius: 8,
-                          padding: "8px 10px",
-                          border: "1px solid #1f1f38",
-                          maxHeight: 140,
-                          overflowY: "auto",
-                        }}>
-                          {drafts[selectedIdx]}
-                        </div>
+                        {/* C3: editable textarea — user can refine before using */}
+                        <textarea
+                          value={editedTexts[q.questionId] ?? drafts[selectedIdx]}
+                          onChange={(e) => setEditedTexts((p) => ({ ...p, [q.questionId]: e.target.value }))}
+                          rows={6}
+                          style={{
+                            width: "100%",
+                            boxSizing: "border-box",
+                            fontSize: 12,
+                            color: "#d1d5db",
+                            lineHeight: 1.6,
+                            background: "#0a0a14",
+                            borderRadius: 8,
+                            padding: "8px 10px",
+                            border: "1px solid #1f1f38",
+                            resize: "vertical",
+                            fontFamily: "system-ui, sans-serif",
+                            outline: "none",
+                          }}
+                        />
+                        {generationErrors[q.questionId] && (
+                          <div style={{ fontSize: 10, color: "#f87171", padding: "4px 6px", background: "#1a0808", borderRadius: 5, border: "1px solid #7f1d1d" }}>
+                            {generationErrors[q.questionId]}
+                          </div>
+                        )}
                         <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
                           <button
                             onClick={() => handleGenerateAnswers(q.questionId, q.questionText, q.category, true)}
                             disabled={isGenerating}
                             style={btnStyle("ghost", isGenerating)}
                           >
-                            Regenerate
+                            {isGenerating ? "Regenerating…" : "Regenerate"}
                           </button>
                           <button
                             onClick={() => handleSaveAnswer(q.questionId, q.questionText, q.category)}

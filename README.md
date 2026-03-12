@@ -653,3 +653,69 @@ git merge feat/phase-4-vault-extension
 git push origin main
 # GitHub Actions → CI passes → flyctl deploy auto-runs
 ```
+
+---
+
+## Phase 7 — Q&A Generation Fix + LLM Provider Cascade (2026-03-12)
+
+### What Was Broken
+
+**Q&A tab showed same answer 3 times (or nothing)**
+Root cause chain:
+1. `generate_answer_drafts_cascade()` and `providers_json` handling existed only in local code — never deployed. Production backend ignored the provider list and fell back to rule-based generation silently.
+2. `_parse_answer_drafts()` padded with `drafts.append(drafts[0])` when LLM used non-standard formatting → 3 identical copies.
+3. `_rule_based_answer_drafts()` itself returned the same string 3 times per category — the fallback was also broken.
+
+**"Saved — no providers enabled (fallback mode)"**
+The options page stored `{ enabled: false, apiKey: "..." }` because it required users to check a checkbox AND enter a key. Users entered keys but missed the checkbox. `buildProviderList` filtered by `cfg.enabled` → empty array → fallback every time.
+
+**Wrong fields appearing in Q&A tab**
+"LinkedIn Profile", "GitHub Profile", "First Name*" were treated as essay questions because `detectQuestions()` included any textarea with label ≥ 10 chars.
+
+### Fixes Applied
+
+**Backend (`resume_generator.py`, `vault.py`)**
+- `generate_answer_drafts_cascade()`: sorts providers by rank (anthropic=1 → openai=2 → gemini=3 → groq=4 → perplexity=5 → kimi=6), tries each in order, first success generates all 3 drafts
+- `_call_gemini()`: OpenAI-compatible endpoint (`generativelanguage.googleapis.com/v1beta/openai/...`)
+- `_parse_answer_drafts()`: multi-strategy — DRAFT_N markers → paragraph split → whole response fallback
+- `_rule_based_answer_drafts()`: now returns 3 genuinely distinct drafts per category
+- `providers_json` Form field on `/vault/generate/answers` — extension sends provider configs, backend uses them
+- **Critical: deployed with `fly deploy --remote-only`** — nothing worked until this step
+
+**Extension (`options.ts`)**
+- `readProviderUI()`: `enabled: !!apiKey` — enabled flag now always mirrors key presence, no checkbox dependency
+- `loadProviderUI()`: `checkbox.checked = !!cfg.apiKey` — checkbox decorative only
+- `wireProviderAutoEnable()`: checkbox auto-checks/unchecks as user types key
+
+**Extension (`ApplyMode.tsx`)**
+- `buildProviderList()`: filters by `!!cfg.apiKey` (not `cfg.enabled`)
+- `getFreshProviders()`: reads `chrome.storage.local` directly at generate time — bypasses React state timing entirely
+- `handleGenerateAnswers` and auto-generate `useEffect` both call `getFreshProviders()` first
+- Provider status bar shows active providers; warning when none configured
+- `NON_QUESTION_PATTERNS` filter prevents URL/name fields from appearing in Q&A tab
+
+**Extension (`detector.ts`)**
+- `NON_QUESTION_PATTERNS`: filters linkedin, github, portfolio, website, url, first/last/full name, email, phone, etc.
+- `isEssayQuestion()`: label must be ≥ 15 chars AND not match any NON_QUESTION_PATTERN
+- URL/profile fields now handled by Fields tab (auto-fill), not Q&A tab (LLM generation)
+
+### Design Lesson
+The `enabled` boolean on `ProviderConfig` was a design flaw. Having an API key = being enabled. These two concepts should never have been stored independently. The checkbox in the UI should be derived from key presence, not stored separately.
+
+### Current State After Phase 7
+
+| Component | Status |
+|-----------|--------|
+| Q&A generation | Working — Groq/Gemini/Anthropic cascade producing 3 distinct answers |
+| Provider config | Fixed — entering API key auto-enables provider, no checkbox required |
+| Question detection | Fixed — URL/name/contact fields filtered from Q&A tab |
+| Draft parsing | Robust — multi-strategy fallback, no more identical copies |
+| Backend | Deployed on Fly.io with cascade + Gemini support |
+| Extension build | Clean |
+
+### RL / Answer Memory Layer
+
+`ApplicationAnswer.reward_score` is computed from user action:
+- `used_as_is` → 1.0 | `edited` → 0.8 | `regenerated` → 0.2 | `skipped` → 0.0
+
+High-reward past answers (≥ 0.8) are injected as style examples into future LLM prompts for the same company/role context. This creates a lightweight personalization loop without any model fine-tuning infrastructure.

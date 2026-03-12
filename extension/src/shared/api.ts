@@ -111,6 +111,7 @@ export interface RetrieveResponse {
 
 export interface AnswerResponse {
   drafts: string[];
+  draft_providers?: string[];   // parallel to drafts — which LLM generated each
   previously_used: string | null;
   previously_used_at: string | null;
   question_category: string;
@@ -191,7 +192,7 @@ export const vaultApi = {
     return post("/vault/ats-score", fd);
   },
 
-  /** Generate answer drafts for an open-ended question */
+  /** Generate answer drafts — all enabled providers run in parallel */
   generateAnswers(params: {
     questionText: string;
     questionCategory: string;
@@ -199,8 +200,11 @@ export const vaultApi = {
     roleTitle: string;
     jdText: string;
     workHistoryText: string;
+    providers?: Array<{ name: string; apiKey: string; model?: string }>;
+    // legacy single-provider fallback
     llmProvider?: string;
     llmApiKey?: string;
+    ollamaModel?: string;
   }): Promise<AnswerResponse> {
     const fd = new FormData();
     fd.append("question_text", params.questionText);
@@ -209,8 +213,15 @@ export const vaultApi = {
     fd.append("role_title", params.roleTitle);
     fd.append("jd_text", params.jdText);
     fd.append("work_history_text", params.workHistoryText);
-    if (params.llmProvider) fd.append("llm_provider", params.llmProvider);
-    if (params.llmApiKey) fd.append("llm_api_key", params.llmApiKey);
+    if (params.providers && params.providers.length > 0) {
+      fd.append("providers_json", JSON.stringify(
+        params.providers.map((p) => ({ name: p.name, api_key: p.apiKey, model: p.model ?? "" }))
+      ));
+    } else {
+      if (params.llmProvider) fd.append("llm_provider", params.llmProvider);
+      if (params.llmApiKey) fd.append("llm_api_key", params.llmApiKey);
+      if (params.ollamaModel) fd.append("ollama_model", params.ollamaModel);
+    }
     return post("/vault/generate/answers", fd);
   },
 
@@ -272,6 +283,84 @@ export const vaultApi = {
   listResumes(company?: string): Promise<ResumeListResponse> {
     return get("/vault/resumes", company ? { company } : undefined);
   },
+
+  /** Upload a resume file to the vault from the sidepanel */
+  uploadResume(params: {
+    file: File;
+    targetCompany?: string;
+    targetRole?: string;
+    isBaseTemplate?: boolean;
+  }): Promise<{
+    resume_id: string;
+    filename: string;
+    file_type: string;
+    bullet_count: number;
+    skills_detected: string[];
+    version_tag: string | null;
+    parse_warnings: string[];
+  }> {
+    const fd = new FormData();
+    fd.append("file", params.file, params.file.name);
+    if (params.targetCompany) fd.append("target_company", params.targetCompany);
+    if (params.targetRole) fd.append("target_role", params.targetRole);
+    fd.append("is_base_template", params.isBaseTemplate ? "true" : "false");
+    return post("/vault/upload", fd);
+  },
+
+  /** Delete a resume from the vault */
+  deleteResume(resumeId: string): Promise<void> {
+    return ensureInit().then(() =>
+      fetch(`${getApiBase()}/vault/resumes/${resumeId}`, {
+        method: "DELETE",
+        headers: authHeaders(),
+      }).then(() => undefined)
+    );
+  },
+};
+
+// ── Application Tracking API ────────────────────────────────────────────────
+
+export interface TrackedApplication {
+  id: string;
+  company_name: string;
+  role_title: string;
+  job_url: string | null;
+  platform: string | null;
+  status: string;
+  created_at: string;
+  similarity_score: number | null;
+  changes_summary: string | null;
+  rewrite_strategy: string | null;
+}
+
+export const applicationsApi = {
+  /**
+   * Upsert a lightweight "discovered" record when Apply Mode activates.
+   * Idempotent — safe to call on every page load.
+   */
+  track(params: {
+    companyName: string;
+    roleTitle: string;
+    jobUrl?: string;
+    platform?: string;
+  }): Promise<{ application_id: string; status: string; created: boolean }> {
+    return post("/applications/track", {
+      company_name: params.companyName,
+      role_title: params.roleTitle,
+      job_url: params.jobUrl ?? null,
+      platform: params.platform ?? null,
+    });
+  },
+
+  /** List all applications, optionally filtered by company */
+  list(company?: string): Promise<{ items: TrackedApplication[]; total: number }> {
+    return get("/applications", company ? { company } : undefined);
+  },
+
+  /** Update status of an application */
+  updateStatus(applicationId: string, status: string): Promise<void> {
+    return post(`/applications/${applicationId}`, { status } as Record<string, unknown>);
+  },
 };
 
 // ── Work History types ──────────────────────────────────────────────────────
@@ -328,7 +417,7 @@ export const workHistoryApi = {
   },
 
   create(entry: WorkHistoryEntryIn): Promise<{ id: string; created: boolean }> {
-    return post("/work-history", entry);
+    return post("/work-history", entry as unknown as Record<string, unknown>);
   },
 
   async delete(entryId: string): Promise<void> {

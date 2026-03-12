@@ -141,12 +141,42 @@ chrome.runtime.onMessage.addListener(
       }
 
       case "PAGE_CONTEXT_UPDATE": {
-        // Content script sends enriched context (detected fields, questions)
+        // Content script sends enriched context (detected fields, questions).
+        // If the message comes from a sub-frame (frameId != 0), MERGE its fields
+        // and questions into the existing top-level context so Workday iframes
+        // contribute their form inputs without overwriting the company/role detected
+        // from the main frame.
         if (sender.tab?.id) {
-          tabContexts.set(sender.tab.id, message.payload);
+          const tabId = sender.tab.id;
+          const isSubFrame = (sender.frameId ?? 0) !== 0;
+          const incoming: PageContext = message.payload;
+
+          if (isSubFrame) {
+            const existing = tabContexts.get(tabId);
+            if (existing) {
+              // Merge: deduplicate by fieldId / questionId
+              const existingFieldIds = new Set(existing.detectedFields.map((f) => f.fieldId));
+              const existingQIds = new Set(existing.openQuestions.map((q) => q.questionId));
+              const newFields = incoming.detectedFields.filter((f) => !existingFieldIds.has(f.fieldId));
+              const newQuestions = incoming.openQuestions.filter((q) => !existingQIds.has(q.questionId));
+              const merged: PageContext = {
+                ...existing,
+                detectedFields: [...existing.detectedFields, ...newFields],
+                openQuestions: [...existing.openQuestions, ...newQuestions],
+              };
+              tabContexts.set(tabId, merged);
+              chrome.runtime.sendMessage<Message>({ type: "PAGE_CONTEXT_UPDATE", payload: merged }).catch(() => {});
+            } else {
+              // No existing context yet — treat sub-frame as primary
+              tabContexts.set(tabId, incoming);
+              chrome.runtime.sendMessage(message).catch(() => {});
+            }
+          } else {
+            // Main frame: replace wholesale (authoritative company/role/mode)
+            tabContexts.set(tabId, incoming);
+            chrome.runtime.sendMessage(message).catch(() => {});
+          }
         }
-        // Relay to sidepanel
-        chrome.runtime.sendMessage(message).catch(() => {});
         break;
       }
 

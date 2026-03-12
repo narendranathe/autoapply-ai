@@ -23,18 +23,74 @@ function showStatus(elId: string, msg: string, type: "ok" | "err" | "info") {
   el.className = `status ${type}`;
 }
 
+interface ProviderConfig {
+  enabled: boolean;
+  apiKey: string;
+  model: string;
+}
+
+interface ProvidersMap {
+  anthropic: ProviderConfig;
+  openai: ProviderConfig;
+  gemini: ProviderConfig;
+  groq: ProviderConfig;
+  perplexity: ProviderConfig;
+  kimi: ProviderConfig;
+}
+
+const PROVIDER_DEFAULTS: ProvidersMap = {
+  anthropic:   { enabled: true, apiKey: "", model: "claude-sonnet-4-6" },
+  openai:      { enabled: true, apiKey: "", model: "gpt-4o" },
+  gemini:      { enabled: true, apiKey: "", model: "gemini-1.5-flash" },
+  groq:        { enabled: true, apiKey: "", model: "llama-3.3-70b-versatile" },
+  perplexity:  { enabled: true, apiKey: "", model: "sonar" },
+  kimi:        { enabled: true, apiKey: "", model: "moonshot-v1-32k" },
+};
+
+function loadProviderUI(configs: ProvidersMap) {
+  for (const name of Object.keys(PROVIDER_DEFAULTS) as Array<keyof ProvidersMap>) {
+    const cfg = configs[name] ?? PROVIDER_DEFAULTS[name];
+    const keyInput = document.getElementById(`${name}-key`) as HTMLInputElement | null;
+    if (keyInput) keyInput.value = cfg.apiKey || "";
+    const checkbox = document.getElementById(`${name}-enabled`) as HTMLInputElement | null;
+    // Checkbox mirrors whether a key is present — no separate enabled flag needed
+    if (checkbox) checkbox.checked = !!cfg.apiKey;
+  }
+}
+
+function readProviderUI(): ProvidersMap {
+  const result = { ...PROVIDER_DEFAULTS };
+  for (const name of Object.keys(PROVIDER_DEFAULTS) as Array<keyof ProvidersMap>) {
+    const keyInput = document.getElementById(`${name}-key`) as HTMLInputElement | null;
+    const apiKey = keyInput?.value.trim() || "";
+    // enabled = true whenever a key is present — checkbox is decorative only
+    result[name] = { enabled: !!apiKey, apiKey, model: PROVIDER_DEFAULTS[name].model };
+  }
+  return result;
+}
+
+function wireProviderAutoEnable() {
+  for (const name of Object.keys(PROVIDER_DEFAULTS) as Array<keyof ProvidersMap>) {
+    const keyInput = document.getElementById(`${name}-key`) as HTMLInputElement | null;
+    const checkbox = document.getElementById(`${name}-enabled`) as HTMLInputElement | null;
+    if (!keyInput || !checkbox) continue;
+    keyInput.addEventListener("input", () => {
+      // Auto-check when key is entered, auto-uncheck when cleared
+      checkbox.checked = keyInput.value.trim().length > 0;
+    });
+  }
+}
+
 async function loadSettings() {
   const data = await chrome.storage.local.get([
     "clerkUserId",
     "apiBaseUrl",
-    "llmApiKey",
-    "llmProvider",
+    "providerConfigs",
     "profile",
   ]);
   if (data.clerkUserId) getInput("clerk-user-id").value = data.clerkUserId as string;
   if (data.apiBaseUrl) getInput("api-base").value = data.apiBaseUrl as string;
-  if (data.llmApiKey) getInput("llm-key").value = data.llmApiKey as string;
-  if (data.llmProvider) getSelect("llm-provider").value = data.llmProvider as string;
+  loadProviderUI((data.providerConfigs as ProvidersMap) ?? PROVIDER_DEFAULTS);
 
   if (data.profile) {
     const p = data.profile as Record<string, string>;
@@ -50,9 +106,12 @@ async function loadSettings() {
     setVal("profile-state", p.state);
     setVal("profile-zip", p.zip);
     setVal("profile-linkedin", p.linkedinUrl);
+    setVal("profile-github", p.githubUrl);
     setVal("profile-portfolio", p.portfolioUrl);
+    setVal("profile-degree", p.degree);
     setVal("profile-yoe", p.yearsExperience);
     setVal("profile-salary", p.salary);
+    setVal("profile-country", p.country);
     setVal("profile-sponsorship", p.sponsorship);
   }
 
@@ -152,10 +211,10 @@ async function saveApi() {
 }
 
 async function saveLlm() {
-  const key = getInput("llm-key").value.trim();
-  const provider = getSelect("llm-provider").value;
-  await chrome.storage.local.set({ llmApiKey: key, llmProvider: provider });
-  showStatus("llm-status", "Saved.", "ok");
+  const configs = readProviderUI();
+  await chrome.storage.local.set({ providerConfigs: configs });
+  const enabledCount = Object.values(configs).filter((c) => c.enabled).length;
+  showStatus("llm-status", enabledCount > 0 ? `Saved — ${enabledCount} provider(s) enabled.` : "Saved — no providers enabled (fallback mode).", "ok");
 }
 
 async function saveProfile() {
@@ -167,8 +226,11 @@ async function saveProfile() {
     city: getInput("profile-city").value.trim(),
     state: getInput("profile-state").value.trim(),
     zip: getInput("profile-zip").value.trim(),
+    country: getInput("profile-country").value.trim() || "United States",
     linkedinUrl: getInput("profile-linkedin").value.trim(),
+    githubUrl: getInput("profile-github").value.trim(),
     portfolioUrl: getInput("profile-portfolio").value.trim(),
+    degree: getInput("profile-degree").value.trim(),
     yearsExperience: getInput("profile-yoe").value.trim(),
     salary: getInput("profile-salary").value.trim(),
     sponsorship: (document.getElementById("profile-sponsorship") as HTMLSelectElement).value,
@@ -292,6 +354,7 @@ async function deleteWorkHistoryEntry(entryId: string, el: HTMLElement) {
 }
 
 // Module scripts are deferred — DOM is fully parsed when this runs.
+wireProviderAutoEnable();
 loadSettings();
 loadWorkHistory();
 get("save-auth").addEventListener("click", saveAuth);

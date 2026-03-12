@@ -20,6 +20,7 @@ Endpoints:
 """
 
 import hashlib
+import json as _json
 import uuid
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
@@ -37,6 +38,7 @@ from app.services.github_service import GitHubService
 from app.services.resume_generator import (
     PersonalProfile,
     generate_answer_drafts,
+    generate_answer_drafts_cascade,
     generate_full_latex_resume,
 )
 from app.services.resume_parser import ResumeParser
@@ -411,6 +413,7 @@ async def generate_answers(
     llm_provider: str = Form("anthropic"),
     llm_api_key: str | None = Form(None),
     ollama_model: str = Form("llama3.1:8b"),
+    providers_json: str = Form(""),  # JSON: [{"name":"groq","api_key":"...","model":"..."}]
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -441,21 +444,57 @@ async def generate_answers(
     # Only inject answers with a meaningful reward score (0.6+)
     past_texts = [a.answer_text for a in best_past if (a.reward_score or 0) >= 0.6]
 
-    drafts = await generate_answer_drafts(
-        question_text=question_text,
-        question_category=question_category,
-        company_name=company_name,
-        role_title=role_title,
-        jd_text=jd_text,
-        work_history_text=work_history_text,
-        provider=llm_provider,
-        api_key=llm_api_key or user.encrypted_llm_api_key or "",
-        ollama_model=ollama_model,
-        past_accepted_answers=past_texts or None,
+    # Cascade mode: try providers in priority order, use first that works for all 3 drafts
+    providers_list: list[dict] = []
+    if providers_json.strip():
+        try:
+            providers_list = _json.loads(providers_json)
+        except Exception:
+            logger.warning("Invalid providers_json — falling back to single provider")
+
+    # Resolve candidate name for cover letter greeting
+    candidate_name = ""
+    if question_category == "cover_letter":
+        from app.models.work_history import WorkHistoryEntry as _WH  # noqa: F401
+
+        # Try to get the name from the user record
+        candidate_name = getattr(user, "display_name", "") or getattr(user, "email_hash", "")[:8]
+
+    provider_used = ""
+    if providers_list:
+        drafts, provider_used = await generate_answer_drafts_cascade(
+            question_text=question_text,
+            question_category=question_category,
+            company_name=company_name,
+            role_title=role_title,
+            jd_text=jd_text,
+            work_history_text=work_history_text,
+            providers=providers_list,
+            past_accepted_answers=past_texts or None,
+            candidate_name=candidate_name,
+        )
+    else:
+        drafts = await generate_answer_drafts(
+            question_text=question_text,
+            question_category=question_category,
+            company_name=company_name,
+            role_title=role_title,
+            jd_text=jd_text,
+            work_history_text=work_history_text,
+            provider=llm_provider,
+            api_key=llm_api_key or user.encrypted_llm_api_key or "",
+            ollama_model=ollama_model,
+            past_accepted_answers=past_texts or None,
+        )
+
+    # draft_providers: same provider label for all drafts (single provider used)
+    draft_providers = (
+        [provider_used] * len(drafts) if provider_used and provider_used != "fallback" else []
     )
 
     return {
         "drafts": drafts,
+        "draft_providers": draft_providers,
         "previously_used": prev.answer_text if prev else None,
         "previously_used_at": prev.created_at.isoformat() if prev else None,
         "question_category": question_category,

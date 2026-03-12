@@ -29,7 +29,9 @@ class ApplicationResponse(BaseModel):
 class ApplicationStatusUpdate(BaseModel):
     """Schema for updating application status."""
 
-    status: str = Field(..., pattern=r"^(draft|tailored|applied|rejected|interview|offer)$")
+    status: str = Field(
+        ..., pattern=r"^(discovered|draft|tailored|applied|rejected|interview|offer)$"
+    )
 
 
 class ApplicationListResponse(BaseModel):

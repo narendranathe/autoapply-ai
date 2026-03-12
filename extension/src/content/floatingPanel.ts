@@ -17,9 +17,12 @@ interface Profile {
   city: string;
   state: string;
   zip: string;
+  country: string;
   linkedinUrl: string;
+  githubUrl: string;
   portfolioUrl: string;
   yearsExperience: string;
+  degree: string;
   sponsorship: string;
   salary: string;
 }
@@ -27,6 +30,7 @@ interface Profile {
 interface QuestionState {
   question: DetectedQuestion;
   drafts: string[];
+  draftProviders: string[];
   selectedDraft: number;
   loading: boolean;
   error: string | null;
@@ -59,13 +63,18 @@ const FIELD_PATTERNS: Array<{ type: FieldType; patterns: RegExp[] }> = [
   { type: "phone",      patterns: [/phone/i, /mobile/i, /tel/i, /cell/i] },
   { type: "address",    patterns: [/address/i, /street/i] },
   { type: "city",       patterns: [/^city$/i, /city[_\s]?name/i] },
-  { type: "state",      patterns: [/^state$/i, /province/i, /region/i] },
+  { type: "state",      patterns: [/\bstate\b/i, /province/i, /region/i] },
   { type: "zip",        patterns: [/zip/i, /postal/i, /postcode/i] },
+  { type: "country",    patterns: [/country/i, /nation/i, /reside\b/i, /resident/i, /united states/i] },
+  { type: "us_resident", patterns: [/reside in the u\.?s/i, /us resident/i, /live in the (us|united states)/i] },
   { type: "linkedin",   patterns: [/linkedin/i] },
-  { type: "portfolio",  patterns: [/portfolio/i, /website/i, /github/i, /personal[_\s-]?site/i] },
+  { type: "github",     patterns: [/github/i] },
+  { type: "portfolio",  patterns: [/portfolio/i, /personal[_\s-]?site/i, /personal[_\s-]?web/i] },
+  { type: "website",    patterns: [/^website$/i, /web[_\s-]?site/i, /personal[_\s-]?url/i] },
+  { type: "degree",     patterns: [/\bdegree\b/i, /education level/i, /highest.*degree/i, /level.*education/i, /\beducation\b/i] },
   { type: "years_experience", patterns: [/years.+experience/i, /experience.+years/i, /yoe/i] },
   { type: "salary",     patterns: [/salary/i, /compensation/i, /pay[_\s-]?expectation/i] },
-  { type: "sponsorship", patterns: [/sponsor/i, /visa/i, /work[_\s-]?auth/i, /authorized.+work/i, /immigration/i] },
+  { type: "sponsorship", patterns: [/sponsor/i, /visa/i, /work[_\s-]?auth/i, /authorized.+work/i, /immigration/i, /h-?1b/i, /require.*employment/i] },
   { type: "demographic", patterns: [/race/i, /ethnicity/i, /gender/i, /veteran/i, /disability/i, /hispanic/i, /latino/i, /pronoun/i] },
 ];
 
@@ -177,8 +186,11 @@ function detectFields(): DetectedField[] {
   for (const el of inputs) {
     const fieldType = classifyField(el as HTMLInputElement);
     if (fieldType === "unknown" || fieldType === "demographic") continue;
+    // Tag element with a stable data attribute so we can re-find it for fill
+    const autoId = `aap_f${fields.length}`;
+    el.setAttribute("data-aap-id", autoId);
     fields.push({
-      fieldId: el.id || el.getAttribute("name") || `field_${fields.length}`,
+      fieldId: autoId,
       fieldType,
       label: getFieldLabel(el),
       currentValue: (el as HTMLInputElement).value ?? "",
@@ -202,8 +214,11 @@ function detectQuestions(): DetectedQuestion[] {
         break;
       }
     }
+    // Tag textarea with stable data attribute for reliable fill later
+    const autoId = `aap_q${questions.length}`;
+    ta.setAttribute("data-aap-id", autoId);
     questions.push({
-      questionId: ta.id || `q_${questions.length}`,
+      questionId: autoId,
       questionText: label,
       category,
       fieldType: "textarea",
@@ -223,9 +238,13 @@ function profileValue(fieldType: FieldType, profile: Profile): string {
     city: profile.city,
     state: profile.state,
     zip: profile.zip,
+    country: profile.country || "United States",
+    us_resident: profile.country ? (profile.country.toLowerCase().includes("united states") || profile.country.toLowerCase() === "us" ? "Yes" : "No") : "Yes",
     linkedin: profile.linkedinUrl,
+    github: profile.githubUrl,
     portfolio: profile.portfolioUrl,
     website: profile.portfolioUrl,
+    degree: profile.degree,
     years_experience: profile.yearsExperience,
     salary: profile.salary,
     sponsorship: profile.sponsorship,
@@ -235,6 +254,7 @@ function profileValue(fieldType: FieldType, profile: Profile): string {
 
 function fillDomField(fieldId: string, value: string): void {
   const el =
+    document.querySelector<HTMLInputElement | HTMLTextAreaElement>(`[data-aap-id="${fieldId}"]`) ??
     (document.getElementById(fieldId) as HTMLInputElement | null) ??
     document.querySelector<HTMLInputElement>(`[name="${fieldId}"]`);
   if (!el) return;
@@ -271,6 +291,7 @@ function truncate(s: string, max: number): string {
 
 function categoryLabel(cat: QuestionCategory): string {
   const labels: Record<QuestionCategory, string> = {
+    cover_letter: "Cover Letter",
     why_company: "Why Us",
     why_hire: "Why You",
     about_yourself: "About",
@@ -297,10 +318,12 @@ class FloatingPanel {
   private isOpen: boolean = false;
   private apiBase: string = "https://autoapply-ai-api.fly.dev/api/v1";
   private clerkUserId: string | null = null;
+  private providers: Array<{ name: string; api_key: string; model: string }> = [];
   private profile: Profile = {
     firstName: "", lastName: "", email: "", phone: "",
-    city: "", state: "", zip: "", linkedinUrl: "",
-    portfolioUrl: "", yearsExperience: "", sponsorship: "", salary: "",
+    city: "", state: "", zip: "", country: "United States",
+    linkedinUrl: "", githubUrl: "", portfolioUrl: "",
+    degree: "", yearsExperience: "", sponsorship: "", salary: "",
   };
   private company: string = "";
   private roleTitle: string = "";
@@ -326,10 +349,17 @@ class FloatingPanel {
   }
 
   async init(): Promise<void> {
-    const data = await chrome.storage.local.get(["apiBaseUrl", "clerkUserId", "profile"]);
+    const data = await chrome.storage.local.get(["apiBaseUrl", "clerkUserId", "profile", "providerConfigs"]);
     if (data.apiBaseUrl) this.apiBase = data.apiBaseUrl as string;
     if (data.clerkUserId) this.clerkUserId = data.clerkUserId as string;
     if (data.profile) this.profile = data.profile as Profile;
+    if (data.providerConfigs) {
+      const RANK: Record<string, number> = { anthropic: 1, openai: 2, gemini: 3, groq: 4, perplexity: 5, kimi: 6 };
+      this.providers = Object.entries(data.providerConfigs as Record<string, { enabled: boolean; apiKey: string; model: string }>)
+        .filter(([, cfg]) => cfg.enabled)
+        .map(([name, cfg]) => ({ name, api_key: cfg.apiKey, model: cfg.model }))
+        .sort((a, b) => (RANK[a.name] ?? 50) - (RANK[b.name] ?? 50));
+    }
 
     // Fetch full work history text for LLM context
     try {
@@ -351,6 +381,7 @@ class FloatingPanel {
     this.questionStates = detectQuestions().map((q) => ({
       question: q,
       drafts: [],
+      draftProviders: [],
       selectedDraft: 0,
       loading: false,
       error: null,
@@ -358,6 +389,11 @@ class FloatingPanel {
     this.render();
     this.loadAtsScore();
     this.observeMutations();
+
+    // SPAs often render the form asynchronously after the initial paint.
+    // Retry detection at 1s and 3s so we catch late-rendering fields/questions.
+    setTimeout(() => this.redetect(), 1000);
+    setTimeout(() => this.redetect(), 3000);
   }
 
   private async loadAtsScore(): Promise<void> {
@@ -401,6 +437,9 @@ class FloatingPanel {
       fd.append("role_title", this.roleTitle);
       fd.append("jd_text", this.jdText);
       fd.append("work_history_text", this.workHistoryText);
+      if (this.providers.length > 0) {
+        fd.append("providers_json", JSON.stringify(this.providers));
+      }
       const headers: Record<string, string> = {};
       if (this.clerkUserId) headers["X-Clerk-User-Id"] = this.clerkUserId;
       const resp = await fetch(`${this.apiBase}/vault/generate/answers`, {
@@ -409,8 +448,9 @@ class FloatingPanel {
         body: fd,
       });
       if (!resp.ok) throw new Error(`API error ${resp.status}`);
-      const json = await resp.json() as { drafts?: string[] };
+      const json = await resp.json() as { drafts?: string[]; draft_providers?: string[] };
       state.drafts = json.drafts ?? [];
+      state.draftProviders = json.draft_providers ?? [];
       state.selectedDraft = 0;
     } catch (e) {
       state.error = e instanceof Error ? e.message : "Generation failed";
@@ -460,18 +500,35 @@ class FloatingPanel {
 
   redetect(): void {
     this.jdText = extractJdText();
-    this.fields = detectFields();
+
+    // ── Fields ──────────────────────────────────────────────────────────────
+    const newFields = detectFields();
+    if (newFields.length > 0) {
+      // New scan found fields — use them (also re-tags elements with fresh data-aap-id)
+      this.fields = newFields;
+    } else if (this.fields.length > 0) {
+      // New scan found nothing — check which existing tagged elements are still in the DOM.
+      // Keep those; remove only the ones that have genuinely disappeared.
+      const stillPresent = this.fields.filter(
+        (f) => !!document.querySelector(`[data-aap-id="${f.fieldId}"]`)
+      );
+      this.fields = stillPresent;
+    }
+
+    // ── Questions ────────────────────────────────────────────────────────────
     const newQuestions = detectQuestions();
-    // Preserve existing draft states, add new questions
+    // Add new questions not yet tracked
     const existingIds = new Set(this.questionStates.map((s) => s.question.questionId));
     for (const q of newQuestions) {
       if (!existingIds.has(q.questionId)) {
-        this.questionStates.push({ question: q, drafts: [], selectedDraft: 0, loading: false, error: null });
+        this.questionStates.push({ question: q, drafts: [], draftProviders: [], selectedDraft: 0, loading: false, error: null });
       }
     }
-    // Remove stale questions
-    const newIds = new Set(newQuestions.map((q) => q.questionId));
-    this.questionStates = this.questionStates.filter((s) => newIds.has(s.question.questionId));
+    // Remove only questions whose textarea has actually left the DOM
+    this.questionStates = this.questionStates.filter(
+      (s) => !!document.querySelector(`[data-aap-id="${s.question.questionId}"]`)
+    );
+
     this.render();
   }
 
@@ -483,7 +540,8 @@ class FloatingPanel {
         document.documentElement.appendChild(this.host);
       }
       if (debounceTimer !== null) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => this.redetect(), 800);
+      // 1 200 ms gives SPA frameworks enough time to finish a render cycle
+      debounceTimer = setTimeout(() => this.redetect(), 1200);
     });
     if (document.body) {
       observer.observe(document.body, { childList: true, subtree: true });
@@ -967,10 +1025,13 @@ class FloatingPanel {
                 const draftTabsHtml = hasDrafts
                   ? `<div class="draft-tabs">
                       ${state.drafts
-                        .map(
-                          (_, di) =>
-                            `<button class="draft-tab ${di === state.selectedDraft ? "active" : ""}" data-q-idx="${qi}" data-d-idx="${di}">Draft ${di + 1}</button>`
-                        )
+                        .map((_, di) => {
+                          const provName = state.draftProviders[di];
+                          const label = provName
+                            ? provName.charAt(0).toUpperCase() + provName.slice(1)
+                            : `Draft ${di + 1}`;
+                          return `<button class="draft-tab ${di === state.selectedDraft ? "active" : ""}" data-q-idx="${qi}" data-d-idx="${di}">${label}</button>`;
+                        })
                         .join("")}
                      </div>
                      <div class="draft-text">${selectedText.replace(/</g, "&lt;")}</div>

@@ -22,30 +22,36 @@ const FIELD_PATTERNS: Array<{ type: FieldType; patterns: RegExp[] }> = [
   { type: "phone",      patterns: [/phone/i, /mobile/i, /tel/i, /cell/i] },
   { type: "address",    patterns: [/address/i, /street/i] },
   { type: "city",       patterns: [/^city$/i, /city[_\s]?name/i] },
-  { type: "state",      patterns: [/^state$/i, /province/i, /region/i] },
+  { type: "state",      patterns: [/\bstate\b/i, /province/i, /region/i] },
   { type: "zip",        patterns: [/zip/i, /postal/i, /postcode/i] },
+  { type: "country",    patterns: [/country/i, /nation/i, /reside\b/i, /resident/i, /united states/i] },
+  { type: "us_resident", patterns: [/reside in the u\.?s/i, /us resident/i, /live in the (us|united states)/i] },
   { type: "linkedin",   patterns: [/linkedin/i] },
-  { type: "portfolio",  patterns: [/portfolio/i, /website/i, /github/i, /personal[_\s-]?site/i] },
+  { type: "github",     patterns: [/github/i] },
+  { type: "portfolio",  patterns: [/portfolio/i, /personal[_\s-]?site/i, /personal[_\s-]?web/i] },
+  { type: "website",    patterns: [/^website$/i, /web[_\s-]?site/i, /personal[_\s-]?url/i] },
+  { type: "degree",     patterns: [/\bdegree\b/i, /education level/i, /highest.*degree/i, /level.*education/i, /\beducation\b/i] },
   { type: "skills",     patterns: [/skill/i] },
   { type: "years_experience", patterns: [/years.+experience/i, /experience.+years/i, /yoe/i] },
   { type: "salary",     patterns: [/salary/i, /compensation/i, /pay[_\s-]?expectation/i] },
-  { type: "sponsorship", patterns: [/sponsor/i, /visa/i, /work[_\s-]?auth/i, /authorized.+work/i, /immigration/i] },
+  { type: "sponsorship", patterns: [/sponsor/i, /visa/i, /work[_\s-]?auth/i, /authorized.+work/i, /immigration/i, /h-?1b/i, /require.*employment/i] },
   { type: "demographic", patterns: [/race/i, /ethnicity/i, /gender/i, /veteran/i, /disability/i, /hispanic/i, /latino/i, /pronoun/i] },
 ];
 
 const QUESTION_CATEGORY_PATTERNS: Array<{ category: QuestionCategory; patterns: RegExp[] }> = [
-  { category: "why_company", patterns: [/why.+(want|interested|join|work|here|company)/i, /what draws you/i] },
-  { category: "why_hire", patterns: [/why (should|hire|choose|best candidate)/i, /what makes you (unique|stand out)/i] },
-  { category: "about_yourself", patterns: [/tell us about yourself/i, /introduce yourself/i, /walk us through/i, /background/i] },
-  { category: "strength", patterns: [/strength/i, /excel at/i, /best at/i] },
-  { category: "weakness", patterns: [/weakness/i, /area.+improvement/i, /struggle with/i] },
-  { category: "challenge", patterns: [/challenge/i, /difficult situation/i, /obstacle/i, /failure/i, /overcame/i] },
-  { category: "leadership", patterns: [/led|lead/i, /leadership/i, /managed a team/i, /team lead/i] },
-  { category: "conflict", patterns: [/conflict/i, /disagreement/i, /difficult coworker/i, /colleague/i] },
-  { category: "motivation", patterns: [/motivat/i, /passion/i, /what drives/i] },
-  { category: "five_years", patterns: [/5 years|five years/i, /career goal/i, /long.term/i, /see yourself/i] },
-  { category: "impact", patterns: [/proud of/i, /biggest accomplishment/i, /greatest achievement/i] },
-  { category: "fit", patterns: [/align.+value/i, /culture/i, /what do you know about us/i, /research.+company/i] },
+  { category: "cover_letter", patterns: [/cover.?letter/i, /letter of interest/i, /motivation letter/i] },
+  { category: "why_company", patterns: [/why.+(want|interested|join|work|here|company)/i, /what draws you/i, /why do you want to work/i] },
+  { category: "why_hire", patterns: [/why (should|hire|choose|best candidate)/i, /what makes you (unique|stand out)/i, /why are you the right/i] },
+  { category: "about_yourself", patterns: [/tell us about yourself/i, /introduce yourself/i, /walk us through/i, /about yourself/i] },
+  { category: "strength", patterns: [/strength/i, /excel at/i, /best at/i, /what are you good at/i] },
+  { category: "weakness", patterns: [/weakness/i, /area.+improvement/i, /struggle with/i, /grow.+professionally/i] },
+  { category: "challenge", patterns: [/challenge/i, /difficult situation/i, /obstacle/i, /failure/i, /overcame/i, /tough problem/i] },
+  { category: "leadership", patterns: [/led|lead/i, /leadership/i, /managed a team/i, /team lead/i, /mentor/i] },
+  { category: "conflict", patterns: [/conflict/i, /disagreement/i, /difficult coworker/i, /colleague/i, /difficult person/i] },
+  { category: "motivation", patterns: [/motivat/i, /passion/i, /what drives/i, /inspires you/i] },
+  { category: "five_years", patterns: [/5 years|five years/i, /career goal/i, /long.term/i, /see yourself/i, /where do you see/i] },
+  { category: "impact", patterns: [/proud of/i, /biggest accomplishment/i, /greatest achievement/i, /most proud/i] },
+  { category: "fit", patterns: [/align.+value/i, /culture/i, /what do you know about us/i, /research.+company/i, /our mission/i] },
   { category: "sponsorship", patterns: [/sponsor/i, /visa/i, /work authorization/i] },
 ];
 
@@ -118,13 +124,21 @@ function detectFields(): DetectedField[] {
   return fields;
 }
 
+function isEssayQuestion(label: string): boolean {
+  // Any textarea with a non-trivial label is a Q&A question.
+  // detectFields() only covers <input> and <select>, never <textarea>,
+  // so every textarea is by definition not in the Fields list.
+  return label.trim().length >= 3;
+}
+
 function detectQuestions(): DetectedQuestion[] {
   const textareas = Array.from(document.querySelectorAll<HTMLTextAreaElement>("textarea"));
   const questions: DetectedQuestion[] = [];
 
   for (const ta of textareas) {
     const label = getFieldLabel(ta);
-    if (!label || label.length < 10) continue;
+    if (!label) continue;
+    if (!isEssayQuestion(label)) continue;
 
     let category: QuestionCategory = "custom";
     for (const { category: cat, patterns } of QUESTION_CATEGORY_PATTERNS) {
@@ -274,7 +288,10 @@ function buildAndSendContext() {
     }
   }
 
-  if (mode === "apply" && company) {
+  // Only show the sidepanel badge on pages where the floating panel is NOT injected.
+  // Floating panel handles greenhouse, lever, workday, ashby, smartrecruiters, bamboohr, icims, jobvite, taleo.
+  const hasFloatingPanel = /greenhouse\.io|lever\.co|workday\.com|myworkday\.com|ashbyhq\.com|smartrecruiters\.com|bamboohr\.com|icims\.com|jobvite\.com|taleo\.net/.test(url);
+  if (mode === "apply" && company && !hasFloatingPanel) {
     injectOverlayBadge(company, `${fields.length} fields detected`);
   }
 }
@@ -299,7 +316,10 @@ chrome.runtime.onMessage.addListener((message: Message) => {
       document.querySelector<HTMLInputElement>(`[name="${fieldId}"]`);
     if (el) {
       el.focus();
-      el.value = value;
+      // Use native setter to trigger React/Vue controlled inputs
+      const nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      if (nativeSetter) nativeSetter.call(el, value);
+      else el.value = value;
       el.dispatchEvent(new Event("input", { bubbles: true }));
       el.dispatchEvent(new Event("change", { bubbles: true }));
     }
@@ -313,7 +333,9 @@ chrome.runtime.onMessage.addListener((message: Message) => {
       document.querySelector<HTMLTextAreaElement>("textarea");
     if (el) {
       el.focus();
-      el.value = text;
+      const nativeSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+      if (nativeSetter) nativeSetter.call(el, text);
+      else el.value = text;
       el.dispatchEvent(new Event("input", { bubbles: true }));
       el.dispatchEvent(new Event("change", { bubbles: true }));
     }
@@ -340,7 +362,38 @@ chrome.runtime.onMessage.addListener((message: Message) => {
   }
 });
 
+// ── Iframe guard ──────────────────────────────────────────────────────────
+// When running in a sub-frame (all_frames: true), only proceed if the frame
+// looks like an ATS application form — not an ad, analytics pixel, or auth popup.
+// Criteria: frame URL matches known ATS patterns OR the frame contains form inputs.
+
+function shouldRunInFrame(): boolean {
+  // Always run in the top-level frame
+  if (window.self === window.top) return true;
+
+  const frameUrl = window.location.href;
+
+  // Definitely ATS frames — always scan
+  const ATS_FRAME_PATTERNS = [
+    /workday\.com/i, /myworkday\.com/i, /greenhouse\.io/i, /lever\.co/i,
+    /taleo\.net/i, /icims\.com/i, /jobvite\.com/i, /smartrecruiters\.com/i,
+    /bamboohr\.com/i, /ashbyhq\.com/i, /successfactors\.com/i, /oracle\.com\/hcm/i,
+  ];
+  if (ATS_FRAME_PATTERNS.some((p) => p.test(frameUrl))) return true;
+
+  // Unknown frame URL: scan only if the frame already has form inputs or textareas
+  // (avoids running on ad iframes, tracking pixels, OAuth popups, etc.)
+  const hasFormInputs =
+    document.querySelectorAll("input:not([type=hidden]), textarea, select").length > 0;
+  return hasFormInputs;
+}
+
 // ── Run on load and on SPA navigation ─────────────────────────────────────
+
+if (!shouldRunInFrame()) {
+  // This is a frame we should ignore (ad iframe, tracking pixel, etc.) — exit early
+  // Export empty to satisfy module system
+} else {
 
 buildAndSendContext();
 
@@ -362,5 +415,7 @@ history.pushState = function (...args) {
   setTimeout(buildAndSendContext, 800);
 };
 window.addEventListener("popstate", () => setTimeout(buildAndSendContext, 800));
+
+} // end shouldRunInFrame() guard
 
 export {};
