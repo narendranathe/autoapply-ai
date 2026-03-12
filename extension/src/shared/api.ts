@@ -7,6 +7,8 @@ const API_DEFAULT = "https://autoapply-ai-api.fly.dev/api/v1";
 // Resolved at startup from chrome.storage; falls back to localhost for dev.
 let _apiBase = API_DEFAULT;
 let _clerkUserId: string | null = null;
+let _clerkToken: string | null = null;     // RS256 JWT from Clerk session
+let _clerkTokenExp: number = 0;            // expiry unix timestamp (seconds)
 
 // Single promise that resolves once storage has been read.
 let _initPromise: Promise<void> | null = null;
@@ -14,10 +16,12 @@ let _initPromise: Promise<void> | null = null;
 function ensureInit(): Promise<void> {
   if (!_initPromise) {
     _initPromise = chrome.storage.local
-      .get(["apiBaseUrl", "clerkUserId"])
+      .get(["apiBaseUrl", "clerkUserId", "clerkToken", "clerkTokenExp"])
       .then((data) => {
         if (data.apiBaseUrl) _apiBase = data.apiBaseUrl as string;
         if (data.clerkUserId) _clerkUserId = data.clerkUserId as string;
+        if (data.clerkToken) _clerkToken = data.clerkToken as string;
+        if (data.clerkTokenExp) _clerkTokenExp = data.clerkTokenExp as number;
       });
   }
   return _initPromise;
@@ -28,6 +32,8 @@ chrome.storage.onChanged.addListener((changes) => {
   if (changes.apiBaseUrl?.newValue) _apiBase = changes.apiBaseUrl.newValue as string;
   if (changes.apiBaseUrl && !changes.apiBaseUrl.newValue) _apiBase = API_DEFAULT;
   if (changes.clerkUserId?.newValue) _clerkUserId = changes.clerkUserId.newValue as string;
+  if (changes.clerkToken?.newValue) _clerkToken = changes.clerkToken.newValue as string;
+  if (changes.clerkTokenExp?.newValue) _clerkTokenExp = changes.clerkTokenExp.newValue as number;
 });
 
 function getApiBase(): string {
@@ -47,13 +53,40 @@ export function setClerkUserId(id: string | null) {
   }
 }
 
-/** Restore the Clerk user ID from storage on extension startup. */
+/**
+ * Store a Clerk RS256 JWT for use as Authorization: Bearer.
+ * exp is the JWT expiry unix timestamp (seconds); pass 0 to clear.
+ */
+export function setClerkToken(token: string | null, exp = 0) {
+  _clerkToken = token;
+  _clerkTokenExp = exp;
+  if (token) {
+    chrome.storage.local.set({ clerkToken: token, clerkTokenExp: exp });
+  } else {
+    chrome.storage.local.remove(["clerkToken", "clerkTokenExp"]);
+  }
+}
+
+/** Whether the stored JWT is still valid (with 30-second buffer). */
+export function isClerkTokenValid(): boolean {
+  if (!_clerkToken) return false;
+  if (_clerkTokenExp === 0) return true;  // no expiry known — assume valid
+  return Date.now() / 1000 < _clerkTokenExp - 30;
+}
+
+/** Restore auth state from storage on extension startup. */
 export async function restoreClerkUserId(): Promise<void> {
-  const { clerkUserId } = await chrome.storage.local.get("clerkUserId");
-  if (clerkUserId) _clerkUserId = clerkUserId as string;
+  const data = await chrome.storage.local.get(["clerkUserId", "clerkToken", "clerkTokenExp"]);
+  if (data.clerkUserId) _clerkUserId = data.clerkUserId as string;
+  if (data.clerkToken) _clerkToken = data.clerkToken as string;
+  if (data.clerkTokenExp) _clerkTokenExp = data.clerkTokenExp as number;
 }
 
 function authHeaders(): Record<string, string> {
+  // Prefer JWT Bearer token (RS256, verified by backend JWKS) over plain user ID
+  if (_clerkToken && isClerkTokenValid()) {
+    return { "Authorization": `Bearer ${_clerkToken}` };
+  }
   return _clerkUserId ? { "X-Clerk-User-Id": _clerkUserId } : {};
 }
 

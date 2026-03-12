@@ -109,6 +109,12 @@
           Just type something and click <strong>Save &amp; Verify</strong> — your
           account will be created automatically.
         </p>
+        <label for="clerk-jwt-token" style="margin-top:10px;">JWT Token <span style="font-weight:400;color:#64748b;">(optional — for secure auth)</span></label>
+        <input type="password" id="clerk-jwt-token" placeholder="Paste your Clerk session token (eyJ…)" />
+        <p class="hint">
+          Optional. Paste a JWT from your Clerk session for RS256-verified auth.
+          Leave blank to use User ID auth (default).
+        </p>
         <div id="auth-status" class="status"></div>
         <button class="btn btn-primary" id="save-auth">Save &amp; Verify</button>
       </div>

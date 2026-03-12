@@ -84,11 +84,13 @@ function wireProviderAutoEnable() {
 async function loadSettings() {
   const data = await chrome.storage.local.get([
     "clerkUserId",
+    "clerkToken",
     "apiBaseUrl",
     "providerConfigs",
     "profile",
   ]);
   if (data.clerkUserId) getInput("clerk-user-id").value = data.clerkUserId as string;
+  if (data.clerkToken) getInput("clerk-jwt-token").value = data.clerkToken as string;
   if (data.apiBaseUrl) getInput("api-base").value = data.apiBaseUrl as string;
   loadProviderUI((data.providerConfigs as ProvidersMap) ?? PROVIDER_DEFAULTS);
 
@@ -133,21 +135,41 @@ async function saveAuth() {
     return;
   }
 
+  // Optional JWT token — if provided, extract exp from payload
+  const rawToken = getInput("clerk-jwt-token").value.trim();
+  let jwtPayload: { exp?: number } = {};
+  if (rawToken) {
+    try {
+      const parts = rawToken.split(".");
+      if (parts.length === 3) {
+        jwtPayload = JSON.parse(atob(parts[1].replace(/-/g, "+").replace(/_/g, "/"))) as { exp?: number };
+      }
+    } catch { /* ignore malformed token */ }
+  }
+
   const apiBase =
     ((await chrome.storage.local.get("apiBaseUrl")).apiBaseUrl as string | undefined) ||
     API_DEFAULT;
 
   showStatus("auth-status", "Connecting…", "info");
 
+  // Build auth headers: prefer JWT Bearer if provided and not expired
+  const now = Date.now() / 1000;
+  const tokenValid = rawToken && (!jwtPayload.exp || jwtPayload.exp > now + 30);
+  const authHdrs: Record<string, string> = tokenValid
+    ? { "Authorization": `Bearer ${rawToken}` }
+    : { "X-Clerk-User-Id": userId };
+
   try {
     // Step 1: check if user already exists
-    const meResp = await fetch(`${apiBase}/auth/me`, {
-      headers: { "X-Clerk-User-Id": userId },
-    });
+    const meResp = await fetch(`${apiBase}/auth/me`, { headers: authHdrs });
 
     if (meResp.ok) {
-      await chrome.storage.local.set({ clerkUserId: userId });
-      showStatus("auth-status", "Verified and saved ✓", "ok");
+      const toStore: Record<string, unknown> = { clerkUserId: userId };
+      if (rawToken) { toStore.clerkToken = rawToken; toStore.clerkTokenExp = jwtPayload.exp ?? 0; }
+      else { await chrome.storage.local.remove(["clerkToken", "clerkTokenExp"]); }
+      await chrome.storage.local.set(toStore);
+      showStatus("auth-status", `Verified and saved ✓${rawToken ? " (JWT)" : ""}`, "ok");
       loadSettings();
       loadWorkHistory();
       return;
@@ -167,7 +189,9 @@ async function saveAuth() {
       );
 
       if (registerResp.ok) {
-        await chrome.storage.local.set({ clerkUserId: userId });
+        const toStore2: Record<string, unknown> = { clerkUserId: userId };
+        if (rawToken) { toStore2.clerkToken = rawToken; toStore2.clerkTokenExp = jwtPayload.exp ?? 0; }
+        await chrome.storage.local.set(toStore2);
         showStatus("auth-status", "Account created and saved ✓", "ok");
         loadSettings();
         loadWorkHistory();
