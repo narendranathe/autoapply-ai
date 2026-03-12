@@ -6,7 +6,7 @@ import ResumeCardComponent from "../components/ResumeCard";
 
 interface Props { context: PageContext }
 
-type Tab = "resumes" | "fields" | "questions" | "history" | "prep";
+type Tab = "resumes" | "fields" | "questions" | "history" | "prep" | "cover";
 
 function scoreColor(s: number): string {
   if (s >= 80) return "#10b981";
@@ -130,6 +130,13 @@ export default function ApplyMode({ context }: Props) {
   const [interviewLoading, setInterviewLoading] = useState(false);
   const [interviewError, setInterviewError] = useState<string>("");
   const [expandedPrepIdx, setExpandedPrepIdx] = useState<number | null>(null);
+  // Cover letter tab
+  const [coverLetter, setCoverLetter] = useState<string>("");
+  const [coverLoading, setCoverLoading] = useState(false);
+  const [coverError, setCoverError] = useState<string>("");
+  const [coverTone, setCoverTone] = useState<"professional" | "enthusiastic" | "concise">("professional");
+  const [coverWordLimit, setCoverWordLimit] = useState<300 | 400 | 500>(400);
+  const [coverCopied, setCoverCopied] = useState(false);
 
   const PROVIDER_RANK: Record<string, number> = { anthropic: 1, openai: 2, gemini: 3, groq: 4, perplexity: 5, kimi: 6 };
   const PROVIDER_MODELS: Record<string, string> = { anthropic: "claude-sonnet-4-6", openai: "gpt-4o", gemini: "gemini-1.5-flash", groq: "llama-3.3-70b-versatile", perplexity: "sonar", kimi: "moonshot-v1-32k" };
@@ -372,6 +379,53 @@ export default function ApplyMode({ context }: Props) {
     }
   };
 
+  const handleGenerateCoverLetter = async () => {
+    if (!context.company) return;
+    setCoverLoading(true);
+    setCoverError("");
+    setCoverLetter("");
+    try {
+      const providers = await getFreshProviders();
+      const question = `Write a ${coverWordLimit}-word ${coverTone} cover letter for the ${context.roleTitle || "position"} at ${context.company}.`;
+      const instructions = coverTone === "concise"
+        ? `Keep it under ${coverWordLimit} words. Be direct and factual. No fluff.`
+        : coverTone === "enthusiastic"
+        ? `Be genuinely enthusiastic and specific about why this company excites you. Under ${coverWordLimit} words.`
+        : `Use a professional, confident tone. Highlight relevant experience. Under ${coverWordLimit} words.`;
+      const result = await vaultApi.generateAnswers({
+        questionText: question,
+        questionCategory: "cover_letter",
+        companyName: context.company,
+        roleTitle: context.roleTitle,
+        jdText: context.jdText ?? workHistoryText,
+        workHistoryText,
+        categoryInstructions: instructions,
+        providers,
+      });
+      setCoverLetter(result.drafts?.[0] ?? "");
+    } catch (err) {
+      setCoverError(err instanceof Error ? err.message : "Generation failed");
+    } finally {
+      setCoverLoading(false);
+    }
+  };
+
+  const handleCopyLetter = async () => {
+    if (!coverLetter) return;
+    try {
+      await navigator.clipboard.writeText(coverLetter);
+    } catch {
+      const ta = document.createElement("textarea");
+      ta.value = coverLetter;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+    }
+    setCoverCopied(true);
+    setTimeout(() => setCoverCopied(false), 2000);
+  };
+
   const handleInterviewPrep = async () => {
     if (!context.company) return;
     setInterviewLoading(true);
@@ -576,6 +630,7 @@ export default function ApplyMode({ context }: Props) {
     { key: "resumes", label: "Resumes", count: resumes.length },
     { key: "fields", label: "Fields", count: context.detectedFields.length },
     { key: "questions", label: "Q&A", count: context.openQuestions.length },
+    { key: "cover", label: "Cover", count: coverLetter ? 1 : 0 },
     { key: "history", label: "History", count: allApplications.length },
     { key: "prep", label: "Prep", count: interviewQuestions.length },
   ];
@@ -1215,6 +1270,94 @@ export default function ApplyMode({ context }: Props) {
                 onToggle={() => setExpandedPrepIdx(expandedPrepIdx === idx ? null : idx)}
               />
             ))}
+          </>
+        )}
+
+        {/* Cover Letter tab */}
+        {tab === "cover" && (
+          <>
+            {/* Controls */}
+            <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+              <select
+                value={coverTone}
+                onChange={(e) => setCoverTone(e.target.value as typeof coverTone)}
+                style={{ background: "#12121e", border: "1px solid #1f1f38", borderRadius: 6, color: "#9ca3af", fontSize: 11, padding: "5px 6px", outline: "none" }}
+              >
+                <option value="professional">Professional</option>
+                <option value="enthusiastic">Enthusiastic</option>
+                <option value="concise">Concise</option>
+              </select>
+              <select
+                value={coverWordLimit}
+                onChange={(e) => setCoverWordLimit(Number(e.target.value) as typeof coverWordLimit)}
+                style={{ background: "#12121e", border: "1px solid #1f1f38", borderRadius: 6, color: "#9ca3af", fontSize: 11, padding: "5px 6px", outline: "none" }}
+              >
+                <option value={300}>~300 words</option>
+                <option value={400}>~400 words</option>
+                <option value={500}>~500 words</option>
+              </select>
+              <button
+                onClick={handleGenerateCoverLetter}
+                disabled={coverLoading || !context.company}
+                style={{ ...btnStyle("generate", coverLoading || !context.company), flex: 1, minWidth: 100 }}
+              >
+                {coverLoading ? "Generating…" : "⚡ Generate"}
+              </button>
+            </div>
+
+            {coverError && (
+              <div style={{ fontSize: 11, color: "#f87171", marginBottom: 8 }}>{coverError}</div>
+            )}
+
+            {!coverLetter && !coverLoading && (
+              <EmptyState
+                message="No cover letter yet."
+                hint={`Select tone and word length above, then click Generate to create a cover letter for ${context.company || "this company"}.`}
+              />
+            )}
+
+            {coverLetter && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontSize: 10, color: "#475569" }}>
+                    {coverLetter.split(/\s+/).filter(Boolean).length} words
+                  </span>
+                  <button
+                    onClick={handleCopyLetter}
+                    style={{
+                      background: coverCopied ? "#166534" : "#1e1e3a",
+                      color: coverCopied ? "#86efac" : "#c4b5fd",
+                      border: `1px solid ${coverCopied ? "#166534" : "#3730a3"}`,
+                      borderRadius: 6,
+                      padding: "3px 10px",
+                      fontSize: 10,
+                      fontWeight: 600,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {coverCopied ? "✓ Copied" : "Copy"}
+                  </button>
+                </div>
+                <textarea
+                  value={coverLetter}
+                  onChange={(e) => setCoverLetter(e.target.value)}
+                  style={{
+                    width: "100%",
+                    minHeight: 320,
+                    background: "#0a0a14",
+                    border: "1px solid #1f1f38",
+                    borderRadius: 8,
+                    color: "#e2e8f0",
+                    fontSize: 12,
+                    lineHeight: 1.6,
+                    padding: "10px 12px",
+                    outline: "none",
+                    resize: "vertical",
+                    fontFamily: "system-ui, sans-serif",
+                  }}
+                />
+              </div>
+            )}
           </>
         )}
 
