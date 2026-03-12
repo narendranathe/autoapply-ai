@@ -424,6 +424,46 @@
         <div id="prompts-status" class="status"></div>
       </div>
 
+      <!-- Model Routing per Category (L5) -->
+      <div class="card">
+        <h2>Model Routing <span style="font-size:11px;color:#64748b;font-weight:400;">(L5 — optional)</span></h2>
+        <p style="font-size:12px;color:#94a3b8;margin-bottom:14px;">
+          Choose which AI provider to prefer for each question type. Leave on "Default (priority order)" to use the ranked list from above.
+        </p>
+
+        <style>
+          .mr-row { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+          .mr-label { flex:1; font-size:12px; color:#cbd5e1; }
+          .mr-row select {
+            flex:1; padding:6px 8px; background:#0f0f1a; border:1px solid #1e1e3a;
+            border-radius:6px; color:#f1f5f9; font-size:12px; outline:none; cursor:pointer;
+          }
+          .mr-row select:focus { border-color:#4f46e5; }
+        </style>
+
+        <div class="mr-row"><div class="mr-label">Cover Letter</div>
+          <select id="mr-cover_letter"><option value="">Default (priority order)</option><option value="anthropic">Anthropic (Claude)</option><option value="openai">OpenAI (GPT)</option><option value="gemini">Google (Gemini)</option><option value="groq">Groq (Llama)</option><option value="perplexity">Perplexity</option><option value="kimi">Kimi</option></select>
+        </div>
+        <div class="mr-row"><div class="mr-label">Why This Company</div>
+          <select id="mr-why_company"><option value="">Default</option><option value="anthropic">Anthropic</option><option value="openai">OpenAI</option><option value="gemini">Gemini</option><option value="groq">Groq</option><option value="perplexity">Perplexity</option><option value="kimi">Kimi</option></select>
+        </div>
+        <div class="mr-row"><div class="mr-label">Why Hire You</div>
+          <select id="mr-why_hire"><option value="">Default</option><option value="anthropic">Anthropic</option><option value="openai">OpenAI</option><option value="gemini">Gemini</option><option value="groq">Groq</option><option value="perplexity">Perplexity</option><option value="kimi">Kimi</option></select>
+        </div>
+        <div class="mr-row"><div class="mr-label">Behavioral (STAR)</div>
+          <select id="mr-challenge"><option value="">Default</option><option value="anthropic">Anthropic</option><option value="openai">OpenAI</option><option value="gemini">Gemini</option><option value="groq">Groq</option><option value="perplexity">Perplexity</option><option value="kimi">Kimi</option></select>
+        </div>
+        <div class="mr-row"><div class="mr-label">About Yourself</div>
+          <select id="mr-about_yourself"><option value="">Default</option><option value="anthropic">Anthropic</option><option value="openai">OpenAI</option><option value="gemini">Gemini</option><option value="groq">Groq</option><option value="perplexity">Perplexity</option><option value="kimi">Kimi</option></select>
+        </div>
+        <div class="mr-row"><div class="mr-label">Custom / Other</div>
+          <select id="mr-custom"><option value="">Default</option><option value="anthropic">Anthropic</option><option value="openai">OpenAI</option><option value="gemini">Gemini</option><option value="groq">Groq</option><option value="perplexity">Perplexity</option><option value="kimi">Kimi</option></select>
+        </div>
+
+        <button class="btn btn-primary" id="save-model-routes">Save Routing</button>
+        <div id="mr-status" class="status"></div>
+      </div>
+
       <!-- Status -->
       <div class="card">
         <h2>Status</h2>

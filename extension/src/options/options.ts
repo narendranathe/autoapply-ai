@@ -389,11 +389,46 @@ async function savePromptTemplates() {
   showStatus("prompts-status", `Saved — ${count} category instruction${count !== 1 ? "s" : ""} active.`, "ok");
 }
 
+// ── Model Routing (L5) ────────────────────────────────────────────────────────
+
+const MODEL_ROUTE_CATEGORIES = [
+  "cover_letter",
+  "why_company",
+  "why_hire",
+  "challenge",
+  "about_yourself",
+  "custom",
+] as const;
+
+type ModelRoutes = Partial<Record<string, string>>;
+
+async function loadModelRoutes() {
+  const data = await chrome.storage.local.get("categoryModelRoutes");
+  const routes = (data.categoryModelRoutes as ModelRoutes | undefined) ?? {};
+  for (const cat of MODEL_ROUTE_CATEGORIES) {
+    const el = document.getElementById(`mr-${cat}`) as HTMLSelectElement | null;
+    if (el && routes[cat]) el.value = routes[cat];
+  }
+}
+
+async function saveModelRoutes() {
+  const routes: ModelRoutes = {};
+  for (const cat of MODEL_ROUTE_CATEGORIES) {
+    const el = document.getElementById(`mr-${cat}`) as HTMLSelectElement | null;
+    const val = el?.value ?? "";
+    if (val) routes[cat] = val;
+  }
+  await chrome.storage.local.set({ categoryModelRoutes: routes });
+  const count = Object.keys(routes).length;
+  showStatus("mr-status", count > 0 ? `Saved — ${count} custom route${count !== 1 ? "s" : ""} set.` : "Saved — using default priority order for all categories.", "ok");
+}
+
 // Module scripts are deferred — DOM is fully parsed when this runs.
 wireProviderAutoEnable();
 loadSettings();
 loadWorkHistory();
 loadPromptTemplates();
+loadModelRoutes();
 get("save-auth").addEventListener("click", saveAuth);
 get("test-api").addEventListener("click", testApi);
 get("save-api").addEventListener("click", saveApi);
@@ -401,3 +436,4 @@ get("save-llm").addEventListener("click", saveLlm);
 get("save-profile").addEventListener("click", saveProfile);
 get("wh-add-btn").addEventListener("click", addWorkHistoryEntry);
 get("save-prompts").addEventListener("click", savePromptTemplates);
+get("save-model-routes").addEventListener("click", saveModelRoutes);

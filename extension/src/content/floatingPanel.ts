@@ -447,6 +447,7 @@ class FloatingPanel {
   private loadingAts: boolean = false;
   private workHistoryText: string = "";
   private promptTemplates: Record<string, string> = {};
+  private categoryModelRoutes: Record<string, string> = {};
   private trackedAppId: string | null = null;
 
   constructor() {
@@ -464,11 +465,12 @@ class FloatingPanel {
   }
 
   async init(): Promise<void> {
-    const data = await chrome.storage.local.get(["apiBaseUrl", "clerkUserId", "profile", "providerConfigs", "promptTemplates"]);
+    const data = await chrome.storage.local.get(["apiBaseUrl", "clerkUserId", "profile", "providerConfigs", "promptTemplates", "categoryModelRoutes"]);
     if (data.apiBaseUrl) this.apiBase = data.apiBaseUrl as string;
     if (data.clerkUserId) this.clerkUserId = data.clerkUserId as string;
     if (data.profile) this.profile = data.profile as Profile;
     if (data.promptTemplates) this.promptTemplates = data.promptTemplates as Record<string, string>;
+    if (data.categoryModelRoutes) this.categoryModelRoutes = data.categoryModelRoutes as Record<string, string>;
     if (data.providerConfigs) {
       const RANK: Record<string, number> = { anthropic: 1, openai: 2, gemini: 3, groq: 4, perplexity: 5, kimi: 6 };
       this.providers = Object.entries(data.providerConfigs as Record<string, { enabled: boolean; apiKey: string; model: string }>)
@@ -516,6 +518,10 @@ class FloatingPanel {
 
     // Auto-mark as "applied" when the form is submitted
     this.watchFormSubmission();
+
+    // L4: record category usage, then pre-generate answers for top categories
+    this.trackCategoryUsage();
+    this.preGenerateTopCategories();
   }
 
   private async trackApplication(): Promise<void> {
@@ -566,6 +572,54 @@ class FloatingPanel {
     }, { capture: true });
   }
 
+  /**
+   * L4: Increment usage counter for each detected question category.
+   * Stored in chrome.storage.local as { categoryUsage: Record<string, number> }
+   */
+  private trackCategoryUsage(): void {
+    if (this.questionStates.length === 0) return;
+    const seen = new Set<string>(this.questionStates.map((s) => s.question.category));
+    chrome.storage.local.get("categoryUsage").then((data) => {
+      const usage = (data.categoryUsage ?? {}) as Record<string, number>;
+      for (const cat of seen) {
+        usage[cat] = (usage[cat] ?? 0) + 1;
+      }
+      chrome.storage.local.set({ categoryUsage: usage }).catch(() => {});
+    }).catch(() => {});
+  }
+
+  /**
+   * L4: Pre-generate answers for questions whose category has been seen >= 2 times before
+   * (i.e., the user has encountered this category on a previous page).
+   * Limits concurrent pre-generations to 2 at a time to avoid hammering the API.
+   */
+  private async preGenerateTopCategories(): Promise<void> {
+    if (!this.clerkUserId || this.questionStates.length === 0) return;
+
+    const data = await chrome.storage.local.get("categoryUsage").catch(() => ({})) as { categoryUsage?: Record<string, number> };
+    const usage = data.categoryUsage ?? {};
+
+    // Find question states that:
+    // 1. Have no drafts yet (nothing to pre-gen if already done)
+    // 2. Belong to a category the user has encountered before (count >= 2)
+    const candidates = this.questionStates
+      .map((state, idx) => ({ state, idx, count: usage[state.question.category] ?? 0 }))
+      .filter(({ state, count }) => state.drafts.length === 0 && !state.loading && count >= 2)
+      .sort((a, b) => b.count - a.count) // highest-frequency first
+      .slice(0, 3); // max 3 pre-generated per page load
+
+    if (candidates.length === 0) return;
+
+    // Small delay so the panel renders first — improves perceived perf
+    await new Promise<void>((r) => setTimeout(r, 600));
+
+    // Generate in batches of 2 to limit API concurrency
+    for (let i = 0; i < candidates.length; i += 2) {
+      const batch = candidates.slice(i, i + 2);
+      await Promise.allSettled(batch.map(({ idx }) => this.generateAnswer(idx)));
+    }
+  }
+
   private async loadAtsScore(): Promise<void> {
     if (!this.clerkUserId || !this.company) return;
     this.loadingAts = true;
@@ -608,7 +662,16 @@ class FloatingPanel {
       fd.append("jd_text", this.jdText);
       fd.append("work_history_text", this.workHistoryText);
       if (this.providers.length > 0) {
-        fd.append("providers_json", JSON.stringify(this.providers));
+        // L5: model routing — if user has set a preferred provider for this category,
+        // rotate it to the front so the API uses it first
+        const preferredProviderName = this.categoryModelRoutes[state.question.category];
+        let orderedProviders = this.providers;
+        if (preferredProviderName) {
+          const preferred = this.providers.filter((p) => p.name === preferredProviderName);
+          const rest = this.providers.filter((p) => p.name !== preferredProviderName);
+          if (preferred.length > 0) orderedProviders = [...preferred, ...rest];
+        }
+        fd.append("providers_json", JSON.stringify(orderedProviders));
       }
       if (state.question.maxLength && state.question.maxLength > 0) {
         fd.append("max_length", String(state.question.maxLength));
