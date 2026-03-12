@@ -7,10 +7,12 @@
 
 import type { DetectedField, DetectedQuestion, FieldType, QuestionCategory } from "../shared/types";
 import { initAshbyApply } from "./ashbyApply";
+import { initICIMSApply } from "./icimsApply";
 import { initIndeedApply } from "./indeedApply";
 import { initLeverApply } from "./leverApply";
 import { initLinkedInEasyApply } from "./linkedinEasyApply";
 import { initSmartRecruitersApply } from "./smartRecruitersApply";
+import { initTaleoApply } from "./taleoApply";
 import { initWorkdayApply } from "./workdayApply";
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -1508,13 +1510,15 @@ function bootstrap() {
   if (document.getElementById("__autoapply_host__")) return;
   panelInstance = new FloatingPanel();
   void panelInstance.init();
-  // P2: LinkedIn + Indeed + Workday + Ashby + SmartRecruiters + Lever modal auto-fill
+  // P2: LinkedIn + Indeed + Workday + Ashby + SmartRecruiters + Lever + iCIMS + Taleo auto-fill
   initLinkedInEasyApply();
   initIndeedApply();
   initWorkdayApply();
   initAshbyApply();
   initSmartRecruitersApply();
   initLeverApply();
+  initICIMSApply();
+  initTaleoApply();
 }
 
 // Run after DOM is ready

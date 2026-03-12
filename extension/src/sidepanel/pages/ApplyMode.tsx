@@ -131,6 +131,9 @@ export default function ApplyMode({ context }: Props) {
   const [interviewError, setInterviewError] = useState<string>("");
   const [expandedPrepIdx, setExpandedPrepIdx] = useState<number | null>(null);
   // Cover letter tab
+  const [coverDrafts, setCoverDrafts] = useState<string[]>([]);
+  const [coverDraftProviders, setCoverDraftProviders] = useState<string[]>([]);
+  const [coverSelectedDraft, setCoverSelectedDraft] = useState(0);
   const [coverLetter, setCoverLetter] = useState<string>("");
   const [coverLoading, setCoverLoading] = useState(false);
   const [coverError, setCoverError] = useState<string>("");
@@ -402,7 +405,12 @@ export default function ApplyMode({ context }: Props) {
         categoryInstructions: instructions,
         providers,
       });
-      setCoverLetter(result.drafts?.[0] ?? "");
+      const drafts = result.drafts ?? [];
+      const draftProviders = result.draft_providers ?? [];
+      setCoverDrafts(drafts);
+      setCoverDraftProviders(draftProviders);
+      setCoverSelectedDraft(0);
+      setCoverLetter(drafts[0] ?? "");
     } catch (err) {
       setCoverError(err instanceof Error ? err.message : "Generation failed");
     } finally {
@@ -1318,6 +1326,28 @@ export default function ApplyMode({ context }: Props) {
 
             {coverLetter && (
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {coverDrafts.length > 1 && (
+                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                    {coverDrafts.map((_, i) => (
+                      <button
+                        key={i}
+                        onClick={() => { setCoverSelectedDraft(i); setCoverLetter(coverDrafts[i]); }}
+                        style={{
+                          background: coverSelectedDraft === i ? "#3730a3" : "#12121e",
+                          color: coverSelectedDraft === i ? "#c4b5fd" : "#64748b",
+                          border: `1px solid ${coverSelectedDraft === i ? "#4f46e5" : "#1f1f38"}`,
+                          borderRadius: 6,
+                          padding: "3px 10px",
+                          fontSize: 10,
+                          fontWeight: 600,
+                          cursor: "pointer",
+                        }}
+                      >
+                        Draft {i + 1}{coverDraftProviders[i] ? ` (${coverDraftProviders[i]})` : ""}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <span style={{ fontSize: 10, color: "#475569" }}>
                     {coverLetter.split(/\s+/).filter(Boolean).length} words
