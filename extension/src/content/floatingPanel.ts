@@ -101,24 +101,74 @@ function isJobPage(): boolean {
   return JOB_PAGE_PATTERNS.some((p) => p.test(url));
 }
 
-function extractCompanyFromPage(): string {
-  const title = document.title;
-  const atMatch = title.match(/\bat\s+([A-Z][a-zA-Z\s&,.'-]+?)(?:\s*[\-–|]|$)/);
-  if (atMatch) return atMatch[1].trim();
-  const h1 = document.querySelector("h1");
-  if (h1) {
-    const m = h1.textContent?.match(/\bat\s+([A-Z][a-zA-Z\s&,.'-]+?)(?:\s*[\-–|]|$)/);
-    if (m) return m[1].trim();
+function extractCompanyAndRoleFromPage(): { company: string; roleTitle: string } {
+  const url = window.location.href;
+  const docTitle = document.title;
+  let company = "";
+  let roleTitle = "";
+
+  if (/greenhouse\.io/.test(url)) {
+    roleTitle = document.querySelector<HTMLElement>("h1.app-title, h1[data-qa='job-title'], .app__role-title")?.textContent?.trim() ?? "";
+    company = document.querySelector<HTMLElement>(".company-name, .org-name, [data-qa='company-name']")?.textContent?.trim() ?? "";
+  } else if (/lever\.co/.test(url)) {
+    roleTitle = document.querySelector<HTMLElement>("h2, .posting-headline h2")?.textContent?.trim() ?? "";
+    company = document.querySelector<HTMLImageElement>(".main-header-logo img")?.alt?.trim()
+      ?? document.querySelector<HTMLMetaElement>("meta[property='og:site_name']")?.content?.trim()
+      ?? "";
+  } else if (/workday\.com|myworkday\.com/.test(url)) {
+    roleTitle = document.querySelector<HTMLElement>("[data-automation-id='jobPostingHeader'] h2, [data-automation-id='jobPostingTitle']")?.textContent?.trim() ?? "";
+    company = document.querySelector<HTMLElement>("[data-automation-id='companyNameText']")?.textContent?.trim() ?? "";
+    if (!company) {
+      const sub = url.match(/https?:\/\/([^.]+)\.(?:myworkday|wd\d+\.myworkdayjobs)\.com/);
+      if (sub) company = sub[1].replace(/-/g, " ");
+    }
+  } else if (/ashbyhq\.com/.test(url)) {
+    roleTitle = document.querySelector<HTMLElement>("h1.job-title, h1, [class*='JobTitle']")?.textContent?.trim() ?? "";
+    company = document.querySelector<HTMLElement>("[class*='CompanyName'], [class*='company-name']")?.textContent?.trim() ?? "";
+    if (!company) {
+      const sub = url.match(/https?:\/\/jobs\.ashbyhq\.com\/([^/?#]+)/);
+      if (sub) company = sub[1].replace(/-/g, " ");
+    }
+  } else if (/smartrecruiters\.com/.test(url)) {
+    roleTitle = document.querySelector<HTMLElement>(".job-title, h1")?.textContent?.trim() ?? "";
+    company = document.querySelector<HTMLElement>(".company-name, [class*='CompanyName']")?.textContent?.trim() ?? "";
   }
-  const url = window.location.hostname;
-  const domain = url.replace(/^www\./, "").split(".")[0] ?? "";
-  return domain.charAt(0).toUpperCase() + domain.slice(1);
+
+  // OG meta fallback
+  if (!company) {
+    company = document.querySelector<HTMLMetaElement>("meta[property='og:site_name']")?.content?.trim()
+      ?? document.querySelector<HTMLMetaElement>("meta[name='application-name']")?.content?.trim()
+      ?? "";
+  }
+
+  // Title pattern fallback
+  if (!company) {
+    const atMatch = docTitle.match(/\bat\s+([A-Z][A-Za-z0-9\s&.,'()-]+?)(?:\s*[\-–|·]|$)/);
+    if (atMatch) company = atMatch[1].trim();
+  }
+  if (!roleTitle) {
+    // Generic: first h1 or first title segment
+    roleTitle = document.querySelector("h1")?.textContent?.trim().slice(0, 100)
+      ?? docTitle.split(/[\-–|·]/)[0]?.trim()
+      ?? docTitle;
+  }
+  if (!company) {
+    const domain = window.location.hostname.replace(/^www\./, "").split(".")[0] ?? "";
+    company = domain.charAt(0).toUpperCase() + domain.slice(1);
+  }
+
+  // Clean trailing noise
+  company = company.replace(/\s*[-–|·].*$/, "").replace(/\s*(careers|jobs|hiring|apply)\s*$/i, "").trim();
+
+  return { company, roleTitle };
+}
+
+function extractCompanyFromPage(): string {
+  return extractCompanyAndRoleFromPage().company;
 }
 
 function extractRoleFromPage(): string {
-  const h1 = document.querySelector("h1");
-  if (h1 && h1.textContent) return h1.textContent.trim().slice(0, 80);
-  return document.title.split(/[\-–|]/)[0]?.trim() ?? "";
+  return extractCompanyAndRoleFromPage().roleTitle;
 }
 
 function extractJdText(): string {
