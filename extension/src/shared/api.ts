@@ -186,6 +186,12 @@ export interface GenerateResumeResponse {
   warnings: string[];
 }
 
+export interface InterviewQuestion {
+  question: string;
+  category: "behavioral" | "motivation" | "technical" | "general";
+  suggested_answer: string;
+}
+
 export interface GenerateTailoredResponse {
   resume_id: string;
   version_tag: string;
@@ -366,6 +372,25 @@ export const vaultApi = {
       ));
     }
     return post("/vault/generate/tailored", fd);
+  },
+
+  /** T3: Generate 10 likely interview questions + suggested answers for a role */
+  interviewPrep(params: {
+    companyName: string;
+    roleTitle?: string;
+    jdText?: string;
+    providers?: Array<{ name: string; apiKey: string; model?: string }>;
+  }): Promise<{ questions: InterviewQuestion[]; total: number }> {
+    const fd = new FormData();
+    fd.append("company_name", params.companyName);
+    if (params.roleTitle) fd.append("role_title", params.roleTitle);
+    if (params.jdText) fd.append("jd_text", params.jdText);
+    if (params.providers?.length) {
+      fd.append("providers_json", JSON.stringify(
+        params.providers.map((p) => ({ name: p.name, api_key: p.apiKey, model: p.model ?? "" }))
+      ));
+    }
+    return post("/vault/interview-prep", fd);
   },
 };
 

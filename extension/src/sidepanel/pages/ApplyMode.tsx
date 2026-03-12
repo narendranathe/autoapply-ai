@@ -1,12 +1,12 @@
 import React, { useEffect, useRef, useState } from "react";
 import type { ATSScoreResult, PageContext, ResumeCard } from "../../shared/types";
-import { applicationsApi, vaultApi, workHistoryApi, type GenerateTailoredResponse, type RetrieveResponse, type SimilarAnswer, type TrackedApplication } from "../../shared/api";
+import { applicationsApi, vaultApi, workHistoryApi, type GenerateTailoredResponse, type InterviewQuestion, type RetrieveResponse, type SimilarAnswer, type TrackedApplication } from "../../shared/api";
 import ATSScoreBar from "../components/ATSScoreBar";
 import ResumeCardComponent from "../components/ResumeCard";
 
 interface Props { context: PageContext }
 
-type Tab = "resumes" | "fields" | "questions" | "history";
+type Tab = "resumes" | "fields" | "questions" | "history" | "prep";
 
 function scoreColor(s: number): string {
   if (s >= 80) return "#10b981";
@@ -123,6 +123,11 @@ export default function ApplyMode({ context }: Props) {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [appStats, setAppStats] = useState<{ total: number; by_status: Record<string, number>; unique_companies: number } | null>(null);
   const [updatingStatus, setUpdatingStatus] = useState<string | null>(null);
+  // T3: interview prep
+  const [interviewQuestions, setInterviewQuestions] = useState<InterviewQuestion[]>([]);
+  const [interviewLoading, setInterviewLoading] = useState(false);
+  const [interviewError, setInterviewError] = useState<string>("");
+  const [expandedPrepIdx, setExpandedPrepIdx] = useState<number | null>(null);
 
   const PROVIDER_RANK: Record<string, number> = { anthropic: 1, openai: 2, gemini: 3, groq: 4, perplexity: 5, kimi: 6 };
   const PROVIDER_MODELS: Record<string, string> = { anthropic: "claude-sonnet-4-6", openai: "gpt-4o", gemini: "gemini-1.5-flash", groq: "llama-3.3-70b-versatile", perplexity: "sonar", kimi: "moonshot-v1-32k" };
@@ -341,6 +346,27 @@ export default function ApplyMode({ context }: Props) {
     }
   };
 
+  const handleInterviewPrep = async () => {
+    if (!context.company) return;
+    setInterviewLoading(true);
+    setInterviewError("");
+    setInterviewQuestions([]);
+    try {
+      const providers = await getFreshProviders();
+      const result = await vaultApi.interviewPrep({
+        companyName: context.company,
+        roleTitle: context.roleTitle,
+        jdText: context.jdText ?? "",
+        providers,
+      });
+      setInterviewQuestions(result.questions);
+    } catch (e) {
+      setInterviewError(e instanceof Error ? e.message : "Failed to generate interview prep");
+    } finally {
+      setInterviewLoading(false);
+    }
+  };
+
   const handleFillAll = () => {
     context.detectedFields.forEach((f) => {
       const value = getProfileValue(f.fieldType, profile);
@@ -525,6 +551,7 @@ export default function ApplyMode({ context }: Props) {
     { key: "fields", label: "Fields", count: context.detectedFields.length },
     { key: "questions", label: "Q&A", count: context.openQuestions.length },
     { key: "history", label: "History", count: allApplications.length },
+    { key: "prep", label: "Prep", count: interviewQuestions.length },
   ];
 
   return (
@@ -1044,6 +1071,52 @@ export default function ApplyMode({ context }: Props) {
           </>
         )}
 
+        {/* T3 — Interview Prep tab */}
+        {tab === "prep" && (
+          <>
+            <div style={{ marginBottom: 10 }}>
+              <button
+                onClick={handleInterviewPrep}
+                disabled={interviewLoading || !context.company}
+                style={{
+                  width: "100%",
+                  padding: "10px",
+                  background: "linear-gradient(135deg,#6d28d9 0%,#4f46e5 100%)",
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: 8,
+                  fontSize: 12,
+                  fontWeight: 700,
+                  cursor: interviewLoading ? "not-allowed" : "pointer",
+                  opacity: interviewLoading ? 0.6 : 1,
+                }}
+              >
+                {interviewLoading ? "Generating questions…" : `⚡ Generate Interview Prep for ${context.company || "this role"}`}
+              </button>
+              {interviewError && (
+                <div style={{ marginTop: 6, fontSize: 11, color: "#f87171" }}>{interviewError}</div>
+              )}
+            </div>
+
+            {interviewQuestions.length === 0 && !interviewLoading && (
+              <EmptyState
+                message="No questions generated yet."
+                hint="Click the button above to generate 10 likely interview questions with suggested answers."
+              />
+            )}
+
+            {interviewQuestions.map((q, idx) => (
+              <PrepQuestion
+                key={idx}
+                question={q}
+                index={idx}
+                expanded={expandedPrepIdx === idx}
+                onToggle={() => setExpandedPrepIdx(expandedPrepIdx === idx ? null : idx)}
+              />
+            ))}
+          </>
+        )}
+
       </div>
     </div>
   );
@@ -1255,4 +1328,83 @@ function btnStyle(variant: "primary" | "ghost" | "generate" | "fill", disabled =
   if (variant === "ghost") return { ...base, background: "#1a1a2e", color: "#8b5cf6", padding: "5px 12px" };
   if (variant === "generate") return { ...base, background: "#1e1335", color: "#a78bfa", padding: "6px 12px", width: "100%", outline: "1px solid #2d1b69" };
   return { ...base, background: "#1e1b4b", color: "#a5b4fc", padding: "3px 10px" };
+}
+
+const CATEGORY_COLORS: Record<string, string> = {
+  behavioral: "#7c3aed",
+  motivation: "#0891b2",
+  technical: "#059669",
+  general: "#d97706",
+};
+
+function PrepQuestion({
+  question,
+  index,
+  expanded,
+  onToggle,
+}: {
+  question: InterviewQuestion;
+  index: number;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const catColor = CATEGORY_COLORS[question.category] ?? "#475569";
+  const [copied, setCopied] = useState(false);
+
+  const copyAnswer = () => {
+    navigator.clipboard.writeText(question.suggested_answer).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }).catch(() => {});
+  };
+
+  return (
+    <div style={{
+      background: "#12121e",
+      border: "1px solid #1f1f38",
+      borderRadius: 10,
+      padding: "10px 12px",
+      display: "flex",
+      flexDirection: "column",
+      gap: 6,
+    }}>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer" }} onClick={onToggle}>
+        <span style={{ fontSize: 10, fontWeight: 700, color: "#475569", minWidth: 18 }}>Q{index + 1}</span>
+        <span style={{ flex: 1, fontSize: 12, color: "#e2e8f0", lineHeight: 1.5 }}>{question.question}</span>
+        <span style={{
+          fontSize: 9,
+          fontWeight: 700,
+          color: catColor,
+          background: catColor + "22",
+          border: `1px solid ${catColor}44`,
+          borderRadius: 99,
+          padding: "1px 7px",
+          textTransform: "capitalize",
+          whiteSpace: "nowrap",
+        }}>{question.category}</span>
+      </div>
+
+      {expanded && (
+        <div style={{ borderTop: "1px solid #1f1f38", paddingTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.6 }}>{question.suggested_answer}</div>
+          <button
+            onClick={copyAnswer}
+            style={{
+              alignSelf: "flex-end",
+              background: "none",
+              border: "1px solid #334155",
+              color: copied ? "#22c55e" : "#64748b",
+              borderRadius: 6,
+              padding: "3px 10px",
+              fontSize: 11,
+              cursor: "pointer",
+              fontFamily: "system-ui,sans-serif",
+            }}
+          >
+            {copied ? "Copied ✓" : "⎘ Copy Answer"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }
