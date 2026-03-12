@@ -216,6 +216,46 @@ chrome.runtime.onMessage.addListener(
         chrome.runtime.sendMessage(message).catch(() => {});
         break;
       }
+
+      case "APPLICATION_SUBMITTED": {
+        // Content script detected a form submission — update tracked application to "applied".
+        // We look up the tracked context for this tab, find the application_id via the URL
+        // and call PATCH /applications/:id with status=applied.
+        const tabId = sender.tab?.id;
+        if (!tabId) break;
+        const ctx = tabContexts.get(tabId);
+        if (!ctx) break;
+
+        // Notify sidepanel so it can update its History tab state
+        chrome.runtime.sendMessage<Message>({ type: "PAGE_CONTEXT_UPDATE", payload: ctx }).catch(() => {});
+
+        // Fire-and-forget: update via API using stored credentials
+        chrome.storage.local.get(["clerkUserId", "apiBaseUrl"]).then((data) => {
+          const userId = data.clerkUserId as string | undefined;
+          const apiBase = (data.apiBaseUrl as string | undefined) || "https://autoapply-ai-api.fly.dev/api/v1";
+          if (!userId || !ctx.jobUrl) return;
+
+          // Use the track endpoint to get/create the application record first, then patch status
+          fetch(`${apiBase}/applications/track`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-Clerk-User-Id": userId },
+            body: JSON.stringify({
+              company_name: ctx.company,
+              role_title: ctx.roleTitle,
+              job_url: ctx.jobUrl,
+              platform: ctx.platform ?? "generic",
+            }),
+          }).then((r) => r.json()).then((res: { application_id: string }) => {
+            if (!res.application_id) return;
+            return fetch(`${apiBase}/applications/${res.application_id}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json", "X-Clerk-User-Id": userId },
+              body: JSON.stringify({ status: "applied" }),
+            });
+          }).catch(() => {});
+        }).catch(() => {});
+        break;
+      }
     }
   }
 );

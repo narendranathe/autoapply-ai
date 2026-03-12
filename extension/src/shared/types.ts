@@ -95,7 +95,8 @@ export type Message =
   | { type: "ATTACH_RESUME"; payload: { fieldId: string; pdfUrl: string } }
   | { type: "JOB_CARDS_UPDATE"; payload: JobCard[] }
   | { type: "GET_CONTEXT" }
-  | { type: "CONTEXT_RESPONSE"; payload: PageContext | null };
+  | { type: "CONTEXT_RESPONSE"; payload: PageContext | null }
+  | { type: "APPLICATION_SUBMITTED"; payload: { url: string } };
 
 // Offline sync queue entry
 export interface OfflineEdit {

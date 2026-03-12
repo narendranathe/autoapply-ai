@@ -608,12 +608,34 @@ function shouldRunInFrame(): boolean {
 
 // ── Run on load and on SPA navigation ─────────────────────────────────────
 
+// ── Form submission detection — auto-mark application as "applied" ─────────
+// Only runs in the main frame (top-level page), not sub-frames.
+function watchFormSubmissionForTracker() {
+  if (window.self !== window.top) return; // skip sub-frames
+
+  const notifySubmission = () => {
+    // Send to background which will update the tracked application status
+    chrome.runtime.sendMessage<Message>({ type: "APPLICATION_SUBMITTED", payload: { url: window.location.href } });
+  };
+
+  document.addEventListener("submit", notifySubmission, { capture: true });
+  document.addEventListener("click", (e) => {
+    const btn = (e.target as HTMLElement)?.closest("button, [type=submit], a[role=button]") as HTMLElement | null;
+    if (!btn) return;
+    const text = btn.textContent?.toLowerCase() ?? "";
+    if (/\b(submit application|submit my application|complete application|send application)\b/.test(text)) {
+      notifySubmission();
+    }
+  }, { capture: true });
+}
+
 if (!shouldRunInFrame()) {
   // This is a frame we should ignore (ad iframe, tracking pixel, etc.) — exit early
   // Export empty to satisfy module system
 } else {
 
 buildAndSendContext();
+watchFormSubmissionForTracker();
 
 // Re-scan when SPA frameworks (React/Vue) render form fields after document_idle.
 // Greenhouse, Lever, Workday all inject inputs 1-3s after the initial script run.
