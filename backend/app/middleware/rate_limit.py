@@ -20,6 +20,18 @@ from starlette.responses import JSONResponse, Response
 
 from app.config import settings
 
+# LLM endpoints that are expensive — apply a tighter per-minute cap
+_LLM_PATHS = {
+    "/api/v1/vault/generate/answers",
+    "/api/v1/vault/generate/tailored",
+    "/api/v1/vault/generate",
+    "/api/v1/vault/generate/summary",
+    "/api/v1/vault/generate/bullets",
+    "/api/v1/vault/interview-prep",
+    "/api/v1/work-history/import-from-resume",
+}
+_LLM_RPM = 10  # 10 LLM calls per minute per user
+
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
     def __init__(self, app, requests_per_minute: int = 60):
@@ -31,14 +43,25 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if request.url.path in {"/health", "/ready", "/metrics"}:
             return await call_next(request)
 
-        # Identify client (user ID header > IP address)
-        client_id = request.headers.get(
-            "X-User-ID", request.client.host if request.client else "unknown"
+        # Identify client — prefer authenticated user ID over IP
+        # Check X-Clerk-User-Id (header auth) first, then fall back to IP
+        client_id = (
+            request.headers.get("X-Clerk-User-Id") or request.client.host
+            if request.client
+            else "unknown"
         )
+
+        # For Bearer JWT auth we can't easily decode the sub here without full JWKS,
+        # so fall back to IP if no X-Clerk-User-Id is present.
+        # (JWT users are still per-IP rate-limited, which is acceptable.)
+
+        is_llm_path = request.url.path in _LLM_PATHS
+        effective_rpm = _LLM_RPM if is_llm_path else self.rpm
+        window_key = "llm" if is_llm_path else "api"
 
         try:
             redis = Redis.from_url(settings.REDIS_URL, decode_responses=True)
-            key = f"ratelimit:{client_id}:{request.url.path}"
+            key = f"ratelimit:{window_key}:{client_id}"
 
             # Increment counter and set expiry
             current = await redis.incr(key)
@@ -49,19 +72,23 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             await redis.aclose()
 
             # Check limit
-            if current > self.rpm:
+            if current > effective_rpm:
                 logger.warning(
                     "rate_limit_exceeded",
                     client_id=client_id[:16],
                     path=request.url.path,
                     current=current,
-                    limit=self.rpm,
+                    limit=effective_rpm,
+                    window=window_key,
                 )
                 return JSONResponse(
                     status_code=429,
                     content={
                         "error": "Rate limit exceeded",
-                        "detail": f"Maximum {self.rpm} requests per minute",
+                        "detail": (
+                            f"Maximum {effective_rpm} {'LLM' if is_llm_path else 'API'} "
+                            f"requests per minute"
+                        ),
                         "retry_after": ttl,
                     },
                     headers={"Retry-After": str(ttl)},
@@ -69,8 +96,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
             response = await call_next(request)
             # Add rate limit headers (like GitHub does)
-            response.headers["X-RateLimit-Limit"] = str(self.rpm)
-            response.headers["X-RateLimit-Remaining"] = str(max(0, self.rpm - current))
+            response.headers["X-RateLimit-Limit"] = str(effective_rpm)
+            response.headers["X-RateLimit-Remaining"] = str(max(0, effective_rpm - current))
             response.headers["X-RateLimit-Reset"] = str(ttl)
             return response
 
