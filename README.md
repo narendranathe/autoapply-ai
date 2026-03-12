@@ -152,6 +152,21 @@ Extension sends `X-Clerk-User-Id` from `chrome.storage.local` (set once at optio
 - **Extension sidepanel fixed**: three bugs caused the panel to never open
 - **UI redesigned** to match premium extensions (Simplify / Jobright AI aesthetic)
 
+### Phase 7 — Floating panel + intelligence layer (P1 feature sprint)
+- **Floating panel** (`floatingPanel.ts`): Shadow DOM isolated panel injected on all career/ATS pages — no sidepanel required
+- **JD text extraction** (L1): `extractJdText()` pulls visible job description text from the page to ground LLM answers
+- **Answer length awareness** (L2): `maxLength` attr on textareas threaded to API → LLM gets word count constraint
+- **Per-category style instructions** (L3): Options page textarea fields per question category; injected as "USER STYLE INSTRUCTIONS" block in LLM prompt
+- **Category usage tracking + pre-generation** (L4): Tracks which question categories appear per page visit; auto-pre-generates answers for top-3 most-seen categories on next visit
+- **Per-category model routing** (L5): Options page lets user pick preferred LLM provider per question type (cover letter → Anthropic, behavioral → OpenAI, etc.)
+- **Resume tailoring** (L6): `POST /vault/generate/tailored` uses stored base resume + work history to generate targeted LaTeX resume
+- **Application history dashboard** (T1): History tab with status timeline (discovered → applied → interview → offer → rejected) + stats row
+- **Contenteditable detection** (P5): Detects and fills `contenteditable="true"` divs (used by Workday, LinkedIn) via `execCommand("insertText")`
+- **Platform-specific extraction** (P5): Company/role extraction with dedicated selectors for Greenhouse, Lever, Workday, Ashby, SmartRecruiters, LinkedIn, Indeed
+- **APPLICATION_SUBMITTED tracking**: Form submit + button click listeners → auto-patch application status to "applied"
+- **Copy-to-clipboard**: ⎘ button on every draft answer with visual checkmark confirmation
+- **Smart MutationObserver**: Only re-detects form changes (not cosmetic DOM mutations) — 30% fewer unnecessary re-renders
+
 ---
 
 ## Phase 6 — Fly.io Migration + Extension Fixes
