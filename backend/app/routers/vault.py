@@ -44,6 +44,7 @@ from app.services.resume_generator import (
     _call_openai,
     generate_answer_drafts,
     generate_answer_drafts_cascade,
+    generate_answer_drafts_parallel,
     generate_full_latex_resume,
 )
 from app.services.resume_parser import ResumeParser
@@ -600,21 +601,40 @@ async def generate_answers(
         # Try to get the name from the user record
         candidate_name = getattr(user, "display_name", "") or getattr(user, "email_hash", "")[:8]
 
-    provider_used = ""
+    draft_providers: list[str] = []
     if providers_list:
-        drafts, provider_used = await generate_answer_drafts_cascade(
-            question_text=question_text,
-            question_category=question_category,
-            company_name=company_name,
-            role_title=role_title,
-            jd_text=jd_text,
-            work_history_text=work_history_text,
-            providers=providers_list,
-            past_accepted_answers=past_texts or None,
-            candidate_name=candidate_name,
-            max_length=max_length if max_length > 0 else None,
-            category_instructions=category_instructions.strip() or None,
-        )
+        if len(providers_list) > 1:
+            # Parallel mode: each provider generates one draft concurrently
+            drafts, draft_providers = await generate_answer_drafts_parallel(
+                question_text=question_text,
+                question_category=question_category,
+                company_name=company_name,
+                role_title=role_title,
+                jd_text=jd_text,
+                work_history_text=work_history_text,
+                providers=providers_list,
+                past_accepted_answers=past_texts or None,
+                candidate_name=candidate_name,
+                max_length=max_length if max_length > 0 else None,
+                category_instructions=category_instructions.strip() or None,
+            )
+        else:
+            # Single provider: use cascade (generates 3 drafts from one provider)
+            drafts, provider_used = await generate_answer_drafts_cascade(
+                question_text=question_text,
+                question_category=question_category,
+                company_name=company_name,
+                role_title=role_title,
+                jd_text=jd_text,
+                work_history_text=work_history_text,
+                providers=providers_list,
+                past_accepted_answers=past_texts or None,
+                candidate_name=candidate_name,
+                max_length=max_length if max_length > 0 else None,
+                category_instructions=category_instructions.strip() or None,
+            )
+            if provider_used and provider_used != "fallback":
+                draft_providers = [provider_used] * len(drafts)
     else:
         drafts = await generate_answer_drafts(
             question_text=question_text,
@@ -628,11 +648,6 @@ async def generate_answers(
             ollama_model=ollama_model,
             past_accepted_answers=past_texts or None,
         )
-
-    # draft_providers: same provider label for all drafts (single provider used)
-    draft_providers = (
-        [provider_used] * len(drafts) if provider_used and provider_used != "fallback" else []
-    )
 
     return {
         "drafts": drafts,
