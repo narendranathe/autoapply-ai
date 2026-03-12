@@ -8,6 +8,7 @@
 import type { DetectedField, DetectedQuestion, FieldType, QuestionCategory } from "../shared/types";
 import { initLinkedInEasyApply } from "./linkedinEasyApply";
 import { initIndeedApply } from "./indeedApply";
+import { initWorkdayApply } from "./workdayApply";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -1478,9 +1479,10 @@ function bootstrap() {
   if (document.getElementById("__autoapply_host__")) return;
   panelInstance = new FloatingPanel();
   void panelInstance.init();
-  // P2: LinkedIn Easy Apply + Indeed Apply modal auto-fill
+  // P2: LinkedIn Easy Apply + Indeed Apply + Workday modal auto-fill
   initLinkedInEasyApply();
   initIndeedApply();
+  initWorkdayApply();
 }
 
 // Run after DOM is ready
