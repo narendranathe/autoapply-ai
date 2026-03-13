@@ -498,6 +498,7 @@ async def generate_answer_drafts(
     api_key: str = "",
     ollama_model: str = "llama3.1:8b",
     past_accepted_answers: list[str] | None = None,
+    rag_context: str = "",
 ) -> list[str]:
     """
     Generate 3 draft answers to an open-ended application question.
@@ -524,6 +525,8 @@ Adapt the voice and structure above to the current question/company.
 Do NOT copy verbatim — generate fresh content grounded in work history.
 """
 
+    rag_section = f"\n{rag_context}\n" if rag_context.strip() else ""
+
     user_prompt = f"""QUESTION: {question_text}
 CATEGORY: {question_category}
 COMPANY: {company_name}
@@ -534,7 +537,7 @@ JOB DESCRIPTION (first 2000 chars):
 
 CANDIDATE WORK HISTORY (use ONLY these facts — no fabrication):
 {work_history_text[:3000]}
-
+{rag_section}
 ANSWERING FRAMEWORK FOR THIS CATEGORY:
 {framework_snippet}
 {memory_block}
@@ -673,6 +676,7 @@ async def generate_answer_drafts_cascade(
     candidate_name: str = "",
     max_length: int | None = None,
     category_instructions: str | None = None,  # extra style instructions from user settings
+    rag_context: str = "",
 ) -> tuple[list[str], str]:
     """
     Try providers in priority order. Use the first working one to generate 3 drafts.
@@ -734,6 +738,8 @@ Do NOT copy verbatim — generate fresh content grounded in work history.
                 f"\nUSER STYLE INSTRUCTIONS (MUST follow):\n{category_instructions.strip()}\n"
             )
 
+        rag_block = f"\n{rag_context}\n" if rag_context.strip() else ""
+
         user_prompt = f"""QUESTION: {question_text}
 CATEGORY: {question_category}
 COMPANY: {company_name}
@@ -743,7 +749,7 @@ JOB DESCRIPTION (first 2000 chars):
 {jd_text[:2000]}
 
 {wh_section}
-
+{rag_block}
 ANSWERING FRAMEWORK FOR THIS CATEGORY:
 {framework_snippet}
 {memory_block}{style_block}
@@ -860,6 +866,7 @@ async def generate_answer_drafts_parallel(
     candidate_name: str = "",
     max_length: int | None = None,
     category_instructions: str | None = None,
+    rag_context: str = "",
 ) -> tuple[list[str], list[str]]:
     """
     Run all providers concurrently. Each provider contributes one draft.
@@ -915,6 +922,8 @@ Do NOT copy verbatim — generate fresh content grounded in work history.
                 f"\nUSER STYLE INSTRUCTIONS (MUST follow):\n{category_instructions.strip()}\n"
             )
 
+        rag_block = f"\n{rag_context}\n" if rag_context.strip() else ""
+
         user_prompt = f"""QUESTION: {question_text}
 CATEGORY: {question_category}
 COMPANY: {company_name}
@@ -924,7 +933,7 @@ JOB DESCRIPTION (first 2000 chars):
 {jd_text[:2000]}
 
 {wh_section}
-{memory_block}
+{rag_block}{memory_block}
 {framework_snippet}
 {style_block}
 {length_instruction}
@@ -959,6 +968,7 @@ Write ONE focused, genuine answer (not DRAFT_1/DRAFT_2 format). Use first person
             candidate_name=candidate_name,
             max_length=max_length,
             category_instructions=category_instructions,
+            rag_context=rag_context,
         )
         return fallback_drafts, []
 
@@ -1297,6 +1307,7 @@ def _build_cover_letter_prompt_v2(
     word_limit: int = 400,
     num_drafts: int = 3,
     past_accepted: list[str] | None = None,
+    rag_context: str = "",
 ) -> str:
     tone_instruction = _TONE_INSTRUCTIONS.get(tone, _TONE_INSTRUCTIONS["professional"])
     word_range = f"{max(150, word_limit - 60)}-{word_limit}"
@@ -1319,6 +1330,8 @@ PREVIOUSLY ACCEPTED COVER LETTERS (mirror this voice — do NOT copy verbatim):
         else "CANDIDATE WORK HISTORY: Not provided — write using professional language and genuine enthusiasm."
     )
 
+    rag_section = f"\n{rag_context}\n" if rag_context.strip() else ""
+
     draft_instructions = "\n".join(
         f"DRAFT_{i + 1}:\n[{word_range} words — {'different opening angle' if i > 0 else 'direct value-prop opening'}]"
         for i in range(num_drafts)
@@ -1337,7 +1350,7 @@ JOB DESCRIPTION:
 {jd_text[:2500]}
 
 {wh_section}
-
+{rag_section}
 {memory_block}Respond in EXACTLY this format — {num_drafts} separate complete drafts:
 {draft_instructions}
 """
@@ -1353,6 +1366,7 @@ async def generate_cover_letter(
     tone: str = "professional",
     word_limit: int = 400,
     past_accepted: list[str] | None = None,
+    rag_context: str = "",
 ) -> tuple[list[str], list[str]]:
     """
     Generate cover letter drafts in parallel across all enabled providers.
@@ -1380,6 +1394,7 @@ async def generate_cover_letter(
             word_limit=word_limit,
             num_drafts=1,  # one draft per provider call
             past_accepted=past_accepted,
+            rag_context=rag_context,
         )
         name = p.get("name", "")
         api_key = p.get("api_key", "")

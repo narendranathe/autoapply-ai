@@ -701,6 +701,56 @@ export const applicationsApi = {
     a.click();
     URL.revokeObjectURL(url);
   },
+
+  // ── RAG Document Management ───────────────────────────────────────────────
+
+  /** Upload a markdown document to the RAG pipeline */
+  uploadMarkdownDoc(params: {
+    content: string;
+    docType: "resume" | "work_history" | "cover_letter_sample" | "other";
+    sourceFilename: string;
+    embeddingProvider?: string;
+    embeddingApiKey?: string;
+  }): Promise<{
+    source_filename: string;
+    doc_type: string;
+    chunks_stored: number;
+    has_dense_embeddings: boolean;
+    embedding_model: string;
+    message: string;
+  }> {
+    const fd = new FormData();
+    fd.append("content", params.content);
+    fd.append("doc_type", params.docType);
+    fd.append("source_filename", params.sourceFilename);
+    if (params.embeddingProvider) fd.append("embedding_provider", params.embeddingProvider);
+    if (params.embeddingApiKey) fd.append("embedding_api_key", params.embeddingApiKey);
+    return post("/vault/documents/upload-md", fd);
+  },
+
+  /** List all uploaded RAG documents */
+  listDocuments(): Promise<{
+    documents: Array<{
+      source_filename: string;
+      doc_type: string;
+      chunk_count: number;
+      has_dense_embeddings: boolean;
+      created_at: string;
+    }>;
+    total: number;
+  }> {
+    return get("/vault/documents");
+  },
+
+  /** Delete a RAG document by filename */
+  async deleteDocument(sourceFilename: string): Promise<void> {
+    await ensureInit();
+    const resp = await fetch(
+      `${getApiBase()}/vault/documents/${encodeURIComponent(sourceFilename)}`,
+      { method: "DELETE", headers: authHeaders() },
+    );
+    if (!resp.ok && resp.status !== 204) throw new Error("Delete document failed");
+  },
 };
 
 // ── Work History types ──────────────────────────────────────────────────────
