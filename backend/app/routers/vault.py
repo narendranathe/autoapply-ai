@@ -47,6 +47,7 @@ from app.services.resume_generator import (
     generate_answer_drafts,
     generate_answer_drafts_cascade,
     generate_answer_drafts_parallel,
+    generate_cover_letter,
     generate_full_latex_resume,
 )
 from app.services.resume_parser import ResumeParser
@@ -738,6 +739,84 @@ TEXT TO SHORTEN:
         "trimmed": trimmed,
         "char_count": len(trimmed),
         "provider_used": provider_used,
+    }
+
+
+# ── Dedicated cover letter endpoint ─────────────────────────────────────────
+
+
+@router.post("/generate/cover-letter")
+async def generate_cover_letter_endpoint(
+    company_name: str = Form(...),
+    role_title: str = Form(""),
+    jd_text: str = Form(""),
+    tone: str = Form("professional"),  # professional|enthusiastic|concise|conversational
+    word_limit: int = Form(400),
+    candidate_name: str = Form(""),
+    providers_json: str = Form(""),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """
+    Generate cover letter drafts — one per enabled LLM provider, run in parallel.
+    Accepts tone and word_limit controls. Returns up to N drafts (one per provider).
+    """
+    providers_list: list[dict] = []
+    with contextlib.suppress(Exception):
+        if providers_json.strip():
+            providers_list = _json.loads(providers_json)
+
+    # Load candidate work history
+    from app.models.work_history import WorkHistoryEntry as WHModel  # local import avoids circular
+
+    wh_rows = (
+        (
+            await db.execute(
+                select(WHModel).where(WHModel.user_id == user.id).order_by(WHModel.sort_order)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    work_history_text = "\n\n".join(
+        f"{r.role_title} at {r.company_name} ({r.start_date} – {r.end_date or 'present'})\n"
+        + "\n".join(f"• {b}" for b in (r.bullets or []))
+        for r in wh_rows
+    )
+
+    # Retrieve past accepted cover letters for style memory
+    stmt = (
+        select(ApplicationAnswer)
+        .where(
+            ApplicationAnswer.user_id == user.id,
+            ApplicationAnswer.question_category == "cover_letter",
+            ApplicationAnswer.reward_score >= 0.7,
+        )
+        .order_by(ApplicationAnswer.reward_score.desc())
+        .limit(2)
+    )
+    past = (await db.execute(stmt)).scalars().all()
+    past_accepted = [p.answer_text for p in past]
+
+    # candidate_name already received from form
+
+    drafts, draft_providers = await generate_cover_letter(
+        company_name=company_name,
+        role_title=role_title,
+        jd_text=jd_text,
+        work_history_text=work_history_text,
+        providers=providers_list,
+        candidate_name=candidate_name,
+        tone=tone,
+        word_limit=min(max(150, word_limit), 800),
+        past_accepted=past_accepted or None,
+    )
+
+    return {
+        "drafts": drafts,
+        "draft_providers": draft_providers,
+        "tone": tone,
+        "word_limit": word_limit,
     }
 
 

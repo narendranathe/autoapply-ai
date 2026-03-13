@@ -1275,3 +1275,154 @@ def _latex_to_markdown_preview(latex: str, profile: PersonalProfile) -> str:
             md_lines.append("")
 
     return "\n".join(md_lines)
+
+
+# ── Cover Letter Generation ─────────────────────────────────────────────────
+
+_TONE_INSTRUCTIONS: dict[str, str] = {
+    "professional": "Write in a polished, formal tone appropriate for corporate environments.",
+    "enthusiastic": "Write in an energetic, passionate tone that conveys genuine excitement for the role.",
+    "concise": "Write in a tight, direct style — every sentence must earn its place. No filler.",
+    "conversational": "Write in a warm, natural tone — formal enough for a job application but human and approachable.",
+}
+
+
+def _build_cover_letter_prompt_v2(
+    company_name: str,
+    role_title: str,
+    jd_text: str,
+    work_history_text: str,
+    candidate_name: str = "the candidate",
+    tone: str = "professional",
+    word_limit: int = 400,
+    num_drafts: int = 3,
+    past_accepted: list[str] | None = None,
+) -> str:
+    tone_instruction = _TONE_INSTRUCTIONS.get(tone, _TONE_INSTRUCTIONS["professional"])
+    word_range = f"{max(150, word_limit - 60)}-{word_limit}"
+
+    memory_block = ""
+    if past_accepted:
+        examples = "\n\n---\n".join(
+            f"PREVIOUS ACCEPTED COVER LETTER {i + 1}:\n{a[:600]}"
+            for i, a in enumerate(past_accepted[:2])
+        )
+        memory_block = f"""
+PREVIOUSLY ACCEPTED COVER LETTERS (mirror this voice — do NOT copy verbatim):
+{examples}
+
+"""
+
+    wh_section = (
+        f"CANDIDATE WORK HISTORY:\n{work_history_text[:3500]}"
+        if work_history_text.strip()
+        else "CANDIDATE WORK HISTORY: Not provided — write using professional language and genuine enthusiasm."
+    )
+
+    draft_instructions = "\n".join(
+        f"DRAFT_{i + 1}:\n[{word_range} words — {'different opening angle' if i > 0 else 'direct value-prop opening'}]"
+        for i in range(num_drafts)
+    )
+
+    return f"""Write {num_drafts} cover letter draft{"s" if num_drafts > 1 else ""} for the following application.
+
+POSITION: {role_title}
+COMPANY: {company_name}
+CANDIDATE NAME: {candidate_name}
+
+TONE INSTRUCTION: {tone_instruction}
+TARGET LENGTH: {word_range} words per draft
+
+JOB DESCRIPTION:
+{jd_text[:2500]}
+
+{wh_section}
+
+{memory_block}Respond in EXACTLY this format — {num_drafts} separate complete drafts:
+{draft_instructions}
+"""
+
+
+async def generate_cover_letter(
+    company_name: str,
+    role_title: str,
+    jd_text: str,
+    work_history_text: str,
+    providers: list[dict],
+    candidate_name: str = "",
+    tone: str = "professional",
+    word_limit: int = 400,
+    past_accepted: list[str] | None = None,
+) -> tuple[list[str], list[str]]:
+    """
+    Generate cover letter drafts in parallel across all enabled providers.
+
+    Returns (drafts, draft_providers) — parallel lists.
+    Each provider contributes one draft (different opening angle).
+    Falls back to rule-based if all LLMs fail.
+    """
+    num_providers = max(1, len(providers))
+    system_prompt = (
+        "You are an expert career coach specializing in compelling cover letters. "
+        "You write cover letters that are tailored, specific, and human — never generic. "
+        "You ground every claim in the candidate's real work history."
+    )
+
+    async def _call_one(p: dict, draft_num: int) -> tuple[str, str]:
+        """Call one provider and extract a single cover letter draft."""
+        user_prompt = _build_cover_letter_prompt_v2(
+            company_name=company_name,
+            role_title=role_title,
+            jd_text=jd_text,
+            work_history_text=work_history_text,
+            candidate_name=candidate_name or "the candidate",
+            tone=tone,
+            word_limit=word_limit,
+            num_drafts=1,  # one draft per provider call
+            past_accepted=past_accepted,
+        )
+        name = p.get("name", "")
+        api_key = p.get("api_key", "")
+        model = p.get("model", "")
+        try:
+            if name == "anthropic" and api_key:
+                raw = await _call_anthropic(system_prompt, user_prompt, api_key)
+            elif name == "openai" and api_key:
+                raw = await _call_openai(system_prompt, user_prompt, api_key)
+            elif name == "gemini" and api_key:
+                raw = await _call_gemini(
+                    system_prompt, user_prompt, api_key, model or "gemini-1.5-flash"
+                )
+            elif name == "groq" and api_key:
+                raw = await _call_groq(
+                    system_prompt, user_prompt, api_key, model or "llama-3.3-70b-versatile"
+                )
+            elif name == "kimi" and api_key:
+                raw = await _call_kimi(system_prompt, user_prompt, api_key)
+            else:
+                return ("", "")
+            # Strip any DRAFT_1: prefix the model may echo back
+            text = re.sub(r"^DRAFT_\d+:\s*", "", raw.strip(), flags=re.IGNORECASE).strip()
+            if text and len(text) > 100:
+                return (text, name)
+        except Exception as exc:
+            logger.warning(f"CoverLetter: provider '{name}' draft {draft_num} failed — {exc}")
+        return ("", "")
+
+    if not providers:
+        # No LLMs configured — return rule-based fallback
+        fallback = _rule_based_cover_letter_drafts(company_name, role_title, work_history_text)
+        return (fallback[:1], ["fallback"])
+
+    # Run all providers in parallel
+    tasks = [_call_one(p, i) for i, p in enumerate(providers[:num_providers])]
+    results = await asyncio.gather(*tasks)
+
+    drafts = [text for text, _ in results if text]
+    draft_providers = [prov for text, prov in results if text]
+
+    if not drafts:
+        fallback = _rule_based_cover_letter_drafts(company_name, role_title, work_history_text)
+        return (fallback[:1], ["fallback"])
+
+    return (drafts, draft_providers)

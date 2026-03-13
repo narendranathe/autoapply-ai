@@ -426,6 +426,31 @@ export const vaultApi = {
     return post("/vault/interview-prep", fd);
   },
 
+  /** Generate cover letter drafts — one per provider, parallel execution */
+  generateCoverLetter(params: {
+    companyName: string;
+    roleTitle?: string;
+    jdText?: string;
+    tone?: "professional" | "enthusiastic" | "concise" | "conversational";
+    wordLimit?: number;
+    candidateName?: string;
+    providers?: Array<{ name: string; apiKey: string; model?: string }>;
+  }): Promise<{ drafts: string[]; draft_providers: string[]; tone: string; word_limit: number }> {
+    const fd = new FormData();
+    fd.append("company_name", params.companyName);
+    if (params.roleTitle) fd.append("role_title", params.roleTitle);
+    if (params.jdText) fd.append("jd_text", params.jdText);
+    if (params.tone) fd.append("tone", params.tone);
+    if (params.wordLimit) fd.append("word_limit", String(params.wordLimit));
+    if (params.candidateName) fd.append("candidate_name", params.candidateName);
+    if (params.providers?.length) {
+      fd.append("providers_json", JSON.stringify(
+        params.providers.map((p) => ({ name: p.name, api_key: p.apiKey, model: p.model ?? "" }))
+      ));
+    }
+    return post("/vault/generate/cover-letter", fd);
+  },
+
   /** Shorten an answer draft to fit within a character limit */
   trimAnswer(params: {
     answerText: string;

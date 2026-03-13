@@ -439,20 +439,18 @@ export default function ApplyMode({ context }: Props) {
     setCoverLetter("");
     try {
       const providers = await getFreshProviders();
-      const question = `Write a ${coverWordLimit}-word ${coverTone} cover letter for the ${context.roleTitle || "position"} at ${context.company}.`;
-      const instructions = coverTone === "concise"
-        ? `Keep it under ${coverWordLimit} words. Be direct and factual. No fluff.`
-        : coverTone === "enthusiastic"
-        ? `Be genuinely enthusiastic and specific about why this company excites you. Under ${coverWordLimit} words.`
-        : `Use a professional, confident tone. Highlight relevant experience. Under ${coverWordLimit} words.`;
-      const result = await vaultApi.generateAnswers({
-        questionText: question,
-        questionCategory: "cover_letter",
+      // Get candidate name from stored profile
+      const profileData = await new Promise<{ firstName?: string; lastName?: string }>((resolve) => {
+        chrome.storage.local.get("profile", (d) => resolve(d.profile ?? {}));
+      });
+      const candidateName = [profileData.firstName, profileData.lastName].filter(Boolean).join(" ");
+      const result = await vaultApi.generateCoverLetter({
         companyName: context.company,
         roleTitle: context.roleTitle,
-        jdText: context.jdText ?? workHistoryText,
-        workHistoryText,
-        categoryInstructions: instructions,
+        jdText: context.jdText ?? "",
+        tone: coverTone,
+        wordLimit: coverWordLimit,
+        candidateName,
         providers,
       });
       const drafts = result.drafts ?? [];
