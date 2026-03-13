@@ -1376,6 +1376,28 @@ export default function ApplyMode({ context }: Props) {
               />
             )}
 
+            {interviewQuestions.length > 0 && (
+              <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 4 }}>
+                {(["all", "behavioral", "motivation", "technical", "general"] as const).map((cat) => {
+                  const count = cat === "all" ? interviewQuestions.length : interviewQuestions.filter((q) => q.category === cat).length;
+                  if (cat !== "all" && count === 0) return null;
+                  const isActive = (expandedPrepIdx === null && cat === "all") || false;
+                  return (
+                    <button
+                      key={cat}
+                      onClick={() => {
+                        /* Toggle filter: future enhancement — for now just collapse all */
+                        setExpandedPrepIdx(null);
+                      }}
+                      style={{ background: "#12121e", border: "1px solid #1f1f38", borderRadius: 99, padding: "2px 8px", fontSize: 9, fontWeight: 700, color: CATEGORY_COLORS[cat] ?? "#475569", cursor: "pointer" }}
+                    >
+                      {cat === "all" ? `All (${count})` : `${cat} (${count})`}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
             {interviewQuestions.map((q, idx) => (
               <PrepQuestion
                 key={idx}
@@ -1383,6 +1405,16 @@ export default function ApplyMode({ context }: Props) {
                 index={idx}
                 expanded={expandedPrepIdx === idx}
                 onToggle={() => setExpandedPrepIdx(expandedPrepIdx === idx ? null : idx)}
+                onSaveToBank={async () => {
+                  await vaultApi.saveAnswer({
+                    questionText: q.question,
+                    questionCategory: q.category === "behavioral" ? "challenge" : q.category === "motivation" ? "motivation" : "custom",
+                    answerText: q.suggested_answer,
+                    companyName: context.company,
+                    roleTitle: context.roleTitle,
+                    wasDefault: true,
+                  });
+                }}
               />
             ))}
           </>
@@ -1830,20 +1862,30 @@ function PrepQuestion({
   index,
   expanded,
   onToggle,
+  onSaveToBank,
 }: {
   question: InterviewQuestion;
   index: number;
   expanded: boolean;
   onToggle: () => void;
+  onSaveToBank?: () => Promise<void>;
 }) {
   const catColor = CATEGORY_COLORS[question.category] ?? "#475569";
   const [copied, setCopied] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   const copyAnswer = () => {
     navigator.clipboard.writeText(question.suggested_answer).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     }).catch(() => {});
+  };
+
+  const saveToBank = async () => {
+    if (!onSaveToBank || saving || saved) return;
+    setSaving(true);
+    try { await onSaveToBank(); setSaved(true); } catch { /* ignore */ } finally { setSaving(false); }
   };
 
   return (
@@ -1875,22 +1917,41 @@ function PrepQuestion({
       {expanded && (
         <div style={{ borderTop: "1px solid #1f1f38", paddingTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
           <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.6 }}>{question.suggested_answer}</div>
-          <button
-            onClick={copyAnswer}
-            style={{
-              alignSelf: "flex-end",
-              background: "none",
-              border: "1px solid #334155",
-              color: copied ? "#22c55e" : "#64748b",
-              borderRadius: 6,
-              padding: "3px 10px",
-              fontSize: 11,
-              cursor: "pointer",
-              fontFamily: "system-ui,sans-serif",
-            }}
-          >
-            {copied ? "Copied ✓" : "⎘ Copy Answer"}
-          </button>
+          <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+            {onSaveToBank && (
+              <button
+                onClick={() => void saveToBank()}
+                disabled={saving || saved}
+                style={{
+                  background: saved ? "#14532d" : "none",
+                  border: `1px solid ${saved ? "#166534" : "#334155"}`,
+                  color: saved ? "#86efac" : "#64748b",
+                  borderRadius: 6,
+                  padding: "3px 10px",
+                  fontSize: 11,
+                  cursor: saving || saved ? "default" : "pointer",
+                  fontFamily: "system-ui,sans-serif",
+                }}
+              >
+                {saved ? "✓ Saved" : saving ? "Saving…" : "Save to bank"}
+              </button>
+            )}
+            <button
+              onClick={copyAnswer}
+              style={{
+                background: "none",
+                border: "1px solid #334155",
+                color: copied ? "#22c55e" : "#64748b",
+                borderRadius: 6,
+                padding: "3px 10px",
+                fontSize: 11,
+                cursor: "pointer",
+                fontFamily: "system-ui,sans-serif",
+              }}
+            >
+              {copied ? "Copied ✓" : "⎘ Copy Answer"}
+            </button>
+          </div>
         </div>
       )}
     </div>
