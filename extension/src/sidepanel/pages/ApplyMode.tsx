@@ -1278,12 +1278,29 @@ export default function ApplyMode({ context }: Props) {
                             <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5, maxHeight: 80, overflowY: "auto", marginBottom: 6 }}>
                               {mem.answer_text.slice(0, 200)}{mem.answer_text.length > 200 ? "…" : ""}
                             </div>
-                            <button
-                              onClick={() => handleUseMemoryAnswer(q.questionId, q.questionText, q.category, mem)}
-                              style={{ ...btnStyle("fill"), fontSize: 10, background: "#064e3b", color: "#6ee7b7" }}
-                            >
-                              Use This
-                            </button>
+                            <div style={{ display: "flex", gap: 6 }}>
+                              <button
+                                onClick={() => handleUseMemoryAnswer(q.questionId, q.questionText, q.category, mem)}
+                                style={{ ...btnStyle("fill"), fontSize: 10, background: "#064e3b", color: "#6ee7b7" }}
+                              >
+                                Use This
+                              </button>
+                              <button
+                                onClick={async () => {
+                                  try {
+                                    await vaultApi.deleteAnswer(mem.answer_id);
+                                    setMemoryAnswers((prev) => ({
+                                      ...prev,
+                                      [q.questionId]: (prev[q.questionId] ?? []).filter((a) => a.answer_id !== mem.answer_id),
+                                    }));
+                                  } catch { /* silently ignore */ }
+                                }}
+                                style={{ ...btnStyle("ghost"), fontSize: 10, padding: "3px 8px", color: "#f87171", border: "1px solid #7f1d1d" }}
+                                title="Remove from bank"
+                              >
+                                ✕
+                              </button>
+                            </div>
                           </div>
                         ))}
                         <div style={{ height: 1, background: "#1a1a2e", margin: "2px 0" }} />

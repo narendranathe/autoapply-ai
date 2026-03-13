@@ -317,6 +317,15 @@ export const vaultApi = {
     return post("/vault/answers/save", fd);
   },
 
+  /** Delete a saved answer from the bank */
+  async deleteAnswer(answerId: string): Promise<void> {
+    await ensureInit();
+    await fetch(`${getApiBase()}/vault/answers/${answerId}`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    });
+  },
+
   /** Save multiple answers in a single request */
   bulkSaveAnswers(params: {
     companyName: string;

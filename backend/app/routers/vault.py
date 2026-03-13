@@ -19,6 +19,7 @@ Endpoints:
   GET    /api/v1/vault/github/versions          List versions/ directory on GitHub
   GET    /api/v1/vault/analytics               Per-user vault analytics (answer stats, reward, companies)
   POST   /api/v1/vault/answers/bulk-save       Save multiple answers in one request (batch)
+  DELETE /api/v1/vault/answers/{id}            Delete a saved answer from the bank
 """
 
 import contextlib
@@ -969,6 +970,25 @@ async def bulk_save_answers(
 
     await db.commit()
     return {"saved": len(saved_ids), "answer_ids": saved_ids}
+
+
+@router.delete("/answers/{answer_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_answer(
+    answer_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Delete a saved answer from the user's bank."""
+    stmt = select(ApplicationAnswer).where(
+        ApplicationAnswer.id == uuid.UUID(answer_id),
+        ApplicationAnswer.user_id == user.id,
+    )
+    result = await db.execute(stmt)
+    ans = result.scalar_one_or_none()
+    if ans is None:
+        raise HTTPException(status_code=404, detail="Answer not found")
+    await db.delete(ans)
+    await db.commit()
 
 
 # ── Professional summary endpoint ──────────────────────────────────────────
