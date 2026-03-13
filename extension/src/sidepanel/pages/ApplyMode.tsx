@@ -1714,20 +1714,12 @@ export default function ApplyMode({ context }: Props) {
               {answerBankResults.length > 0 && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
                   {answerBankResults.map((a) => (
-                    <div key={a.answer_id} style={{ background: "#0a0a14", border: "1px solid #1f1f38", borderRadius: 8, padding: "8px 10px" }}>
-                      <div style={{ fontSize: 10, color: "#7c3aed", fontWeight: 700, marginBottom: 2, display: "flex", justifyContent: "space-between" }}>
-                        <span>{a.company_name} · {a.question_category}</span>
-                        {a.reward_score != null && <span style={{ color: "#475569" }}>{(a.reward_score * 100).toFixed(0)}%</span>}
-                      </div>
-                      <div style={{ fontSize: 10, color: "#64748b", marginBottom: 4, fontStyle: "italic" }}>{a.question_text.slice(0, 100)}{a.question_text.length > 100 ? "…" : ""}</div>
-                      <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5, maxHeight: 60, overflowY: "auto" }}>{a.answer_text.slice(0, 200)}{a.answer_text.length > 200 ? "…" : ""}</div>
-                      <button
-                        onClick={() => navigator.clipboard.writeText(a.answer_text)}
-                        style={{ ...btnStyle("ghost"), fontSize: 9, padding: "2px 6px", marginTop: 4 }}
-                      >
-                        Copy
-                      </button>
-                    </div>
+                    <AnswerBankCard
+                      key={a.answer_id}
+                      answer={a}
+                      onDelete={() => setAnswerBankResults((prev) => prev.filter((x) => x.answer_id !== a.answer_id))}
+                      onEdit={(newText) => setAnswerBankResults((prev) => prev.map((x) => x.answer_id === a.answer_id ? { ...x, answer_text: newText } : x))}
+                    />
                   ))}
                 </div>
               )}
@@ -2371,6 +2363,77 @@ const CATEGORY_COLORS: Record<string, string> = {
   technical: "#059669",
   general: "#d97706",
 };
+
+function AnswerBankCard({
+  answer,
+  onDelete,
+  onEdit,
+}: {
+  answer: { answer_id: string; question_text: string; answer_text: string; company_name: string; question_category: string; reward_score: number | null; feedback: string };
+  onDelete: () => void;
+  onEdit: (newText: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [editText, setEditText] = useState(answer.answer_text);
+  const [saving, setSaving] = useState(false);
+
+  const handleSaveEdit = async () => {
+    if (!editText.trim()) return;
+    setSaving(true);
+    try {
+      await vaultApi.editAnswer(answer.answer_id, editText.trim());
+      onEdit(editText.trim());
+      setEditing(false);
+    } catch { /* ignore */ } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div style={{ background: "#0a0a14", border: "1px solid #1f1f38", borderRadius: 8, padding: "8px 10px" }}>
+      <div style={{ fontSize: 10, color: "#7c3aed", fontWeight: 700, marginBottom: 2, display: "flex", justifyContent: "space-between" }}>
+        <span>{answer.company_name} · {answer.question_category}</span>
+        <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+          {answer.reward_score != null && <span style={{ color: "#475569" }}>{(answer.reward_score * 100).toFixed(0)}%</span>}
+          <button onClick={() => { setEditing(!editing); setEditText(answer.answer_text); }} style={{ ...btnStyle("ghost"), fontSize: 9, padding: "1px 5px" }}>
+            {editing ? "Cancel" : "✎ Edit"}
+          </button>
+          <button onClick={async () => { await vaultApi.deleteAnswer(answer.answer_id); onDelete(); }} style={{ ...btnStyle("ghost"), fontSize: 9, padding: "1px 5px", color: "#f87171" }}>
+            ✕
+          </button>
+        </div>
+      </div>
+      <div style={{ fontSize: 10, color: "#64748b", marginBottom: 4, fontStyle: "italic" }}>{answer.question_text.slice(0, 100)}{answer.question_text.length > 100 ? "…" : ""}</div>
+      {editing ? (
+        <>
+          <textarea
+            value={editText}
+            onChange={(e) => setEditText(e.target.value)}
+            rows={4}
+            style={{ width: "100%", background: "#12121e", border: "1px solid #2d2d52", borderRadius: 6, color: "#e2e8f0", fontSize: 11, padding: "6px 8px", outline: "none", resize: "vertical", boxSizing: "border-box" }}
+          />
+          <button
+            onClick={() => void handleSaveEdit()}
+            disabled={saving}
+            style={{ ...btnStyle("generate", saving), fontSize: 9, padding: "3px 8px", marginTop: 4 }}
+          >
+            {saving ? "Saving…" : "Save Edit"}
+          </button>
+        </>
+      ) : (
+        <>
+          <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5, maxHeight: 60, overflowY: "auto" }}>{answer.answer_text.slice(0, 200)}{answer.answer_text.length > 200 ? "…" : ""}</div>
+          <button
+            onClick={() => navigator.clipboard.writeText(answer.answer_text)}
+            style={{ ...btnStyle("ghost"), fontSize: 9, padding: "2px 6px", marginTop: 4 }}
+          >
+            Copy
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
 
 function PrepQuestion({
   question,

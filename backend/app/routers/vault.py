@@ -1321,6 +1321,43 @@ async def record_answer_feedback(
     }
 
 
+# ── Edit saved answer text ─────────────────────────────────────────────────
+
+
+@router.patch("/answers/{answer_id}")
+async def edit_answer_text(
+    answer_id: str,
+    answer_text: str = Form(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Update the stored text of a saved answer.
+    Resets reward_score to 0.5 (neutral) since we can't assess quality of manual edits.
+    """
+    stmt = select(ApplicationAnswer).where(
+        ApplicationAnswer.id == uuid.UUID(answer_id),
+        ApplicationAnswer.user_id == user.id,
+    )
+    result = await db.execute(stmt)
+    ans = result.scalar_one_or_none()
+    if ans is None:
+        raise HTTPException(status_code=404, detail="Answer not found")
+
+    ans.answer_text = answer_text.strip()
+    ans.word_count = len(ans.answer_text.split())
+    ans.feedback = "edited"
+    ans.reward_score = 0.5  # neutral — user manually provided this answer
+
+    await db.commit()
+    return {
+        "answer_id": answer_id,
+        "word_count": ans.word_count,
+        "feedback": ans.feedback,
+        "reward_score": ans.reward_score,
+    }
+
+
 # ── Similar answers retrieval (bandit policy) ─────────────────────────────
 
 

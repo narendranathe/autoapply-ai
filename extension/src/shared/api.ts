@@ -318,6 +318,18 @@ export const vaultApi = {
   },
 
   /** Delete a saved answer from the bank */
+  /** Edit the text of a saved answer */
+  editAnswer(answerId: string, answerText: string): Promise<{
+    answer_id: string;
+    word_count: number;
+    feedback: string;
+    reward_score: number;
+  }> {
+    const fd = new FormData();
+    fd.append("answer_text", answerText);
+    return patch(`/vault/answers/${answerId}`, fd);
+  },
+
   async deleteAnswer(answerId: string): Promise<void> {
     await ensureInit();
     await fetch(`${getApiBase()}/vault/answers/${answerId}`, {
