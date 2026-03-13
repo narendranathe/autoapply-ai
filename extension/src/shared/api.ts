@@ -748,6 +748,17 @@ export const applicationsApi = {
     return get("/applications/stats");
   },
 
+  /** Application funnel metrics with 30-day daily volume */
+  getFunnel(): Promise<{
+    total: number;
+    funnel: Array<{ stage: string; count: number; pct_of_total: number }>;
+    response_rate_pct: number;
+    offer_rate_pct: number;
+    daily_volume_30d: Array<{ date: string; count: number }>;
+  }> {
+    return get("/applications/funnel");
+  },
+
   /** Download all applications as CSV — triggers browser download */
   async exportCsv(): Promise<void> {
     await ensureInit();

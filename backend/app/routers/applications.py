@@ -13,6 +13,7 @@ import csv
 import hashlib
 import io
 import uuid
+from collections import Counter
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -293,3 +294,71 @@ async def export_applications_csv(
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=applications.csv"},
     )
+
+
+@router.get("/funnel")
+async def get_application_funnel(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Application funnel metrics: how many applications reach each status.
+
+    Returns ordered funnel stages with counts + conversion rates.
+    Also returns a 30-day daily application volume series.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    stmt = select(Application).where(Application.user_id == user.id)
+    result = await db.execute(stmt)
+    apps = list(result.scalars().all())
+
+    # Stage funnel (ordered by progression)
+    FUNNEL_ORDER = [
+        "discovered",
+        "applied",
+        "tailored",
+        "phone_screen",
+        "interview",
+        "offer",
+        "rejected",
+    ]
+    status_counts = Counter(a.status for a in apps)
+    total = len(apps)
+
+    funnel = []
+    for stage in FUNNEL_ORDER:
+        count = status_counts.get(stage, 0)
+        funnel.append(
+            {
+                "stage": stage,
+                "count": count,
+                "pct_of_total": round(count / total * 100, 1) if total else 0,
+            }
+        )
+
+    # 30-day daily volume
+    cutoff = datetime.now(UTC) - timedelta(days=30)
+    daily: dict[str, int] = {}
+    for a in apps:
+        if a.created_at and a.created_at >= cutoff:
+            day = a.created_at.strftime("%Y-%m-%d")
+            daily[day] = daily.get(day, 0) + 1
+
+    # Response rate = (interview + offer) / applied
+    applied_count = sum(status_counts.get(s, 0) for s in ["applied", "tailored"])
+    positive_count = sum(status_counts.get(s, 0) for s in ["phone_screen", "interview", "offer"])
+    response_rate = round(positive_count / applied_count * 100, 1) if applied_count else 0
+
+    # Offer rate = offers / total non-discovered
+    offer_count = status_counts.get("offer", 0)
+    non_discovered = total - status_counts.get("discovered", 0)
+    offer_rate = round(offer_count / non_discovered * 100, 1) if non_discovered else 0
+
+    return {
+        "total": total,
+        "funnel": funnel,
+        "response_rate_pct": response_rate,
+        "offer_rate_pct": offer_rate,
+        "daily_volume_30d": [{"date": d, "count": c} for d, c in sorted(daily.items())],
+    }

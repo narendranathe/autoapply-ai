@@ -157,6 +157,7 @@ export default function ApplyMode({ context }: Props) {
   const [allApplications, setAllApplications] = useState<TrackedApplication[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [appStats, setAppStats] = useState<{ total: number; by_status: Record<string, number>; unique_companies: number } | null>(null);
+  const [appFunnel, setAppFunnel] = useState<Awaited<ReturnType<typeof applicationsApi.getFunnel>> | null>(null);
   const [updatingStatus, setUpdatingStatus] = useState<string | null>(null);
   const [historySearch, setHistorySearch] = useState("");
   const [historyStatusFilter, setHistoryStatusFilter] = useState<string>("all");
@@ -332,10 +333,12 @@ export default function ApplyMode({ context }: Props) {
     Promise.all([
       applicationsApi.list(),
       applicationsApi.getStats(),
+      applicationsApi.getFunnel().catch(() => null),
       vaultApi.getAnalytics().catch(() => null),
-    ]).then(([listRes, statsRes, analyticsRes]) => {
+    ]).then(([listRes, statsRes, funnelRes, analyticsRes]) => {
       setAllApplications(listRes.items);
       setAppStats(statsRes);
+      if (funnelRes) setAppFunnel(funnelRes);
       if (analyticsRes) setVaultAnalytics(analyticsRes);
     }).catch(() => {}).finally(() => setHistoryLoading(false));
   }, [tab]);
@@ -1642,6 +1645,72 @@ export default function ApplyMode({ context }: Props) {
                   </div>
                 ))}
               </div>
+            )}
+
+            {/* Application funnel */}
+            {appFunnel && appFunnel.total > 0 && (
+              <Section label="Application Funnel">
+                {/* Rate badges */}
+                <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+                  {[
+                    { label: "Response Rate", value: `${appFunnel.response_rate_pct}%`, color: "#10b981" },
+                    { label: "Offer Rate", value: `${appFunnel.offer_rate_pct}%`, color: "#c4b5fd" },
+                  ].map(({ label, value, color }) => (
+                    <div key={label} style={{ flex: 1, textAlign: "center", background: "#0a0a14", border: "1px solid #1f1f38", borderRadius: 8, padding: "5px 4px" }}>
+                      <div style={{ fontSize: 14, fontWeight: 700, color }}>{value}</div>
+                      <div style={{ fontSize: 8, color: "#475569", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>{label}</div>
+                    </div>
+                  ))}
+                </div>
+                {/* Stage bars */}
+                {appFunnel.funnel.filter(s => s.count > 0).map(({ stage, count, pct_of_total }) => {
+                  const stageColor: Record<string, string> = {
+                    discovered: "#475569", applied: "#3b82f6", tailored: "#8b5cf6",
+                    phone_screen: "#f59e0b", interview: "#f97316", offer: "#10b981", rejected: "#f87171",
+                  };
+                  const barColor = stageColor[stage] ?? "#64748b";
+                  const barWidth = Math.max(pct_of_total, 3);
+                  return (
+                    <div key={stage} style={{ marginBottom: 4 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
+                        <span style={{ fontSize: 10, color: "#94a3b8", textTransform: "capitalize" }}>{stage.replace("_", " ")}</span>
+                        <span style={{ fontSize: 10, color: "#64748b" }}>{count} ({pct_of_total}%)</span>
+                      </div>
+                      <div style={{ height: 6, background: "#1a1a2e", borderRadius: 3, overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: `${barWidth}%`, background: barColor, borderRadius: 3, transition: "width 0.4s ease" }} />
+                      </div>
+                    </div>
+                  );
+                })}
+                {/* 30-day volume sparkline (simple text bars) */}
+                {appFunnel.daily_volume_30d.length > 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    <div style={{ fontSize: 9, color: "#475569", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>30-Day Activity</div>
+                    <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 28 }}>
+                      {(() => {
+                        const maxCount = Math.max(...appFunnel.daily_volume_30d.map(d => d.count), 1);
+                        // Fill all 30 days
+                        const today = new Date();
+                        const days: Record<string, number> = {};
+                        appFunnel.daily_volume_30d.forEach(d => { days[d.date] = d.count; });
+                        return Array.from({ length: 30 }, (_, i) => {
+                          const d = new Date(today);
+                          d.setDate(d.getDate() - (29 - i));
+                          const key = d.toISOString().slice(0, 10);
+                          const c = days[key] ?? 0;
+                          const h = Math.round((c / maxCount) * 26) + 2;
+                          return (
+                            <div key={key} title={`${key}: ${c}`} style={{
+                              flex: 1, height: h, background: c > 0 ? "#7c3aed" : "#1a1a2e",
+                              borderRadius: 2, minWidth: 2, cursor: "default",
+                            }} />
+                          );
+                        });
+                      })()}
+                    </div>
+                  </div>
+                )}
+              </Section>
             )}
 
             {/* Vault analytics mini-dashboard */}
