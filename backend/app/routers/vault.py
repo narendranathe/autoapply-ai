@@ -19,6 +19,7 @@ Endpoints:
   GET    /api/v1/vault/github/versions          List versions/ directory on GitHub
 """
 
+import contextlib
 import hashlib
 import json as _json
 import uuid
@@ -36,6 +37,7 @@ from app.services.ats_service import ATSResult, score_resume
 from app.services.embedding_service import build_tfidf_vector
 from app.services.github_service import GitHubService
 from app.services.resume_generator import (
+    _PROVIDER_RANK,
     PersonalProfile,
     _call_anthropic,
     _call_gemini,
@@ -655,6 +657,87 @@ async def generate_answers(
         "previously_used": prev.answer_text if prev else None,
         "previously_used_at": prev.created_at.isoformat() if prev else None,
         "question_category": question_category,
+    }
+
+
+# ── Trim answer to character limit ─────────────────────────────────────────
+
+
+@router.post("/generate/answers/trim")
+async def trim_answer(
+    answer_text: str = Form(...),
+    max_chars: int = Form(...),
+    providers_json: str = Form(""),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """
+    Shorten an existing answer draft to fit within max_chars.
+    Uses the same LLM cascade as generate/answers but with a concise
+    rewrite instruction. Falls back to hard-truncation if LLM unavailable.
+    """
+    if len(answer_text) <= max_chars:
+        return {"trimmed": answer_text, "char_count": len(answer_text), "provider_used": "none"}
+
+    providers_list: list[dict] = []
+    if providers_json.strip():
+        with contextlib.suppress(Exception):
+            providers_list = _json.loads(providers_json)
+
+    system_prompt = "You are a precise editor. Your only task is to shorten text to fit a strict character limit while preserving meaning, tone, and all key facts. Return ONLY the shortened text — no commentary."
+    target_words = max(30, (max_chars // 5) - 10)
+    user_prompt = f"""Shorten the following text to under {max_chars} characters (approximately {target_words} words).
+Keep the most impactful content. Preserve first-person voice. Return only the shortened version.
+
+TEXT TO SHORTEN:
+{answer_text}"""
+
+    trimmed = ""
+    provider_used = "truncation"
+
+    if providers_list:
+        sorted_p = sorted(providers_list, key=lambda p: _PROVIDER_RANK.get(p.get("name", ""), 50))
+        for p in sorted_p:
+            name = p.get("name", "")
+            api_key = p.get("api_key", "")
+            model = p.get("model", "")
+            try:
+                if name == "anthropic" and api_key:
+                    raw = await _call_anthropic(system_prompt, user_prompt, api_key)
+                elif name == "openai" and api_key:
+                    raw = await _call_openai(system_prompt, user_prompt, api_key)
+                elif name == "gemini" and api_key:
+                    raw = await _call_gemini(
+                        system_prompt, user_prompt, api_key, model or "gemini-1.5-flash"
+                    )
+                elif name == "groq" and api_key:
+                    raw = await _call_groq(
+                        system_prompt, user_prompt, api_key, model or "llama-3.3-70b-versatile"
+                    )
+                elif name == "kimi" and api_key:
+                    raw = await _call_kimi(system_prompt, user_prompt, api_key)
+                else:
+                    continue
+                if raw and len(raw.strip()) > 20:
+                    trimmed = raw.strip()[:max_chars]
+                    provider_used = name
+                    break
+            except Exception as e:
+                logger.warning(f"Trim: provider '{name}' failed — {e}")
+
+    # Hard-truncation fallback — cut at last sentence boundary
+    if not trimmed:
+        candidate = answer_text[:max_chars]
+        last_period = max(candidate.rfind(". "), candidate.rfind(".\n"))
+        if last_period > max_chars * 0.6:
+            trimmed = candidate[: last_period + 1]
+        else:
+            trimmed = candidate.rstrip() + "…"
+
+    return {
+        "trimmed": trimmed,
+        "char_count": len(trimmed),
+        "provider_used": provider_used,
     }
 
 

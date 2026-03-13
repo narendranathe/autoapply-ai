@@ -159,6 +159,8 @@ export default function ApplyMode({ context }: Props) {
   const [interviewLoading, setInterviewLoading] = useState(false);
   const [interviewError, setInterviewError] = useState<string>("");
   const [expandedPrepIdx, setExpandedPrepIdx] = useState<number | null>(null);
+  // Trim answer to char limit
+  const [trimmingAnswer, setTrimmingAnswer] = useState<string | null>(null);
   // Cover letter tab
   const [coverDrafts, setCoverDrafts] = useState<string[]>(
     () => loadDraftSession(jobUrl, "coverDrafts", [])
@@ -615,6 +617,19 @@ export default function ApplyMode({ context }: Props) {
       roleTitle: context.roleTitle,
     }).catch(() => {});
     chrome.runtime.sendMessage({ type: "FILL_ANSWER", payload: { questionId, text: memory.answer_text } });
+  };
+
+  const handleTrimAnswer = async (questionId: string, maxLength: number) => {
+    const currentText = editedTexts[questionId] ?? answerDrafts[questionId]?.[selectedAnswers[questionId] ?? 0] ?? "";
+    if (!currentText || currentText.length <= maxLength) return;
+    setTrimmingAnswer(questionId);
+    try {
+      const freshProviders = await getFreshProviders();
+      const res = await vaultApi.trimAnswer({ answerText: currentText, maxChars: maxLength, providers: freshProviders });
+      setEditedTexts((prev) => ({ ...prev, [questionId]: res.trimmed }));
+    } catch { /* silently ignore */ } finally {
+      setTrimmingAnswer(null);
+    }
   };
 
   // Keep a ref to the latest providers so auto-generate always uses fresh values
@@ -1168,6 +1183,28 @@ export default function ApplyMode({ context }: Props) {
                             {generationErrors[q.questionId]}
                           </div>
                         )}
+                        {/* Char counter + trim button when answer exceeds field limit */}
+                        {(() => {
+                          const currentText = editedTexts[q.questionId] ?? drafts[selectedIdx];
+                          const charCount = currentText?.length ?? 0;
+                          const overLimit = q.maxLength && charCount > q.maxLength;
+                          return overLimit ? (
+                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              <span style={{ fontSize: 10, color: "#f87171", fontWeight: 600 }}>
+                                {charCount}/{q.maxLength} chars
+                              </span>
+                              <button
+                                onClick={() => handleTrimAnswer(q.questionId, q.maxLength!)}
+                                disabled={trimmingAnswer === q.questionId}
+                                style={{ ...btnStyle("ghost", trimmingAnswer === q.questionId), fontSize: 10, padding: "2px 8px" }}
+                              >
+                                {trimmingAnswer === q.questionId ? "Trimming…" : "✂ Trim to limit"}
+                              </button>
+                            </div>
+                          ) : q.maxLength ? (
+                            <span style={{ fontSize: 10, color: "#4ade80" }}>{charCount}/{q.maxLength} chars</span>
+                          ) : null;
+                        })()}
                         <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
                           <button
                             onClick={() => handleGenerateAnswers(q.questionId, q.questionText, q.category, true, q.maxLength)}

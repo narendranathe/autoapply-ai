@@ -425,6 +425,23 @@ export const vaultApi = {
     }
     return post("/vault/interview-prep", fd);
   },
+
+  /** Shorten an answer draft to fit within a character limit */
+  trimAnswer(params: {
+    answerText: string;
+    maxChars: number;
+    providers?: Array<{ name: string; apiKey: string; model?: string }>;
+  }): Promise<{ trimmed: string; char_count: number; provider_used: string }> {
+    const fd = new FormData();
+    fd.append("answer_text", params.answerText);
+    fd.append("max_chars", String(params.maxChars));
+    if (params.providers?.length) {
+      fd.append("providers_json", JSON.stringify(
+        params.providers.map((p) => ({ name: p.name, api_key: p.apiKey, model: p.model ?? "" }))
+      ));
+    }
+    return post("/vault/generate/answers/trim", fd);
+  },
 };
 
 // ── Application Tracking API ────────────────────────────────────────────────
