@@ -11,6 +11,8 @@
  *  → fills inputs from profile | generates textarea answers via API
  */
 
+import { AUTH_STORAGE_KEYS, buildAuthHeaders } from "./authHelper";
+
 // ── Types ──────────────────────────────────────────────────────────────────
 
 interface Profile {
@@ -275,12 +277,7 @@ async function runFill(btn: HTMLButtonElement): Promise<void> {
   btn.textContent = "⏳ Filling…";
   showToast("AutoApply AI: scanning form…", "info");
 
-  const data = (await chrome.storage.local.get([
-    "profile",
-    "clerkUserId",
-    "apiBaseUrl",
-    "providerConfigs",
-  ])) as StorageData;
+  const data = (await chrome.storage.local.get(["profile", "apiBaseUrl", "providerConfigs", ...AUTH_STORAGE_KEYS])) as StorageData;
 
   const profile = data.profile;
   if (!profile) {
@@ -291,7 +288,6 @@ async function runFill(btn: HTMLButtonElement): Promise<void> {
   }
 
   const apiBase = data.apiBaseUrl || "https://autoapply-ai-api.fly.dev/api/v1";
-  const userId = data.clerkUserId;
   const providers: Array<{ name: string; api_key: string; model: string }> = Object.entries(
     data.providerConfigs ?? {}
   )
@@ -357,18 +353,16 @@ async function runFill(btn: HTMLButtonElement): Promise<void> {
 
     // Fetch work history text for grounding
     let workHistoryText = "";
-    if (userId) {
-      try {
-        const whResp = await fetch(`${apiBase}/work-history/text`, {
-          headers: { "X-Clerk-User-Id": userId },
-        });
-        if (whResp.ok) {
-          const whData = (await whResp.json()) as { text?: string };
-          workHistoryText = whData.text ?? "";
-        }
-      } catch {
-        // ignore — proceed without work history
+    try {
+      const whResp = await fetch(`${apiBase}/work-history/text`, {
+        headers: buildAuthHeaders(data),
+      });
+      if (whResp.ok) {
+        const whData = (await whResp.json()) as { text?: string };
+        workHistoryText = whData.text ?? "";
       }
+    } catch {
+      // ignore — proceed without work history
     }
 
     // Extract page context for company/role
@@ -388,8 +382,7 @@ async function runFill(btn: HTMLButtonElement): Promise<void> {
       if (maxLen) fd.append("max_length", String(maxLen));
       if (providers.length > 0) fd.append("providers_json", JSON.stringify(providers));
 
-      const headers: Record<string, string> = {};
-      if (userId) headers["X-Clerk-User-Id"] = userId;
+      const headers = buildAuthHeaders(data);
 
       const resp = await fetch(`${apiBase}/vault/generate/answers`, {
         method: "POST",

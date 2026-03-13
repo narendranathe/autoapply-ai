@@ -1,3 +1,5 @@
+import { AUTH_STORAGE_KEYS, buildAuthHeaders } from "./authHelper";
+
 /**
  * greenhouseApply.ts
  *
@@ -205,7 +207,7 @@ async function runFill(btn: HTMLButtonElement): Promise<void> {
   btn.disabled = true;
   btn.textContent = "⏳ Filling…";
 
-  const data = await chrome.storage.local.get(["profile", "clerkUserId", "apiBaseUrl", "providerConfigs"]);
+  const data = await chrome.storage.local.get(["profile", "apiBaseUrl", "providerConfigs", ...AUTH_STORAGE_KEYS]);
   const profile = data.profile as Profile | undefined;
   if (!profile) {
     showToast("⚠ No profile saved. Open options → Personal Profile.", "err");
@@ -215,7 +217,6 @@ async function runFill(btn: HTMLButtonElement): Promise<void> {
   }
 
   const apiBase = (data.apiBaseUrl as string | undefined) || "https://autoapply-ai-api.fly.dev/api/v1";
-  const userId = data.clerkUserId as string | undefined;
   const providers = Object.entries(
     (data.providerConfigs as Record<string, { enabled: boolean; apiKey: string; model: string }> | undefined) ?? {}
   )
@@ -248,12 +249,10 @@ async function runFill(btn: HTMLButtonElement): Promise<void> {
 
   // Textareas → AI-generated answers
   let workHistoryText = "";
-  if (userId) {
-    try {
-      const r = await fetch(`${apiBase}/work-history/text`, { headers: { "X-Clerk-User-Id": userId } });
-      if (r.ok) { const d = (await r.json()) as { text?: string }; workHistoryText = d.text ?? ""; }
-    } catch { /* ignore */ }
-  }
+  try {
+    const r = await fetch(`${apiBase}/work-history/text`, { headers: buildAuthHeaders(data) });
+    if (r.ok) { const d = (await r.json()) as { text?: string }; workHistoryText = d.text ?? ""; }
+  } catch { /* ignore */ }
 
   // Greenhouse job page context
   const h1 = document.querySelector<HTMLElement>(".app-title, h1");
@@ -283,8 +282,7 @@ async function runFill(btn: HTMLButtonElement): Promise<void> {
       if (ta.maxLength > 0) fd.append("max_length", String(ta.maxLength));
       if (providers.length > 0) fd.append("providers_json", JSON.stringify(providers));
 
-      const headers: Record<string, string> = {};
-      if (userId) headers["X-Clerk-User-Id"] = userId;
+      const headers = buildAuthHeaders(data);
 
       const r = await fetch(`${apiBase}/vault/generate/answers`, { method: "POST", headers, body: fd });
       if (r.ok) {
