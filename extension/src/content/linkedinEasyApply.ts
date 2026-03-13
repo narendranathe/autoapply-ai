@@ -1,3 +1,5 @@
+import { AUTH_STORAGE_KEYS, buildAuthHeaders } from "./authHelper";
+
 /**
  * linkedinEasyApply.ts
  *
@@ -33,9 +35,11 @@ interface Profile {
 
 interface StorageData {
   profile?: Profile;
-  clerkUserId?: string;
   apiBaseUrl?: string;
   providerConfigs?: Record<string, { enabled: boolean; apiKey: string; model: string }>;
+  clerkUserId?: string;
+  clerkToken?: string;
+  clerkTokenExp?: number;
 }
 
 // ── Label patterns for field matching ─────────────────────────────────────
@@ -247,7 +251,7 @@ async function fillCurrentStep(modal: HTMLElement, btn: HTMLButtonElement): Prom
   btn.innerHTML = "&#9889; Filling…";
 
   const storageData = await chrome.storage.local.get([
-    "profile", "clerkUserId", "apiBaseUrl", "providerConfigs",
+    "profile", "apiBaseUrl", "providerConfigs", ...AUTH_STORAGE_KEYS,
   ]) as StorageData;
 
   const profile = storageData.profile;
@@ -259,7 +263,6 @@ async function fillCurrentStep(modal: HTMLElement, btn: HTMLButtonElement): Prom
   }
 
   const apiBase = storageData.apiBaseUrl || "https://autoapply-ai-api.fly.dev/api/v1";
-  const clerkUserId = storageData.clerkUserId;
   const providerConfigs = storageData.providerConfigs ?? {};
   const providers = Object.entries(providerConfigs)
     .filter(([, cfg]) => !!cfg.apiKey)
@@ -336,7 +339,8 @@ async function fillCurrentStep(modal: HTMLElement, btn: HTMLButtonElement): Prom
     pendingAnswers.push({ el: ta, label });
   }
 
-  if (pendingAnswers.length > 0 && clerkUserId) {
+  const authHdrs = buildAuthHeaders(storageData);
+  if (pendingAnswers.length > 0) {
     showToast(modal, `Generating ${pendingAnswers.length} answer${pendingAnswers.length > 1 ? "s" : ""}…`, "info");
     for (const { el, label } of pendingAnswers) {
       try {
@@ -350,7 +354,7 @@ async function fillCurrentStep(modal: HTMLElement, btn: HTMLButtonElement): Prom
 
         const resp = await fetch(`${apiBase}/vault/generate/answers`, {
           method: "POST",
-          headers: { "X-Clerk-User-Id": clerkUserId },
+          headers: authHdrs,
           body: fd,
         });
         if (resp.ok) {

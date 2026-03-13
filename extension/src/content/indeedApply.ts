@@ -1,3 +1,5 @@
+import { AUTH_STORAGE_KEYS, buildAuthHeaders } from "./authHelper";
+
 /**
  * indeedApply.ts
  *
@@ -249,7 +251,7 @@ async function runFill(applyRoot: HTMLElement, btn: HTMLButtonElement): Promise<
   btn.disabled = true;
   btn.innerHTML = "&#9889; Filling…";
 
-  const raw = await chrome.storage.local.get(["profile", "clerkUserId", "apiBaseUrl", "providerConfigs"]);
+  const raw = await chrome.storage.local.get(["profile", "apiBaseUrl", "providerConfigs", ...AUTH_STORAGE_KEYS]);
   const profile = raw.profile as Profile | undefined;
   if (!profile) {
     showToast(applyRoot, "No profile found — configure in Options first.", "err");
@@ -259,7 +261,6 @@ async function runFill(applyRoot: HTMLElement, btn: HTMLButtonElement): Promise<
   }
 
   const apiBase = (raw.apiBaseUrl as string | undefined) || "https://autoapply-ai-api.fly.dev/api/v1";
-  const clerkUserId = raw.clerkUserId as string | undefined;
   const configs = (raw.providerConfigs as Record<string, ProviderCfg> | undefined) ?? {};
   const providers = Object.entries(configs)
     .filter(([, c]) => !!c.apiKey)
@@ -304,7 +305,8 @@ async function runFill(applyRoot: HTMLElement, btn: HTMLButtonElement): Promise<
   const textareas = Array.from(stepRoot.querySelectorAll<HTMLTextAreaElement>("textarea"))
     .filter((ta) => !ta.disabled && !ta.readOnly);
 
-  if (textareas.length > 0 && clerkUserId) {
+  const authHdrs = buildAuthHeaders(raw);
+  if (textareas.length > 0) {
     showToast(applyRoot, `Generating ${textareas.length} answer${textareas.length > 1 ? "s" : ""}…`, "info");
     for (const ta of textareas) {
       const label = getLabel(ta, stepRoot);
@@ -319,7 +321,7 @@ async function runFill(applyRoot: HTMLElement, btn: HTMLButtonElement): Promise<
         if (ta.maxLength > 0) fd.append("max_length", String(ta.maxLength));
         const resp = await fetch(`${apiBase}/vault/generate/answers`, {
           method: "POST",
-          headers: { "X-Clerk-User-Id": clerkUserId },
+          headers: authHdrs,
           body: fd,
         });
         if (resp.ok) {
