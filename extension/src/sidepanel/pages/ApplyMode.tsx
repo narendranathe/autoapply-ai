@@ -159,6 +159,10 @@ export default function ApplyMode({ context }: Props) {
   const [historyStatusFilter, setHistoryStatusFilter] = useState<string>("all");
   // Vault analytics
   const [vaultAnalytics, setVaultAnalytics] = useState<Awaited<ReturnType<typeof vaultApi.getAnalytics>> | null>(null);
+  // Answer bank search
+  const [answerBankSearch, setAnswerBankSearch] = useState("");
+  const [answerBankResults, setAnswerBankResults] = useState<Array<{ answer_id: string; question_text: string; answer_text: string; company_name: string; question_category: string; reward_score: number | null; feedback: string }>>([]);
+  const [answerBankSearching, setAnswerBankSearching] = useState(false);
   // T3: interview prep
   const [interviewQuestions, setInterviewQuestions] = useState<InterviewQuestion[]>(
     () => loadDraftSession(jobUrl, "interviewQuestions", [])
@@ -1500,6 +1504,70 @@ export default function ApplyMode({ context }: Props) {
                 )}
               </Section>
             )}
+
+            {/* Answer bank search */}
+            <Section label="Search Answer Bank">
+              <div style={{ display: "flex", gap: 6 }}>
+                <input
+                  type="text"
+                  placeholder="Search past answers…"
+                  value={answerBankSearch}
+                  onChange={(e) => setAnswerBankSearch(e.target.value)}
+                  onKeyDown={async (e) => {
+                    if (e.key !== "Enter" || !answerBankSearch.trim()) return;
+                    setAnswerBankSearching(true);
+                    setAnswerBankResults([]);
+                    try {
+                      const res = await vaultApi.searchAnswers({ q: answerBankSearch.trim(), limit: 10 });
+                      setAnswerBankResults(res.answers as typeof answerBankResults);
+                    } catch { /* silently ignore */ } finally {
+                      setAnswerBankSearching(false);
+                    }
+                  }}
+                  style={{ flex: 1, background: "#12121e", border: "1px solid #1f1f38", borderRadius: 6, color: "#e2e8f0", fontSize: 11, padding: "5px 8px", outline: "none" }}
+                />
+                <button
+                  onClick={async () => {
+                    if (!answerBankSearch.trim()) return;
+                    setAnswerBankSearching(true);
+                    setAnswerBankResults([]);
+                    try {
+                      const res = await vaultApi.searchAnswers({ q: answerBankSearch.trim(), limit: 10 });
+                      setAnswerBankResults(res.answers as typeof answerBankResults);
+                    } catch { /* silently ignore */ } finally {
+                      setAnswerBankSearching(false);
+                    }
+                  }}
+                  disabled={answerBankSearching}
+                  style={{ ...btnStyle("ghost", answerBankSearching), fontSize: 10, padding: "5px 10px" }}
+                >
+                  {answerBankSearching ? "…" : "Search"}
+                </button>
+              </div>
+              {answerBankResults.length > 0 && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
+                  {answerBankResults.map((a) => (
+                    <div key={a.answer_id} style={{ background: "#0a0a14", border: "1px solid #1f1f38", borderRadius: 8, padding: "8px 10px" }}>
+                      <div style={{ fontSize: 10, color: "#7c3aed", fontWeight: 700, marginBottom: 2, display: "flex", justifyContent: "space-between" }}>
+                        <span>{a.company_name} · {a.question_category}</span>
+                        {a.reward_score != null && <span style={{ color: "#475569" }}>{(a.reward_score * 100).toFixed(0)}%</span>}
+                      </div>
+                      <div style={{ fontSize: 10, color: "#64748b", marginBottom: 4, fontStyle: "italic" }}>{a.question_text.slice(0, 100)}{a.question_text.length > 100 ? "…" : ""}</div>
+                      <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5, maxHeight: 60, overflowY: "auto" }}>{a.answer_text.slice(0, 200)}{a.answer_text.length > 200 ? "…" : ""}</div>
+                      <button
+                        onClick={() => navigator.clipboard.writeText(a.answer_text)}
+                        style={{ ...btnStyle("ghost"), fontSize: 9, padding: "2px 6px", marginTop: 4 }}
+                      >
+                        Copy
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {!answerBankSearching && answerBankResults.length === 0 && answerBankSearch.trim() && (
+                <div style={{ fontSize: 10, color: "#475569", marginTop: 4, textAlign: "center" }}>No results — try a different term.</div>
+              )}
+            </Section>
 
             {/* Export + Search + Filter bar */}
             <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>

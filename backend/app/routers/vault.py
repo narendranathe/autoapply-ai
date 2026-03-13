@@ -16,6 +16,7 @@ Endpoints:
   POST   /api/v1/vault/answers/save             Save accepted answer to DB
   PATCH  /api/v1/vault/answers/{id}/feedback    Record outcome (RL reward signal)
   GET    /api/v1/vault/answers/similar          Best past answers for a question (bandit policy)
+  GET    /api/v1/vault/answers/search           Full-text search over saved answers
   GET    /api/v1/vault/github/versions          List versions/ directory on GitHub
   GET    /api/v1/vault/analytics               Per-user vault analytics (answer stats, reward, companies)
   POST   /api/v1/vault/answers/bulk-save       Save multiple answers in one request (batch)
@@ -1278,6 +1279,74 @@ async def get_similar_answers(
             for a in best
         ],
         "total": len(best),
+    }
+
+
+@router.get("/answers/search")
+async def search_answers(
+    q: str,
+    category: str | None = None,
+    company: str | None = None,
+    limit: int = 20,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Full-text search over a user's saved answer bank.
+    Matches against question_text and answer_text (case-insensitive ILIKE).
+
+    Query params:
+      q        — required search term
+      category — optional filter by question_category
+      company  — optional filter by company_name
+      limit    — max results (default 20, max 50)
+    """
+    if not q or not q.strip():
+        raise HTTPException(status_code=422, detail="q (search term) is required")
+
+    limit = min(max(1, limit), 50)
+    term = f"%{q.strip()}%"
+
+    stmt = (
+        select(ApplicationAnswer)
+        .where(
+            ApplicationAnswer.user_id == user.id,
+            (
+                ApplicationAnswer.question_text.ilike(term)
+                | ApplicationAnswer.answer_text.ilike(term)
+            ),
+        )
+        .order_by(
+            ApplicationAnswer.reward_score.desc().nulls_last(), ApplicationAnswer.created_at.desc()
+        )
+        .limit(limit)
+    )
+
+    if category:
+        stmt = stmt.where(ApplicationAnswer.question_category == category)
+    if company:
+        stmt = stmt.where(ApplicationAnswer.company_name.ilike(f"%{company}%"))
+
+    result = await db.execute(stmt)
+    answers = result.scalars().all()
+
+    return {
+        "q": q,
+        "answers": [
+            {
+                "answer_id": str(a.id),
+                "question_text": a.question_text[:300],
+                "answer_text": a.answer_text,
+                "company_name": a.company_name,
+                "question_category": a.question_category,
+                "reward_score": a.reward_score,
+                "feedback": a.feedback,
+                "word_count": a.word_count,
+                "created_at": a.created_at.isoformat(),
+            }
+            for a in answers
+        ],
+        "total": len(answers),
     }
 
 

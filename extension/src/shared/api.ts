@@ -375,6 +375,20 @@ export const vaultApi = {
     return get(`/vault/answers/similar?${p.toString()}`);
   },
 
+  /** Full-text search over saved answer bank */
+  searchAnswers(params: {
+    q: string;
+    category?: string;
+    company?: string;
+    limit?: number;
+  }): Promise<SimilarAnswersResponse & { q: string }> {
+    const p = new URLSearchParams({ q: params.q });
+    if (params.category) p.set("category", params.category);
+    if (params.company) p.set("company", params.company);
+    if (params.limit != null) p.set("limit", String(params.limit));
+    return get(`/vault/answers/search?${p.toString()}`);
+  },
+
   /** All resumes and answers for a company (recruiter callback reference) */
   companyHistory(companyName: string): Promise<{ company: string; resumes: ResumeCard[]; answers: unknown[] }> {
     return get(`/vault/history/${encodeURIComponent(companyName)}`);
