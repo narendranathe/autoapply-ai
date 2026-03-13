@@ -6,12 +6,17 @@ GET  /api/v1/applications/{id}     → Get single application
 PATCH /api/v1/applications/{id}    → Update application status
 GET  /api/v1/applications/stats    → Application statistics
 GET  /api/v1/applications/similar  → Find similar previous applications
+GET  /api/v1/applications/export.csv → Export all applications as CSV
 """
 
+import csv
 import hashlib
+import io
 import uuid
+from collections import Counter
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,6 +26,7 @@ from app.models.application import Application
 from app.models.user import User
 from app.schemas.application import (
     ApplicationListResponse,
+    ApplicationNotesUpdate,
     ApplicationResponse,
     ApplicationStatusUpdate,
 )
@@ -220,4 +226,139 @@ async def update_application_status(
         "id": str(application.id),
         "status": application.status,
         "message": f"Status updated to '{application.status}'",
+    }
+
+
+@router.patch("/{application_id}/notes")
+async def update_application_notes(
+    application_id: uuid.UUID,
+    body: ApplicationNotesUpdate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Update (or clear) the notes field on an application."""
+    result = await db.execute(
+        select(Application).where(
+            Application.id == application_id,
+            Application.user_id == user.id,
+        )
+    )
+    app = result.scalar_one_or_none()
+    if not app:
+        raise HTTPException(404, "Application not found")
+
+    app.notes = body.notes
+    await db.commit()
+    await db.refresh(app)
+
+    return {"id": str(app.id), "notes": app.notes}
+
+
+@router.get("/export.csv")
+async def export_applications_csv(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Export all applications as a CSV file.
+    Returns a streaming CSV with columns:
+      company, role, status, platform, job_url, applied_date, notes
+    """
+    stmt = (
+        select(Application)
+        .where(Application.user_id == user.id)
+        .order_by(Application.created_at.desc())
+    )
+    result = await db.execute(stmt)
+    apps = result.scalars().all()
+
+    output = io.StringIO()
+    writer = csv.writer(output, quoting=csv.QUOTE_ALL)
+    writer.writerow(["Company", "Role", "Status", "Platform", "Job URL", "Applied Date", "Notes"])
+    for a in apps:
+        writer.writerow(
+            [
+                a.company_name,
+                a.role_title,
+                a.status,
+                a.platform or "",
+                a.job_url or "",
+                a.created_at.strftime("%Y-%m-%d") if a.created_at else "",
+                (a.notes or "").replace("\n", " "),
+            ]
+        )
+
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=applications.csv"},
+    )
+
+
+@router.get("/funnel")
+async def get_application_funnel(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Application funnel metrics: how many applications reach each status.
+
+    Returns ordered funnel stages with counts + conversion rates.
+    Also returns a 30-day daily application volume series.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    stmt = select(Application).where(Application.user_id == user.id)
+    result = await db.execute(stmt)
+    apps = list(result.scalars().all())
+
+    # Stage funnel (ordered by progression)
+    FUNNEL_ORDER = [
+        "discovered",
+        "applied",
+        "tailored",
+        "phone_screen",
+        "interview",
+        "offer",
+        "rejected",
+    ]
+    status_counts = Counter(a.status for a in apps)
+    total = len(apps)
+
+    funnel = []
+    for stage in FUNNEL_ORDER:
+        count = status_counts.get(stage, 0)
+        funnel.append(
+            {
+                "stage": stage,
+                "count": count,
+                "pct_of_total": round(count / total * 100, 1) if total else 0,
+            }
+        )
+
+    # 30-day daily volume
+    cutoff = datetime.now(UTC) - timedelta(days=30)
+    daily: dict[str, int] = {}
+    for a in apps:
+        if a.created_at and a.created_at >= cutoff:
+            day = a.created_at.strftime("%Y-%m-%d")
+            daily[day] = daily.get(day, 0) + 1
+
+    # Response rate = (interview + offer) / applied
+    applied_count = sum(status_counts.get(s, 0) for s in ["applied", "tailored"])
+    positive_count = sum(status_counts.get(s, 0) for s in ["phone_screen", "interview", "offer"])
+    response_rate = round(positive_count / applied_count * 100, 1) if applied_count else 0
+
+    # Offer rate = offers / total non-discovered
+    offer_count = status_counts.get("offer", 0)
+    non_discovered = total - status_counts.get("discovered", 0)
+    offer_rate = round(offer_count / non_discovered * 100, 1) if non_discovered else 0
+
+    return {
+        "total": total,
+        "funnel": funnel,
+        "response_rate_pct": response_rate,
+        "offer_rate_pct": offer_rate,
+        "daily_volume_30d": [{"date": d, "count": c} for d, c in sorted(daily.items())],
     }

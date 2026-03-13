@@ -134,8 +134,8 @@ function IdleState() {
         </div>
         <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.6 }}>
           Navigate to a job listing on Greenhouse,<br />
-          Lever, LinkedIn, or any careers page —<br />
-          AutoApply AI will activate automatically.
+          Lever, Workday, LinkedIn, iCIMS, Taleo,<br />
+          or 6 more ATS platforms — auto-activates.
         </div>
       </div>
       <div style={{
@@ -145,7 +145,7 @@ function IdleState() {
         width: "100%",
         maxWidth: 200,
       }}>
-        {["Greenhouse", "Lever", "Workday", "LinkedIn", "Indeed"].map((site) => (
+        {["Greenhouse", "Lever", "Workday", "LinkedIn", "Indeed", "Ashby", "SmartRecruiters", "iCIMS", "Taleo", "BambooHR", "Jobvite"].map((site) => (
           <div key={site} style={{
             display: "flex",
             alignItems: "center",

@@ -77,6 +77,9 @@ class Application(Base, TimestampMixin):
     changes_summary: Mapped[str | None] = mapped_column(
         Text, comment="Human-readable summary of what the LLM changed"
     )
+    notes: Mapped[str | None] = mapped_column(
+        Text, comment="Free-form notes about this application (interview feedback, contacts, etc.)"
+    )
 
     # ── Relationships ─────────────────────────────────────
     user: Mapped["User"] = relationship(back_populates="applications")

@@ -96,7 +96,8 @@ export type Message =
   | { type: "JOB_CARDS_UPDATE"; payload: JobCard[] }
   | { type: "GET_CONTEXT" }
   | { type: "CONTEXT_RESPONSE"; payload: PageContext | null }
-  | { type: "APPLICATION_SUBMITTED"; payload: { url: string } };
+  | { type: "APPLICATION_SUBMITTED"; payload: { url: string } }
+  | { type: "EMAIL_STATUS_DETECTED"; payload: Array<{ subject: string; sender: string; status: string; company: string; confidence: number }> };
 
 // Offline sync queue entry
 export interface OfflineEdit {

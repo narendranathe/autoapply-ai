@@ -16,30 +16,51 @@ Endpoints:
   POST   /api/v1/vault/answers/save             Save accepted answer to DB
   PATCH  /api/v1/vault/answers/{id}/feedback    Record outcome (RL reward signal)
   GET    /api/v1/vault/answers/similar          Best past answers for a question (bandit policy)
+  GET    /api/v1/vault/answers/search           Full-text search over saved answers
   GET    /api/v1/vault/github/versions          List versions/ directory on GitHub
+  GET    /api/v1/vault/analytics               Per-user vault analytics (answer stats, reward, companies)
+  POST   /api/v1/vault/answers/bulk-save       Save multiple answers in one request (batch)
+  DELETE /api/v1/vault/answers/{id}            Delete a saved answer from the bank
 """
 
+import contextlib
 import hashlib
 import json as _json
 import uuid
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from loguru import logger
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_current_user, get_db
+from app.models.document_chunk import DocumentChunk
 from app.models.resume import ApplicationAnswer, Resume
 from app.models.user import User
 from app.models.work_history import WorkHistoryEntry
 from app.services.ats_service import ATSResult, score_resume
 from app.services.embedding_service import build_tfidf_vector
 from app.services.github_service import GitHubService
+from app.services.rag_service import (
+    get_rag_context_for_query,
+    list_user_documents,
+    upload_document,
+)
 from app.services.resume_generator import (
+    _PROVIDER_RANK,
     PersonalProfile,
+    _call_anthropic,
+    _call_gemini,
+    _call_groq,
+    _call_kimi,
+    _call_openai,
     generate_answer_drafts,
     generate_answer_drafts_cascade,
+    generate_answer_drafts_parallel,
+    generate_cover_letter,
     generate_full_latex_resume,
+    generate_professional_summary,
+    generate_role_bullets,
 )
 from app.services.resume_parser import ResumeParser
 from app.services.retrieval_agent import ResumeWithScore, RetrievalAgent
@@ -194,6 +215,41 @@ async def list_resumes(
     }
 
 
+# ── Get single resume ──────────────────────────────────────────────────────
+
+
+@router.get("/resumes/{resume_id}")
+async def get_resume(
+    resume_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Get a single resume including its full text/latex content."""
+    result = await db.execute(
+        select(Resume).where(Resume.id == resume_id, Resume.user_id == user.id)
+    )
+    r = result.scalar_one_or_none()
+    if not r:
+        raise HTTPException(status_code=404, detail="Resume not found")
+
+    return {
+        "resume_id": str(r.id),
+        "filename": r.filename,
+        "version_tag": r.version_tag,
+        "target_company": r.target_company,
+        "target_role": r.target_role,
+        "ats_score": r.ats_score,
+        "bullet_count": r.bullet_count,
+        "is_base_template": r.is_base_template,
+        "is_generated": r.is_generated,
+        "github_path": r.github_path,
+        "latex_content": r.latex_content,
+        "markdown_content": r.markdown_content,
+        "raw_text": r.raw_text,
+        "created_at": r.created_at.isoformat(),
+    }
+
+
 # ── Delete ─────────────────────────────────────────────────────────────────
 
 
@@ -212,6 +268,50 @@ async def delete_resume(
 
     await db.delete(resume)
     await db.commit()
+
+
+# ── Update resume metadata ─────────────────────────────────────────────────
+
+
+@router.patch("/resumes/{resume_id}")
+async def update_resume_metadata(
+    resume_id: uuid.UUID,
+    target_company: str | None = None,
+    target_role: str | None = None,
+    version_tag: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """
+    Update editable metadata on a stored resume:
+      - target_company (re-classify which company this resume is for)
+      - target_role    (re-classify which role)
+      - version_tag    (rename/relabel the version)
+    Only provided fields are updated; omit a field to leave it unchanged.
+    """
+    result = await db.execute(
+        select(Resume).where(Resume.id == resume_id, Resume.user_id == user.id)
+    )
+    resume = result.scalar_one_or_none()
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found")
+
+    if target_company is not None:
+        resume.target_company = target_company or None
+    if target_role is not None:
+        resume.target_role = target_role or None
+    if version_tag is not None:
+        resume.version_tag = version_tag or None
+
+    await db.commit()
+    await db.refresh(resume)
+    return {
+        "resume_id": str(resume.id),
+        "target_company": resume.target_company,
+        "target_role": resume.target_role,
+        "version_tag": resume.version_tag,
+        "updated": True,
+    }
 
 
 # ── Retrieve ───────────────────────────────────────────────────────────────
@@ -595,21 +695,54 @@ async def generate_answers(
         # Try to get the name from the user record
         candidate_name = getattr(user, "display_name", "") or getattr(user, "email_hash", "")[:8]
 
-    provider_used = ""
+    # Retrieve RAG context from uploaded documents (resume.md / work-history.md)
+    rag_query = f"{question_category} {question_text} {company_name} {role_title}"
+    answer_rag_ctx = await get_rag_context_for_query(
+        db=db,
+        user_id=user.id,
+        query=rag_query,
+        doc_types=["resume", "work_history"],
+        top_k=5,
+        max_context_tokens=1200,
+        label="ADDITIONAL CANDIDATE CONTEXT (from uploaded documents)",
+    )
+
+    draft_providers: list[str] = []
     if providers_list:
-        drafts, provider_used = await generate_answer_drafts_cascade(
-            question_text=question_text,
-            question_category=question_category,
-            company_name=company_name,
-            role_title=role_title,
-            jd_text=jd_text,
-            work_history_text=work_history_text,
-            providers=providers_list,
-            past_accepted_answers=past_texts or None,
-            candidate_name=candidate_name,
-            max_length=max_length if max_length > 0 else None,
-            category_instructions=category_instructions.strip() or None,
-        )
+        if len(providers_list) > 1:
+            # Parallel mode: each provider generates one draft concurrently
+            drafts, draft_providers = await generate_answer_drafts_parallel(
+                question_text=question_text,
+                question_category=question_category,
+                company_name=company_name,
+                role_title=role_title,
+                jd_text=jd_text,
+                work_history_text=work_history_text,
+                providers=providers_list,
+                past_accepted_answers=past_texts or None,
+                candidate_name=candidate_name,
+                max_length=max_length if max_length > 0 else None,
+                category_instructions=category_instructions.strip() or None,
+                rag_context=answer_rag_ctx,
+            )
+        else:
+            # Single provider: use cascade (generates 3 drafts from one provider)
+            drafts, provider_used = await generate_answer_drafts_cascade(
+                question_text=question_text,
+                question_category=question_category,
+                company_name=company_name,
+                role_title=role_title,
+                jd_text=jd_text,
+                work_history_text=work_history_text,
+                providers=providers_list,
+                past_accepted_answers=past_texts or None,
+                candidate_name=candidate_name,
+                max_length=max_length if max_length > 0 else None,
+                category_instructions=category_instructions.strip() or None,
+                rag_context=answer_rag_ctx,
+            )
+            if provider_used and provider_used != "fallback":
+                draft_providers = [provider_used] * len(drafts)
     else:
         drafts = await generate_answer_drafts(
             question_text=question_text,
@@ -622,12 +755,8 @@ async def generate_answers(
             api_key=llm_api_key or user.encrypted_llm_api_key or "",
             ollama_model=ollama_model,
             past_accepted_answers=past_texts or None,
+            rag_context=answer_rag_ctx,
         )
-
-    # draft_providers: same provider label for all drafts (single provider used)
-    draft_providers = (
-        [provider_used] * len(drafts) if provider_used and provider_used != "fallback" else []
-    )
 
     return {
         "drafts": drafts,
@@ -635,6 +764,178 @@ async def generate_answers(
         "previously_used": prev.answer_text if prev else None,
         "previously_used_at": prev.created_at.isoformat() if prev else None,
         "question_category": question_category,
+    }
+
+
+# ── Trim answer to character limit ─────────────────────────────────────────
+
+
+@router.post("/generate/answers/trim")
+async def trim_answer(
+    answer_text: str = Form(...),
+    max_chars: int = Form(...),
+    providers_json: str = Form(""),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """
+    Shorten an existing answer draft to fit within max_chars.
+    Uses the same LLM cascade as generate/answers but with a concise
+    rewrite instruction. Falls back to hard-truncation if LLM unavailable.
+    """
+    if len(answer_text) <= max_chars:
+        return {"trimmed": answer_text, "char_count": len(answer_text), "provider_used": "none"}
+
+    providers_list: list[dict] = []
+    if providers_json.strip():
+        with contextlib.suppress(Exception):
+            providers_list = _json.loads(providers_json)
+
+    system_prompt = "You are a precise editor. Your only task is to shorten text to fit a strict character limit while preserving meaning, tone, and all key facts. Return ONLY the shortened text — no commentary."
+    target_words = max(30, (max_chars // 5) - 10)
+    user_prompt = f"""Shorten the following text to under {max_chars} characters (approximately {target_words} words).
+Keep the most impactful content. Preserve first-person voice. Return only the shortened version.
+
+TEXT TO SHORTEN:
+{answer_text}"""
+
+    trimmed = ""
+    provider_used = "truncation"
+
+    if providers_list:
+        sorted_p = sorted(providers_list, key=lambda p: _PROVIDER_RANK.get(p.get("name", ""), 50))
+        for p in sorted_p:
+            name = p.get("name", "")
+            api_key = p.get("api_key", "")
+            model = p.get("model", "")
+            try:
+                if name == "anthropic" and api_key:
+                    raw = await _call_anthropic(system_prompt, user_prompt, api_key)
+                elif name == "openai" and api_key:
+                    raw = await _call_openai(system_prompt, user_prompt, api_key)
+                elif name == "gemini" and api_key:
+                    raw = await _call_gemini(
+                        system_prompt, user_prompt, api_key, model or "gemini-1.5-flash"
+                    )
+                elif name == "groq" and api_key:
+                    raw = await _call_groq(
+                        system_prompt, user_prompt, api_key, model or "llama-3.3-70b-versatile"
+                    )
+                elif name == "kimi" and api_key:
+                    raw = await _call_kimi(system_prompt, user_prompt, api_key)
+                else:
+                    continue
+                if raw and len(raw.strip()) > 20:
+                    trimmed = raw.strip()[:max_chars]
+                    provider_used = name
+                    break
+            except Exception as e:
+                logger.warning(f"Trim: provider '{name}' failed — {e}")
+
+    # Hard-truncation fallback — cut at last sentence boundary
+    if not trimmed:
+        candidate = answer_text[:max_chars]
+        last_period = max(candidate.rfind(". "), candidate.rfind(".\n"))
+        if last_period > max_chars * 0.6:
+            trimmed = candidate[: last_period + 1]
+        else:
+            trimmed = candidate.rstrip() + "…"
+
+    return {
+        "trimmed": trimmed,
+        "char_count": len(trimmed),
+        "provider_used": provider_used,
+    }
+
+
+# ── Dedicated cover letter endpoint ─────────────────────────────────────────
+
+
+@router.post("/generate/cover-letter")
+async def generate_cover_letter_endpoint(
+    company_name: str = Form(...),
+    role_title: str = Form(""),
+    jd_text: str = Form(""),
+    tone: str = Form("professional"),  # professional|enthusiastic|concise|conversational
+    word_limit: int = Form(400),
+    candidate_name: str = Form(""),
+    providers_json: str = Form(""),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """
+    Generate cover letter drafts — one per enabled LLM provider, run in parallel.
+    Accepts tone and word_limit controls. Returns up to N drafts (one per provider).
+    """
+    providers_list: list[dict] = []
+    with contextlib.suppress(Exception):
+        if providers_json.strip():
+            providers_list = _json.loads(providers_json)
+
+    # Load candidate work history
+    from app.models.work_history import WorkHistoryEntry as WHModel  # local import avoids circular
+
+    wh_rows = (
+        (
+            await db.execute(
+                select(WHModel).where(WHModel.user_id == user.id).order_by(WHModel.sort_order)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    work_history_text = "\n\n".join(
+        f"{r.role_title} at {r.company_name} ({r.start_date} – {r.end_date or 'present'})\n"
+        + "\n".join(f"• {b}" for b in (r.bullets or []))
+        for r in wh_rows
+    )
+
+    # Retrieve past accepted cover letters for style memory
+    stmt = (
+        select(ApplicationAnswer)
+        .where(
+            ApplicationAnswer.user_id == user.id,
+            ApplicationAnswer.question_category == "cover_letter",
+            ApplicationAnswer.reward_score >= 0.7,
+        )
+        .order_by(ApplicationAnswer.reward_score.desc())
+        .limit(2)
+    )
+    past = (await db.execute(stmt)).scalars().all()
+    past_accepted = [p.answer_text for p in past]
+
+    # candidate_name already received from form
+
+    # Retrieve RAG context from uploaded documents
+    rag_query = f"{role_title} {company_name} {jd_text[:500]}"
+    rag_ctx = await get_rag_context_for_query(
+        db=db,
+        user_id=user.id,
+        query=rag_query,
+        doc_types=["resume", "work_history"],
+        top_k=6,
+        max_context_tokens=1500,
+        label="CANDIDATE BACKGROUND (from uploaded resume/work history)",
+    )
+
+    drafts, draft_providers = await generate_cover_letter(
+        company_name=company_name,
+        role_title=role_title,
+        jd_text=jd_text,
+        work_history_text=work_history_text,
+        providers=providers_list,
+        candidate_name=candidate_name,
+        tone=tone,
+        word_limit=min(max(150, word_limit), 800),
+        past_accepted=past_accepted or None,
+        rag_context=rag_ctx,
+    )
+
+    return {
+        "drafts": drafts,
+        "draft_providers": draft_providers,
+        "tone": tone,
+        "word_limit": word_limit,
     }
 
 
@@ -684,6 +985,247 @@ async def save_answer(
         "word_count": word_count,
         "question_hash": q_hash,
         "saved": True,
+    }
+
+
+@router.post("/answers/bulk-save", status_code=status.HTTP_201_CREATED)
+async def bulk_save_answers(
+    payload: dict,  # { company_name, role_title, answers: [{question_text, category, answer_text}] }
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Save multiple answers in a single request.
+    Used by interview prep "Save all to bank" and batch workflows.
+
+    Body JSON: {
+        "company_name": str,
+        "role_title": str,          # optional
+        "answers": [
+            {
+                "question_text": str,
+                "question_category": str,   # default "custom"
+                "answer_text": str,
+                "was_default": bool,        # default False
+            },
+            ...
+        ]
+    }
+    Returns: { "saved": int, "answer_ids": [str, ...] }
+    """
+    company_name = str(payload.get("company_name", ""))
+    role_title = str(payload.get("role_title", ""))
+    answers_in = payload.get("answers", [])
+
+    if not company_name:
+        raise HTTPException(status_code=422, detail="company_name is required")
+    if not isinstance(answers_in, list) or len(answers_in) == 0:
+        raise HTTPException(status_code=422, detail="answers must be a non-empty list")
+    if len(answers_in) > 50:
+        raise HTTPException(status_code=422, detail="Cannot bulk-save more than 50 answers at once")
+
+    saved_ids: list[str] = []
+    for item in answers_in:
+        question_text = str(item.get("question_text", "")).strip()
+        answer_text = str(item.get("answer_text", "")).strip()
+        if not question_text or not answer_text:
+            continue  # skip blank entries silently
+
+        q_hash = hashlib.sha256(" ".join(question_text.lower().split()).encode()).hexdigest()
+        ans = ApplicationAnswer(
+            user_id=user.id,
+            question_hash=q_hash,
+            question_text=question_text,
+            question_category=str(item.get("question_category", "custom")),
+            answer_text=answer_text,
+            word_count=len(answer_text.split()),
+            was_default=bool(item.get("was_default", False)),
+            company_name=company_name,
+            role_title=role_title,
+        )
+        db.add(ans)
+        await db.flush()  # get ID before commit
+        saved_ids.append(str(ans.id))
+
+    await db.commit()
+    return {"saved": len(saved_ids), "answer_ids": saved_ids}
+
+
+@router.delete("/answers/{answer_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_answer(
+    answer_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Delete a saved answer from the user's bank."""
+    stmt = select(ApplicationAnswer).where(
+        ApplicationAnswer.id == uuid.UUID(answer_id),
+        ApplicationAnswer.user_id == user.id,
+    )
+    result = await db.execute(stmt)
+    ans = result.scalar_one_or_none()
+    if ans is None:
+        raise HTTPException(status_code=404, detail="Answer not found")
+    await db.delete(ans)
+    await db.commit()
+
+
+# ── Professional summary endpoint ──────────────────────────────────────────
+
+
+@router.post("/generate/summary")
+async def generate_summary_endpoint(
+    company_name: str = Form(...),
+    role_title: str = Form(""),
+    jd_text: str = Form(""),
+    word_limit: int = Form(80),
+    candidate_name: str = Form(""),
+    providers_json: str = Form(""),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """
+    Generate a 2-4 sentence professional summary tailored to a role.
+    Returns {summary, provider_used, word_count}.
+    """
+    providers_list: list[dict] = []
+    with contextlib.suppress(Exception):
+        if providers_json.strip():
+            providers_list = _json.loads(providers_json)
+
+    from app.models.work_history import WorkHistoryEntry as WHModel
+
+    wh_rows = (
+        (
+            await db.execute(
+                select(WHModel).where(WHModel.user_id == user.id).order_by(WHModel.sort_order)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    work_history_text = "\n\n".join(
+        f"{r.role_title} at {r.company_name} ({r.start_date} – {r.end_date or 'present'})\n"
+        + "\n".join(f"• {b}" for b in (r.bullets or []))
+        for r in wh_rows
+    )
+
+    summary, provider_used = await generate_professional_summary(
+        company_name=company_name,
+        role_title=role_title,
+        jd_text=jd_text,
+        work_history_text=work_history_text,
+        providers=providers_list,
+        candidate_name=candidate_name,
+        word_limit=min(max(40, word_limit), 200),
+    )
+
+    return {
+        "summary": summary,
+        "provider_used": provider_used,
+        "word_count": len(summary.split()),
+    }
+
+
+# ── Tailored bullets endpoint ────────────────────────────────────────────────
+
+
+@router.post("/generate/bullets")
+async def generate_bullets_endpoint(
+    company_name: str = Form(...),
+    role_title: str = Form(""),
+    jd_text: str = Form(""),
+    num_bullets: int = Form(5),
+    target_company_for_context: str = Form(""),
+    providers_json: str = Form(""),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """
+    Generate ATS-optimized bullet points for a specific role, grounded in work history.
+    Returns {bullets, provider_used, count}.
+    """
+    providers_list: list[dict] = []
+    with contextlib.suppress(Exception):
+        if providers_json.strip():
+            providers_list = _json.loads(providers_json)
+
+    from app.models.work_history import WorkHistoryEntry as WHModel
+
+    wh_rows = (
+        (
+            await db.execute(
+                select(WHModel).where(WHModel.user_id == user.id).order_by(WHModel.sort_order)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    work_history_text = "\n\n".join(
+        f"{r.role_title} at {r.company_name} ({r.start_date} – {r.end_date or 'present'})\n"
+        + "\n".join(f"• {b}" for b in (r.bullets or []))
+        for r in wh_rows
+    )
+
+    bullets, provider_used = await generate_role_bullets(
+        company_name=company_name,
+        role_title=role_title,
+        jd_text=jd_text,
+        work_history_text=work_history_text,
+        providers=providers_list,
+        num_bullets=min(max(1, num_bullets), 10),
+        target_company_for_context=target_company_for_context,
+    )
+
+    return {
+        "bullets": bullets,
+        "provider_used": provider_used,
+        "count": len(bullets),
+    }
+
+
+# ── Saved cover letters ─────────────────────────────────────────────────────
+
+
+@router.get("/cover-letters")
+async def list_cover_letters(
+    company: str | None = None,
+    limit: int = 20,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """
+    List saved cover letters (ApplicationAnswers with category = cover_letter).
+    Optionally filter by company_name.
+    """
+    stmt = (
+        select(ApplicationAnswer)
+        .where(
+            ApplicationAnswer.user_id == user.id,
+            ApplicationAnswer.question_category == "cover_letter",
+        )
+        .order_by(ApplicationAnswer.created_at.desc())
+        .limit(min(limit, 50))
+    )
+    if company:
+        stmt = stmt.where(ApplicationAnswer.company_name.ilike(f"%{company}%"))
+
+    rows = (await db.execute(stmt)).scalars().all()
+    return {
+        "items": [
+            {
+                "id": str(r.id),
+                "company_name": r.company_name,
+                "role_title": r.role_title,
+                "answer_text": r.answer_text,
+                "word_count": r.word_count,
+                "reward_score": r.reward_score,
+                "llm_provider_used": r.llm_provider_used,
+                "created_at": r.created_at.isoformat(),
+            }
+            for r in rows
+        ],
+        "total": len(rows),
     }
 
 
@@ -779,6 +1321,43 @@ async def record_answer_feedback(
     }
 
 
+# ── Edit saved answer text ─────────────────────────────────────────────────
+
+
+@router.patch("/answers/{answer_id}")
+async def edit_answer_text(
+    answer_id: str,
+    answer_text: str = Form(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Update the stored text of a saved answer.
+    Resets reward_score to 0.5 (neutral) since we can't assess quality of manual edits.
+    """
+    stmt = select(ApplicationAnswer).where(
+        ApplicationAnswer.id == uuid.UUID(answer_id),
+        ApplicationAnswer.user_id == user.id,
+    )
+    result = await db.execute(stmt)
+    ans = result.scalar_one_or_none()
+    if ans is None:
+        raise HTTPException(status_code=404, detail="Answer not found")
+
+    ans.answer_text = answer_text.strip()
+    ans.word_count = len(ans.answer_text.split())
+    ans.feedback = "edited"
+    ans.reward_score = 0.5  # neutral — user manually provided this answer
+
+    await db.commit()
+    return {
+        "answer_id": answer_id,
+        "word_count": ans.word_count,
+        "feedback": ans.feedback,
+        "reward_score": ans.reward_score,
+    }
+
+
 # ── Similar answers retrieval (bandit policy) ─────────────────────────────
 
 
@@ -815,6 +1394,74 @@ async def get_similar_answers(
             for a in best
         ],
         "total": len(best),
+    }
+
+
+@router.get("/answers/search")
+async def search_answers(
+    q: str,
+    category: str | None = None,
+    company: str | None = None,
+    limit: int = 20,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Full-text search over a user's saved answer bank.
+    Matches against question_text and answer_text (case-insensitive ILIKE).
+
+    Query params:
+      q        — required search term
+      category — optional filter by question_category
+      company  — optional filter by company_name
+      limit    — max results (default 20, max 50)
+    """
+    if not q or not q.strip():
+        raise HTTPException(status_code=422, detail="q (search term) is required")
+
+    limit = min(max(1, limit), 50)
+    term = f"%{q.strip()}%"
+
+    stmt = (
+        select(ApplicationAnswer)
+        .where(
+            ApplicationAnswer.user_id == user.id,
+            (
+                ApplicationAnswer.question_text.ilike(term)
+                | ApplicationAnswer.answer_text.ilike(term)
+            ),
+        )
+        .order_by(
+            ApplicationAnswer.reward_score.desc().nulls_last(), ApplicationAnswer.created_at.desc()
+        )
+        .limit(limit)
+    )
+
+    if category:
+        stmt = stmt.where(ApplicationAnswer.question_category == category)
+    if company:
+        stmt = stmt.where(ApplicationAnswer.company_name.ilike(f"%{company}%"))
+
+    result = await db.execute(stmt)
+    answers = result.scalars().all()
+
+    return {
+        "q": q,
+        "answers": [
+            {
+                "answer_id": str(a.id),
+                "question_text": a.question_text[:300],
+                "answer_text": a.answer_text,
+                "company_name": a.company_name,
+                "question_category": a.question_category,
+                "reward_score": a.reward_score,
+                "feedback": a.feedback,
+                "word_count": a.word_count,
+                "created_at": a.created_at.isoformat(),
+            }
+            for a in answers
+        ],
+        "total": len(answers),
     }
 
 
@@ -1063,3 +1710,383 @@ async def list_github_versions(
         raise HTTPException(status_code=502, detail=f"GitHub API error: {exc}") from exc
 
     return {"versions": versions, "total": len(versions)}
+
+
+# ── Interview Prep (T3) ─────────────────────────────────────────────────────
+
+_INTERVIEW_SYSTEM = """You are an expert interview coach helping a software engineer prepare for a job interview.
+Generate exactly 10 likely interview questions for the given role and company, covering a mix of:
+- Behavioral (2–3): leadership, conflict, challenge questions
+- Motivation (1–2): why this company, why this role
+- Technical/role-specific (2–3): based on the JD skills/requirements
+- General (2–3): strengths, background, 5-year plan
+
+For each question, provide:
+1. The interview question text
+2. A short category tag: behavioral | motivation | technical | general
+3. A 2–4 sentence suggested answer tailored to the candidate's work history and the JD
+
+Format your response as a JSON array with no extra text:
+[
+  {
+    "question": "...",
+    "category": "behavioral|motivation|technical|general",
+    "suggested_answer": "..."
+  },
+  ...
+]
+Only return the JSON array. No markdown fences, no extra commentary."""
+
+
+@router.post("/interview-prep")
+async def generate_interview_prep(
+    company_name: str = Form(...),
+    role_title: str = Form(""),
+    jd_text: str = Form(""),
+    providers_json: str = Form(""),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    T3: Generate 10 likely interview questions + suggested answers for a role.
+    Grounds answers in the user's work history and the provided JD.
+    Returns { questions: [{question, category, suggested_answer}] }
+    """
+    # Load work history
+    wh_stmt = (
+        select(WorkHistoryEntry)
+        .where(WorkHistoryEntry.user_id == user.id)
+        .order_by(WorkHistoryEntry.sort_order, WorkHistoryEntry.created_at.desc())
+    )
+    wh_result = await db.execute(wh_stmt)
+    wh_entries = list(wh_result.scalars().all())
+    work_history_text = "\n\n".join(e.to_text_block() for e in wh_entries)
+
+    # Parse providers list
+    providers_list: list[dict] = []
+    if providers_json.strip():
+        try:
+            providers_list = _json.loads(providers_json)
+        except Exception:
+            logger.warning("interview-prep: invalid providers_json")
+
+    user_prompt = f"""Candidate work history:
+{work_history_text or "Not provided."}
+
+Target company: {company_name}
+Target role: {role_title or "Software Engineer"}
+
+Job description excerpt:
+{jd_text[:3000] if jd_text else "Not provided."}
+
+Generate 10 interview questions + suggested answers as described."""
+
+    questions: list[dict] = []
+
+    if providers_list:
+        for prov in providers_list:
+            name = prov.get("name", "")
+            api_key = prov.get("api_key", "")
+            model = prov.get("model", "")
+            try:
+                if name == "anthropic":
+                    raw = await _call_anthropic(_INTERVIEW_SYSTEM, user_prompt, api_key)
+                elif name == "openai":
+                    raw = await _call_openai(_INTERVIEW_SYSTEM, user_prompt, api_key)
+                elif name == "groq":
+                    raw = await _call_groq(
+                        _INTERVIEW_SYSTEM, user_prompt, api_key, model or "llama-3.3-70b-versatile"
+                    )
+                elif name == "gemini":
+                    raw = await _call_gemini(
+                        _INTERVIEW_SYSTEM, user_prompt, api_key, model or "gemini-1.5-flash"
+                    )
+                elif name == "kimi":
+                    raw = await _call_kimi(_INTERVIEW_SYSTEM, user_prompt, api_key)
+                else:
+                    continue
+                parsed = _json.loads(raw.strip())
+                if isinstance(parsed, list) and len(parsed) > 0:
+                    questions = parsed[:10]
+                    break
+            except Exception as exc:
+                logger.debug(f"interview-prep provider {name} failed: {exc}")
+                continue
+
+    # Rule-based fallback when no provider worked or none configured
+    if not questions:
+        questions = _rule_based_interview_questions(company_name, role_title, jd_text)
+
+    return {"questions": questions, "total": len(questions)}
+
+
+def _rule_based_interview_questions(company: str, role: str, jd_text: str) -> list[dict]:
+    """Keyword-extracted question bank fallback — no LLM required."""
+    base_questions = [
+        {
+            "question": f"Tell me about yourself and why you're interested in this {role} role at {company}.",
+            "category": "general",
+            "suggested_answer": "I have X years of experience in software engineering, focusing on [key skills from JD]. I'm drawn to this role because of [company mission/product].",
+        },
+        {
+            "question": "Describe a challenging technical problem you solved recently.",
+            "category": "behavioral",
+            "suggested_answer": "In my last role, I faced [challenge]. I approached it by [steps]. The result was [outcome].",
+        },
+        {
+            "question": f"Why do you want to work at {company} specifically?",
+            "category": "motivation",
+            "suggested_answer": f"I've followed {company}'s work in [area] and am excited by [specific product/mission]. My background in [skills] aligns well with your needs.",
+        },
+        {
+            "question": "Tell me about a time you had to lead a project under tight deadlines.",
+            "category": "behavioral",
+            "suggested_answer": "I led a team of X engineers to deliver [project] in Y weeks. I broke the work into milestones, held daily standups, and unblocked issues proactively.",
+        },
+        {
+            "question": "What's your greatest professional strength?",
+            "category": "general",
+            "suggested_answer": "My strongest skill is [skill] — demonstrated by [specific example with metric].",
+        },
+        {
+            "question": "Describe a time you had a conflict with a colleague. How did you resolve it?",
+            "category": "behavioral",
+            "suggested_answer": "I once disagreed with a teammate about [topic]. I scheduled a 1:1, listened to their perspective, and we found a compromise by [approach].",
+        },
+        {
+            "question": "Where do you see yourself in 5 years?",
+            "category": "general",
+            "suggested_answer": "I'd like to grow into a [senior/lead/staff] engineer role, taking on larger system design responsibilities and mentoring junior engineers.",
+        },
+        {
+            "question": "How do you stay current with new technologies in your field?",
+            "category": "technical",
+            "suggested_answer": "I follow [blogs/newsletters], contribute to open source, and build side projects to test new tools before adopting them at work.",
+        },
+        {
+            "question": "Tell me about a time you had to learn a new technology quickly.",
+            "category": "behavioral",
+            "suggested_answer": "When my team adopted [technology], I spent a week reading docs and building a proof-of-concept. Within two weeks I was contributing production code.",
+        },
+        {
+            "question": f"What excites you most about the work {company} is doing?",
+            "category": "motivation",
+            "suggested_answer": f"{company}'s approach to [product area] is compelling because [reason]. I believe I can contribute to this by leveraging my experience in [relevant skill].",
+        },
+    ]
+    return base_questions
+
+
+# ── Vault analytics ──────────────────────────────────────────────────────────
+
+
+@router.get("/analytics")
+async def get_vault_analytics(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Return per-user vault analytics:
+    - Total answers saved and feedback distribution
+    - Average reward score and per-category breakdown
+    - Total resumes and unique companies served
+    - Top companies by answer count
+    """
+    # ── Answers aggregate ──────────────────────────────────────────────────
+    answers_stmt = select(ApplicationAnswer).where(ApplicationAnswer.user_id == user.id)
+    all_answers = (await db.execute(answers_stmt)).scalars().all()
+
+    total_answers = len(all_answers)
+    feedback_dist: dict[str, int] = {}
+    category_stats: dict[str, dict[str, float | int]] = {}
+    reward_scores: list[float] = []
+    companies: dict[str, int] = {}
+
+    for a in all_answers:
+        fb = a.feedback or "pending"
+        feedback_dist[fb] = feedback_dist.get(fb, 0) + 1
+
+        cat = a.question_category or "custom"
+        if cat not in category_stats:
+            category_stats[cat] = {"count": 0, "reward_sum": 0.0, "used_as_is": 0}
+        category_stats[cat]["count"] = int(category_stats[cat]["count"]) + 1
+        if a.reward_score is not None:
+            category_stats[cat]["reward_sum"] = (
+                float(category_stats[cat]["reward_sum"]) + a.reward_score
+            )
+            reward_scores.append(a.reward_score)
+        if a.feedback == "used_as_is":
+            category_stats[cat]["used_as_is"] = int(category_stats[cat]["used_as_is"]) + 1
+
+        cname = a.company_name or "unknown"
+        companies[cname] = companies.get(cname, 0) + 1
+
+    avg_reward = sum(reward_scores) / len(reward_scores) if reward_scores else None
+
+    # Build per-category avg reward
+    category_breakdown = {
+        cat: {
+            "count": int(s["count"]),
+            "avg_reward": (
+                round(float(s["reward_sum"]) / int(s["count"]), 3) if int(s["count"]) else None
+            ),
+            "acceptance_rate": (
+                round(int(s["used_as_is"]) / int(s["count"]), 3) if int(s["count"]) else None
+            ),
+        }
+        for cat, s in category_stats.items()
+    }
+
+    top_companies = sorted(companies.items(), key=lambda x: x[1], reverse=True)[:10]
+
+    # ── Resumes aggregate ─────────────────────────────────────────────────
+    resumes_stmt = select(func.count(Resume.id)).where(Resume.user_id == user.id)
+    total_resumes = (await db.execute(resumes_stmt)).scalar_one() or 0
+
+    unique_companies_stmt = select(func.count(func.distinct(Resume.target_company))).where(
+        Resume.user_id == user.id,
+        Resume.target_company.isnot(None),
+    )
+    unique_companies = (await db.execute(unique_companies_stmt)).scalar_one() or 0
+
+    return {
+        "answers": {
+            "total": total_answers,
+            "avg_reward_score": round(avg_reward, 3) if avg_reward is not None else None,
+            "feedback_distribution": feedback_dist,
+            "by_category": category_breakdown,
+        },
+        "resumes": {
+            "total": total_resumes,
+            "unique_companies": unique_companies,
+        },
+        "top_companies_by_answers": [{"company": c, "answer_count": n} for c, n in top_companies],
+    }
+
+
+# ── RAG Document Upload + Retrieval ────────────────────────────────────────
+
+
+@router.post("/documents/upload-md", status_code=status.HTTP_201_CREATED)
+async def upload_markdown_document(
+    content: str = Form(..., description="Full markdown text of the document"),
+    doc_type: str = Form(
+        ..., description="Document type: resume | work_history | cover_letter_sample | other"
+    ),
+    source_filename: str = Form(..., description='e.g. "resume.md" or "work_history.md"'),
+    embedding_provider: str = Form("", description="openai | kimi | ollama | (blank=TF-IDF only)"),
+    embedding_api_key: str = Form("", description="API key for the embedding provider"),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Upload a markdown document (resume.md / work-history.md) to the RAG pipeline.
+
+    Chunks the document, builds TF-IDF vectors, and optionally generates dense
+    embeddings. Replaces any previously uploaded document with the same filename.
+
+    After upload, this document's content will automatically ground:
+    - Cover letter generation (POST /vault/generate/cover-letter)
+    - Answer generation (POST /vault/generate/answers)
+    - Summary/bullets generation
+    """
+    if doc_type not in {"resume", "work_history", "cover_letter_sample", "other"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="doc_type must be one of: resume, work_history, cover_letter_sample, other",
+        )
+
+    if not content.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Document content is empty",
+        )
+
+    chunks = await upload_document(
+        db=db,
+        user_id=user.id,
+        doc_type=doc_type,
+        source_filename=source_filename,
+        markdown_text=content,
+        embedding_provider=embedding_provider,
+        embedding_api_key=embedding_api_key,
+    )
+    await db.commit()
+
+    has_dense = any(c.dense_embedding for c in chunks)
+    return {
+        "source_filename": source_filename,
+        "doc_type": doc_type,
+        "chunks_stored": len(chunks),
+        "has_dense_embeddings": has_dense,
+        "embedding_model": chunks[0].embedding_model if has_dense and chunks else "",
+        "message": f"Uploaded and chunked {source_filename} into {len(chunks)} RAG segments",
+    }
+
+
+@router.get("/documents")
+async def list_documents(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """List all uploaded RAG documents for the current user."""
+    docs = await list_user_documents(db=db, user_id=user.id)
+    return {"documents": docs, "total": len(docs)}
+
+
+@router.delete("/documents/{source_filename}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_document(
+    source_filename: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Delete all chunks for a specific uploaded document."""
+    from sqlalchemy import delete as sql_delete
+
+    await db.execute(
+        sql_delete(DocumentChunk).where(
+            DocumentChunk.user_id == user.id,
+            DocumentChunk.source_filename == source_filename,
+        )
+    )
+    await db.commit()
+
+
+@router.post("/documents/retrieve")
+async def retrieve_rag_chunks(
+    query: str = Form(..., description="Query text to retrieve relevant chunks"),
+    doc_types: str = Form("", description="Comma-separated doc_types to filter (blank=all)"),
+    top_k: int = Form(6, ge=1, le=20),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Debug endpoint: retrieve top-k RAG chunks for a query.
+    Useful for testing retrieval quality before using in generation.
+    """
+    from app.services.rag_service import retrieve_chunks
+
+    doc_type_list = [d.strip() for d in doc_types.split(",") if d.strip()] or None
+
+    chunks = await retrieve_chunks(
+        db=db,
+        user_id=user.id,
+        query=query,
+        doc_types=doc_type_list,
+        top_k=top_k,
+    )
+
+    return {
+        "query": query,
+        "doc_types": doc_type_list,
+        "results": [
+            {
+                "source_filename": c.source_filename,
+                "section_header": c.section_header,
+                "doc_type": c.doc_type,
+                "score": c.score,
+                "chunk_text": c.chunk_text[:500],  # truncate for response size
+            }
+            for c in chunks
+        ],
+    }

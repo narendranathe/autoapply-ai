@@ -7,6 +7,8 @@ const API_DEFAULT = "https://autoapply-ai-api.fly.dev/api/v1";
 // Resolved at startup from chrome.storage; falls back to localhost for dev.
 let _apiBase = API_DEFAULT;
 let _clerkUserId: string | null = null;
+let _clerkToken: string | null = null;     // RS256 JWT from Clerk session
+let _clerkTokenExp: number = 0;            // expiry unix timestamp (seconds)
 
 // Single promise that resolves once storage has been read.
 let _initPromise: Promise<void> | null = null;
@@ -14,10 +16,12 @@ let _initPromise: Promise<void> | null = null;
 function ensureInit(): Promise<void> {
   if (!_initPromise) {
     _initPromise = chrome.storage.local
-      .get(["apiBaseUrl", "clerkUserId"])
+      .get(["apiBaseUrl", "clerkUserId", "clerkToken", "clerkTokenExp"])
       .then((data) => {
         if (data.apiBaseUrl) _apiBase = data.apiBaseUrl as string;
         if (data.clerkUserId) _clerkUserId = data.clerkUserId as string;
+        if (data.clerkToken) _clerkToken = data.clerkToken as string;
+        if (data.clerkTokenExp) _clerkTokenExp = data.clerkTokenExp as number;
       });
   }
   return _initPromise;
@@ -28,6 +32,8 @@ chrome.storage.onChanged.addListener((changes) => {
   if (changes.apiBaseUrl?.newValue) _apiBase = changes.apiBaseUrl.newValue as string;
   if (changes.apiBaseUrl && !changes.apiBaseUrl.newValue) _apiBase = API_DEFAULT;
   if (changes.clerkUserId?.newValue) _clerkUserId = changes.clerkUserId.newValue as string;
+  if (changes.clerkToken?.newValue) _clerkToken = changes.clerkToken.newValue as string;
+  if (changes.clerkTokenExp?.newValue) _clerkTokenExp = changes.clerkTokenExp.newValue as number;
 });
 
 function getApiBase(): string {
@@ -47,13 +53,40 @@ export function setClerkUserId(id: string | null) {
   }
 }
 
-/** Restore the Clerk user ID from storage on extension startup. */
+/**
+ * Store a Clerk RS256 JWT for use as Authorization: Bearer.
+ * exp is the JWT expiry unix timestamp (seconds); pass 0 to clear.
+ */
+export function setClerkToken(token: string | null, exp = 0) {
+  _clerkToken = token;
+  _clerkTokenExp = exp;
+  if (token) {
+    chrome.storage.local.set({ clerkToken: token, clerkTokenExp: exp });
+  } else {
+    chrome.storage.local.remove(["clerkToken", "clerkTokenExp"]);
+  }
+}
+
+/** Whether the stored JWT is still valid (with 30-second buffer). */
+export function isClerkTokenValid(): boolean {
+  if (!_clerkToken) return false;
+  if (_clerkTokenExp === 0) return true;  // no expiry known — assume valid
+  return Date.now() / 1000 < _clerkTokenExp - 30;
+}
+
+/** Restore auth state from storage on extension startup. */
 export async function restoreClerkUserId(): Promise<void> {
-  const { clerkUserId } = await chrome.storage.local.get("clerkUserId");
-  if (clerkUserId) _clerkUserId = clerkUserId as string;
+  const data = await chrome.storage.local.get(["clerkUserId", "clerkToken", "clerkTokenExp"]);
+  if (data.clerkUserId) _clerkUserId = data.clerkUserId as string;
+  if (data.clerkToken) _clerkToken = data.clerkToken as string;
+  if (data.clerkTokenExp) _clerkTokenExp = data.clerkTokenExp as number;
 }
 
 function authHeaders(): Record<string, string> {
+  // Prefer JWT Bearer token (RS256, verified by backend JWKS) over plain user ID
+  if (_clerkToken && isClerkTokenValid()) {
+    return { "Authorization": `Bearer ${_clerkToken}` };
+  }
   return _clerkUserId ? { "X-Clerk-User-Id": _clerkUserId } : {};
 }
 
@@ -186,6 +219,12 @@ export interface GenerateResumeResponse {
   warnings: string[];
 }
 
+export interface InterviewQuestion {
+  question: string;
+  category: "behavioral" | "motivation" | "technical" | "general";
+  suggested_answer: string;
+}
+
 export interface GenerateTailoredResponse {
   resume_id: string;
   version_tag: string;
@@ -278,6 +317,50 @@ export const vaultApi = {
     return post("/vault/answers/save", fd);
   },
 
+  /** Delete a saved answer from the bank */
+  /** Edit the text of a saved answer */
+  editAnswer(answerId: string, answerText: string): Promise<{
+    answer_id: string;
+    word_count: number;
+    feedback: string;
+    reward_score: number;
+  }> {
+    const fd = new FormData();
+    fd.append("answer_text", answerText);
+    return patch(`/vault/answers/${answerId}`, fd);
+  },
+
+  async deleteAnswer(answerId: string): Promise<void> {
+    await ensureInit();
+    await fetch(`${getApiBase()}/vault/answers/${answerId}`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    });
+  },
+
+  /** Save multiple answers in a single request */
+  bulkSaveAnswers(params: {
+    companyName: string;
+    roleTitle?: string;
+    answers: Array<{
+      questionText: string;
+      questionCategory?: string;
+      answerText: string;
+      wasDefault?: boolean;
+    }>;
+  }): Promise<{ saved: number; answer_ids: string[] }> {
+    return post("/vault/answers/bulk-save", {
+      company_name: params.companyName,
+      role_title: params.roleTitle ?? "",
+      answers: params.answers.map((a) => ({
+        question_text: a.questionText,
+        question_category: a.questionCategory ?? "custom",
+        answer_text: a.answerText,
+        was_default: a.wasDefault ?? false,
+      })),
+    });
+  },
+
   /** Record outcome of a generated answer (RL reward signal) */
   recordFeedback(params: {
     answerId: string;
@@ -302,6 +385,20 @@ export const vaultApi = {
       top_k: String(params.topK ?? 3),
     });
     return get(`/vault/answers/similar?${p.toString()}`);
+  },
+
+  /** Full-text search over saved answer bank */
+  searchAnswers(params: {
+    q: string;
+    category?: string;
+    company?: string;
+    limit?: number;
+  }): Promise<SimilarAnswersResponse & { q: string }> {
+    const p = new URLSearchParams({ q: params.q });
+    if (params.category) p.set("category", params.category);
+    if (params.company) p.set("company", params.company);
+    if (params.limit != null) p.set("limit", String(params.limit));
+    return get(`/vault/answers/search?${p.toString()}`);
   },
 
   /** All resumes and answers for a company (recruiter callback reference) */
@@ -337,6 +434,26 @@ export const vaultApi = {
     return post("/vault/upload", fd);
   },
 
+  /** Get a single resume with full content */
+  getResume(resumeId: string): Promise<{
+    resume_id: string;
+    filename: string;
+    version_tag: string | null;
+    target_company: string | null;
+    target_role: string | null;
+    ats_score: number | null;
+    bullet_count: number;
+    is_base_template: boolean;
+    is_generated: boolean;
+    github_path: string | null;
+    latex_content: string | null;
+    markdown_content: string | null;
+    raw_text: string | null;
+    created_at: string;
+  }> {
+    return get(`/vault/resumes/${resumeId}`);
+  },
+
   /** Delete a resume from the vault */
   deleteResume(resumeId: string): Promise<void> {
     return ensureInit().then(() =>
@@ -344,6 +461,22 @@ export const vaultApi = {
         method: "DELETE",
         headers: authHeaders(),
       }).then(() => undefined)
+    );
+  },
+
+  /** Update resume metadata (target company/role/version tag) */
+  patchResume(resumeId: string, params: { targetCompany?: string; targetRole?: string; versionTag?: string }): Promise<{
+    resume_id: string; target_company: string | null; target_role: string | null; version_tag: string | null; updated: boolean;
+  }> {
+    const p = new URLSearchParams();
+    if (params.targetCompany !== undefined) p.set("target_company", params.targetCompany);
+    if (params.targetRole !== undefined) p.set("target_role", params.targetRole);
+    if (params.versionTag !== undefined) p.set("version_tag", params.versionTag);
+    return ensureInit().then(() =>
+      fetch(`${getApiBase()}/vault/resumes/${resumeId}?${p.toString()}`, {
+        method: "PATCH",
+        headers: authHeaders(),
+      }).then((r) => r.json())
     );
   },
 
@@ -367,6 +500,197 @@ export const vaultApi = {
     }
     return post("/vault/generate/tailored", fd);
   },
+
+  /** T3: Generate 10 likely interview questions + suggested answers for a role */
+  interviewPrep(params: {
+    companyName: string;
+    roleTitle?: string;
+    jdText?: string;
+    providers?: Array<{ name: string; apiKey: string; model?: string }>;
+  }): Promise<{ questions: InterviewQuestion[]; total: number }> {
+    const fd = new FormData();
+    fd.append("company_name", params.companyName);
+    if (params.roleTitle) fd.append("role_title", params.roleTitle);
+    if (params.jdText) fd.append("jd_text", params.jdText);
+    if (params.providers?.length) {
+      fd.append("providers_json", JSON.stringify(
+        params.providers.map((p) => ({ name: p.name, api_key: p.apiKey, model: p.model ?? "" }))
+      ));
+    }
+    return post("/vault/interview-prep", fd);
+  },
+
+  /** Generate cover letter drafts — one per provider, parallel execution */
+  generateCoverLetter(params: {
+    companyName: string;
+    roleTitle?: string;
+    jdText?: string;
+    tone?: "professional" | "enthusiastic" | "concise" | "conversational";
+    wordLimit?: number;
+    candidateName?: string;
+    providers?: Array<{ name: string; apiKey: string; model?: string }>;
+  }): Promise<{ drafts: string[]; draft_providers: string[]; tone: string; word_limit: number }> {
+    const fd = new FormData();
+    fd.append("company_name", params.companyName);
+    if (params.roleTitle) fd.append("role_title", params.roleTitle);
+    if (params.jdText) fd.append("jd_text", params.jdText);
+    if (params.tone) fd.append("tone", params.tone);
+    if (params.wordLimit) fd.append("word_limit", String(params.wordLimit));
+    if (params.candidateName) fd.append("candidate_name", params.candidateName);
+    if (params.providers?.length) {
+      fd.append("providers_json", JSON.stringify(
+        params.providers.map((p) => ({ name: p.name, api_key: p.apiKey, model: p.model ?? "" }))
+      ));
+    }
+    return post("/vault/generate/cover-letter", fd);
+  },
+
+  /** List saved cover letters, optionally filtered by company */
+  listCoverLetters(company?: string, limit?: number): Promise<{
+    items: Array<{
+      id: string;
+      company_name: string;
+      role_title: string | null;
+      answer_text: string;
+      word_count: number;
+      reward_score: number | null;
+      llm_provider_used: string | null;
+      created_at: string;
+    }>;
+    total: number;
+  }> {
+    const params: Record<string, string> = {};
+    if (company) params.company = company;
+    if (limit) params.limit = String(limit);
+    return get("/vault/cover-letters", params);
+  },
+
+  /** Shorten an answer draft to fit within a character limit */
+  trimAnswer(params: {
+    answerText: string;
+    maxChars: number;
+    providers?: Array<{ name: string; apiKey: string; model?: string }>;
+  }): Promise<{ trimmed: string; char_count: number; provider_used: string }> {
+    const fd = new FormData();
+    fd.append("answer_text", params.answerText);
+    fd.append("max_chars", String(params.maxChars));
+    if (params.providers?.length) {
+      fd.append("providers_json", JSON.stringify(
+        params.providers.map((p) => ({ name: p.name, api_key: p.apiKey, model: p.model ?? "" }))
+      ));
+    }
+    return post("/vault/generate/answers/trim", fd);
+  },
+
+  /** Generate a 2-4 sentence professional summary tailored to a role */
+  generateSummary(params: {
+    companyName: string;
+    roleTitle: string;
+    jdText: string;
+    wordLimit?: number;
+    candidateName?: string;
+    providers?: Array<{ name: string; apiKey: string; model?: string }>;
+  }): Promise<{ summary: string; provider_used: string; word_count: number }> {
+    const fd = new FormData();
+    fd.append("company_name", params.companyName);
+    fd.append("role_title", params.roleTitle);
+    fd.append("jd_text", params.jdText);
+    if (params.wordLimit != null) fd.append("word_limit", String(params.wordLimit));
+    if (params.candidateName) fd.append("candidate_name", params.candidateName);
+    if (params.providers?.length) {
+      fd.append("providers_json", JSON.stringify(
+        params.providers.map((p) => ({ name: p.name, api_key: p.apiKey, model: p.model ?? "" }))
+      ));
+    }
+    return post("/vault/generate/summary", fd);
+  },
+
+  /** Generate XYZ-formula resume bullets for a specific role */
+  generateBullets(params: {
+    companyName: string;
+    roleTitle: string;
+    jdText: string;
+    numBullets?: number;
+    targetCompany?: string;
+    providers?: Array<{ name: string; apiKey: string; model?: string }>;
+  }): Promise<{ bullets: string[]; provider_used: string; count: number }> {
+    const fd = new FormData();
+    fd.append("company_name", params.companyName);
+    fd.append("role_title", params.roleTitle);
+    fd.append("jd_text", params.jdText);
+    if (params.numBullets != null) fd.append("num_bullets", String(params.numBullets));
+    if (params.targetCompany) fd.append("target_company_for_context", params.targetCompany);
+    if (params.providers?.length) {
+      fd.append("providers_json", JSON.stringify(
+        params.providers.map((p) => ({ name: p.name, api_key: p.apiKey, model: p.model ?? "" }))
+      ));
+    }
+    return post("/vault/generate/bullets", fd);
+  },
+
+  /** Get per-user vault analytics: answer stats, reward scores, top companies */
+  getAnalytics(): Promise<{
+    answers: {
+      total: number;
+      avg_reward_score: number | null;
+      feedback_distribution: Record<string, number>;
+      by_category: Record<string, { count: number; avg_reward: number | null; acceptance_rate: number | null }>;
+    };
+    resumes: { total: number; unique_companies: number };
+    top_companies_by_answers: Array<{ company: string; answer_count: number }>;
+  }> {
+    return get("/vault/analytics");
+  },
+
+  // ── RAG Document Management ───────────────────────────────────────────────
+
+  /** Upload a markdown document to the RAG pipeline */
+  uploadMarkdownDoc(params: {
+    content: string;
+    docType: "resume" | "work_history" | "cover_letter_sample" | "other";
+    sourceFilename: string;
+    embeddingProvider?: string;
+    embeddingApiKey?: string;
+  }): Promise<{
+    source_filename: string;
+    doc_type: string;
+    chunks_stored: number;
+    has_dense_embeddings: boolean;
+    embedding_model: string;
+    message: string;
+  }> {
+    const fd = new FormData();
+    fd.append("content", params.content);
+    fd.append("doc_type", params.docType);
+    fd.append("source_filename", params.sourceFilename);
+    if (params.embeddingProvider) fd.append("embedding_provider", params.embeddingProvider);
+    if (params.embeddingApiKey) fd.append("embedding_api_key", params.embeddingApiKey);
+    return post("/vault/documents/upload-md", fd);
+  },
+
+  /** List all uploaded RAG documents */
+  listDocuments(): Promise<{
+    documents: Array<{
+      source_filename: string;
+      doc_type: string;
+      chunk_count: number;
+      has_dense_embeddings: boolean;
+      created_at: string;
+    }>;
+    total: number;
+  }> {
+    return get("/vault/documents");
+  },
+
+  /** Delete a RAG document by filename */
+  async deleteDocument(sourceFilename: string): Promise<void> {
+    await ensureInit();
+    const resp = await fetch(
+      `${getApiBase()}/vault/documents/${encodeURIComponent(sourceFilename)}`,
+      { method: "DELETE", headers: authHeaders() },
+    );
+    if (!resp.ok && resp.status !== 204) throw new Error("Delete document failed");
+  },
 };
 
 // ── Application Tracking API ────────────────────────────────────────────────
@@ -382,6 +706,7 @@ export interface TrackedApplication {
   similarity_score: number | null;
   changes_summary: string | null;
   rewrite_strategy: string | null;
+  notes: string | null;
 }
 
 export const applicationsApi = {
@@ -413,9 +738,41 @@ export const applicationsApi = {
     return patchJson(`/applications/${applicationId}`, { status });
   },
 
+  /** Update (or clear) notes on an application */
+  updateNotes(applicationId: string, notes: string | null): Promise<{ id: string; notes: string | null }> {
+    return patchJson(`/applications/${applicationId}/notes`, { notes });
+  },
+
   /** Get application statistics */
   getStats(): Promise<{ total: number; by_status: Record<string, number>; unique_companies: number }> {
     return get("/applications/stats");
+  },
+
+  /** Application funnel metrics with 30-day daily volume */
+  getFunnel(): Promise<{
+    total: number;
+    funnel: Array<{ stage: string; count: number; pct_of_total: number }>;
+    response_rate_pct: number;
+    offer_rate_pct: number;
+    daily_volume_30d: Array<{ date: string; count: number }>;
+  }> {
+    return get("/applications/funnel");
+  },
+
+  /** Download all applications as CSV — triggers browser download */
+  async exportCsv(): Promise<void> {
+    await ensureInit();
+    const resp = await fetch(`${getApiBase()}/applications/export.csv`, {
+      headers: authHeaders(),
+    });
+    if (!resp.ok) throw new Error("Export failed");
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "applications.csv";
+    a.click();
+    URL.revokeObjectURL(url);
   },
 };
 
@@ -476,11 +833,44 @@ export const workHistoryApi = {
     return post("/work-history", entry as unknown as Record<string, unknown>);
   },
 
+  async update(entryId: string, entry: Partial<WorkHistoryEntryIn>): Promise<{ id: string; updated: boolean }> {
+    await ensureInit();
+    const resp = await fetch(`${getApiBase()}/work-history/${entryId}`, {
+      method: "PATCH",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify(entry),
+    });
+    return resp.json();
+  },
+
   async delete(entryId: string): Promise<void> {
     await ensureInit();
     await fetch(`${getApiBase()}/work-history/${entryId}`, {
       method: "DELETE",
       headers: authHeaders(),
     });
+  },
+
+  importFromResume(
+    file: File,
+    providers?: Array<{ name: string; apiKey: string; model?: string }>
+  ): Promise<{
+    created: number;
+    skipped: number;
+    total_extracted: number;
+    provider_used: string;
+    detected_profile: Partial<{
+      firstName: string; lastName: string; email: string; phone: string;
+      linkedinUrl: string; githubUrl: string; portfolioUrl: string;
+    }>;
+  }> {
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    if (providers?.length) {
+      fd.append("providers_json", JSON.stringify(
+        providers.map((p) => ({ name: p.name, api_key: p.apiKey, model: p.model ?? "" }))
+      ));
+    }
+    return post("/work-history/import-from-resume", fd);
   },
 };

@@ -1,6 +1,6 @@
 // Options page script — module scripts run after DOM is parsed, no DOMContentLoaded needed
 
-import { workHistoryApi, type WorkHistoryEntry } from "../shared/api";
+import { vaultApi, workHistoryApi, type WorkHistoryEntry } from "../shared/api";
 
 const API_DEFAULT = "https://autoapply-ai-api.fly.dev/api/v1";
 
@@ -84,11 +84,13 @@ function wireProviderAutoEnable() {
 async function loadSettings() {
   const data = await chrome.storage.local.get([
     "clerkUserId",
+    "clerkToken",
     "apiBaseUrl",
     "providerConfigs",
     "profile",
   ]);
   if (data.clerkUserId) getInput("clerk-user-id").value = data.clerkUserId as string;
+  if (data.clerkToken) getInput("clerk-jwt-token").value = data.clerkToken as string;
   if (data.apiBaseUrl) getInput("api-base").value = data.apiBaseUrl as string;
   loadProviderUI((data.providerConfigs as ProvidersMap) ?? PROVIDER_DEFAULTS);
 
@@ -133,21 +135,41 @@ async function saveAuth() {
     return;
   }
 
+  // Optional JWT token — if provided, extract exp from payload
+  const rawToken = getInput("clerk-jwt-token").value.trim();
+  let jwtPayload: { exp?: number } = {};
+  if (rawToken) {
+    try {
+      const parts = rawToken.split(".");
+      if (parts.length === 3) {
+        jwtPayload = JSON.parse(atob(parts[1].replace(/-/g, "+").replace(/_/g, "/"))) as { exp?: number };
+      }
+    } catch { /* ignore malformed token */ }
+  }
+
   const apiBase =
     ((await chrome.storage.local.get("apiBaseUrl")).apiBaseUrl as string | undefined) ||
     API_DEFAULT;
 
   showStatus("auth-status", "Connecting…", "info");
 
+  // Build auth headers: prefer JWT Bearer if provided and not expired
+  const now = Date.now() / 1000;
+  const tokenValid = rawToken && (!jwtPayload.exp || jwtPayload.exp > now + 30);
+  const authHdrs: Record<string, string> = tokenValid
+    ? { "Authorization": `Bearer ${rawToken}` }
+    : { "X-Clerk-User-Id": userId };
+
   try {
     // Step 1: check if user already exists
-    const meResp = await fetch(`${apiBase}/auth/me`, {
-      headers: { "X-Clerk-User-Id": userId },
-    });
+    const meResp = await fetch(`${apiBase}/auth/me`, { headers: authHdrs });
 
     if (meResp.ok) {
-      await chrome.storage.local.set({ clerkUserId: userId });
-      showStatus("auth-status", "Verified and saved ✓", "ok");
+      const toStore: Record<string, unknown> = { clerkUserId: userId };
+      if (rawToken) { toStore.clerkToken = rawToken; toStore.clerkTokenExp = jwtPayload.exp ?? 0; }
+      else { await chrome.storage.local.remove(["clerkToken", "clerkTokenExp"]); }
+      await chrome.storage.local.set(toStore);
+      showStatus("auth-status", `Verified and saved ✓${rawToken ? " (JWT)" : ""}`, "ok");
       loadSettings();
       loadWorkHistory();
       return;
@@ -167,7 +189,9 @@ async function saveAuth() {
       );
 
       if (registerResp.ok) {
-        await chrome.storage.local.set({ clerkUserId: userId });
+        const toStore2: Record<string, unknown> = { clerkUserId: userId };
+        if (rawToken) { toStore2.clerkToken = rawToken; toStore2.clerkTokenExp = jwtPayload.exp ?? 0; }
+        await chrome.storage.local.set(toStore2);
         showStatus("auth-status", "Account created and saved ✓", "ok");
         loadSettings();
         loadWorkHistory();
@@ -264,8 +288,48 @@ function renderWorkHistoryList(entries: WorkHistoryEntry[]) {
         <div class="wh-entry-title">${e.role_title} @ ${e.company_name}</div>
         <div class="wh-entry-meta">${dateRange}${e.location ? " · " + e.location : ""}${tech}</div>
       </div>
-      <button class="wh-del-btn" title="Delete entry">✕</button>
+      <div class="wh-entry-actions">
+        <button class="wh-edit-btn" title="Edit bullets and tech">✎ Edit</button>
+        <button class="wh-del-btn" title="Delete entry">✕</button>
+      </div>
+      <div class="wh-edit-form" style="display:none; margin-top:8px; padding-top:8px; border-top:1px solid #e5e7eb;">
+        <label style="font-size:12px; font-weight:600; display:block; margin-bottom:4px;">Bullets (one per line)</label>
+        <textarea class="wh-edit-bullets" rows="4" style="width:100%; font-size:12px; border:1px solid #d1d5db; border-radius:4px; padding:6px; box-sizing:border-box;">${(e.bullets ?? []).join("\n")}</textarea>
+        <label style="font-size:12px; font-weight:600; display:block; margin:6px 0 4px;">Technologies (comma-separated)</label>
+        <input type="text" class="wh-edit-tech" value="${(e.technologies ?? []).join(", ")}" style="width:100%; font-size:12px; border:1px solid #d1d5db; border-radius:4px; padding:6px; box-sizing:border-box;" />
+        <div style="display:flex; gap:6px; margin-top:8px;">
+          <button class="wh-save-btn" style="padding:4px 12px; background:#4f46e5; color:#fff; border:none; border-radius:4px; font-size:12px; cursor:pointer;">Save</button>
+          <button class="wh-cancel-btn" style="padding:4px 12px; background:#f3f4f6; color:#374151; border:1px solid #d1d5db; border-radius:4px; font-size:12px; cursor:pointer;">Cancel</button>
+          <span class="wh-save-status" style="font-size:11px; margin-left:4px; align-self:center;"></span>
+        </div>
+      </div>
     `;
+    const editForm = div.querySelector(".wh-edit-form") as HTMLElement;
+    div.querySelector(".wh-edit-btn")!.addEventListener("click", () => {
+      editForm.style.display = editForm.style.display === "none" ? "block" : "none";
+    });
+    div.querySelector(".wh-cancel-btn")!.addEventListener("click", () => {
+      editForm.style.display = "none";
+    });
+    div.querySelector(".wh-save-btn")!.addEventListener("click", async () => {
+      const bulletsRaw = (div.querySelector(".wh-edit-bullets") as HTMLTextAreaElement).value.trim();
+      const techRaw = (div.querySelector(".wh-edit-tech") as HTMLInputElement).value.trim();
+      const status = div.querySelector(".wh-save-status") as HTMLElement;
+      status.textContent = "Saving…";
+      status.style.color = "#6b7280";
+      try {
+        await workHistoryApi.update(e.id, {
+          bullets: bulletsRaw ? bulletsRaw.split("\n").map((s) => s.trim()).filter(Boolean) : [],
+          technologies: techRaw ? techRaw.split(",").map((s) => s.trim()).filter(Boolean) : [],
+        });
+        status.textContent = "✓ Saved";
+        status.style.color = "#059669";
+        setTimeout(() => { editForm.style.display = "none"; loadWorkHistory(); }, 1000);
+      } catch {
+        status.textContent = "Failed to save";
+        status.style.color = "#dc2626";
+      }
+    });
     div.querySelector(".wh-del-btn")!.addEventListener("click", () => deleteWorkHistoryEntry(e.id, div));
     container.appendChild(div);
   }
@@ -423,12 +487,195 @@ async function saveModelRoutes() {
   showStatus("mr-status", count > 0 ? `Saved — ${count} custom route${count !== 1 ? "s" : ""} set.` : "Saved — using default priority order for all categories.", "ok");
 }
 
+// ── Import from Resume ────────────────────────────────────────────────────────
+
+let _importFile: File | null = null;
+
+function wireImportFromResume() {
+  const pickBtn = get("wh-import-pick-btn");
+  const fileInput = document.getElementById("wh-import-file") as HTMLInputElement;
+  const importBtn = document.getElementById("wh-import-btn") as HTMLButtonElement;
+  const filenameEl = get("wh-import-filename");
+
+  pickBtn.addEventListener("click", () => fileInput.click());
+
+  fileInput.addEventListener("change", () => {
+    const f = fileInput.files?.[0] ?? null;
+    _importFile = f;
+    if (f) {
+      filenameEl.textContent = f.name;
+      importBtn.disabled = false;
+    } else {
+      filenameEl.textContent = "No file chosen";
+      importBtn.disabled = true;
+    }
+  });
+
+  importBtn.addEventListener("click", importFromResume);
+}
+
+async function importFromResume() {
+  if (!_importFile) return;
+
+  const { clerkUserId } = await chrome.storage.local.get("clerkUserId");
+  if (!clerkUserId) {
+    showStatus("wh-import-status", "Save your User ID in Authentication first.", "err");
+    return;
+  }
+
+  const importBtn = document.getElementById("wh-import-btn") as HTMLButtonElement;
+  importBtn.disabled = true;
+  showStatus("wh-import-status", "Parsing resume…", "info");
+
+  try {
+    // Read enabled providers from storage for LLM extraction
+    const data = await chrome.storage.local.get("providerConfigs");
+    const configs = (data.providerConfigs as Record<string, { enabled: boolean; apiKey: string; model: string }> | undefined) ?? {};
+    const providers = Object.entries(configs)
+      .filter(([, cfg]) => cfg.enabled && cfg.apiKey)
+      .map(([name, cfg]) => ({ name, apiKey: cfg.apiKey, model: cfg.model }));
+
+    const result = await workHistoryApi.importFromResume(_importFile, providers);
+
+    // Auto-populate profile fields that are currently empty
+    const dp = result.detected_profile;
+    if (dp && Object.keys(dp).length > 0) {
+      const profileData = await chrome.storage.local.get("profile");
+      const existingProfile = (profileData.profile as Record<string, string> | undefined) ?? {};
+      let profileUpdated = false;
+      const mergedProfile = { ...existingProfile };
+      const fieldMap: Record<string, string> = {
+        firstName: "profile-first",
+        lastName: "profile-last",
+        email: "profile-email",
+        phone: "profile-phone",
+        linkedinUrl: "profile-linkedin",
+        githubUrl: "profile-github",
+        portfolioUrl: "profile-portfolio",
+      };
+      for (const [key, inputId] of Object.entries(fieldMap)) {
+        const detected = dp[key as keyof typeof dp];
+        if (detected && !existingProfile[key]) {
+          mergedProfile[key] = detected;
+          const el = document.getElementById(inputId) as HTMLInputElement | null;
+          if (el) el.value = detected;
+          profileUpdated = true;
+        }
+      }
+      if (profileUpdated) {
+        await chrome.storage.local.set({ profile: mergedProfile });
+      }
+    }
+
+    const profileMsg = dp && Object.keys(dp).length > 0
+      ? ` Profile fields auto-populated.`
+      : "";
+
+    if (result.created === 0 && result.skipped > 0) {
+      showStatus("wh-import-status", `All ${result.skipped} extracted entries already exist — nothing new added.${profileMsg}`, "info");
+    } else {
+      showStatus(
+        "wh-import-status",
+        `Imported ${result.created} entr${result.created !== 1 ? "ies" : "y"} from ${result.total_extracted} detected (${result.skipped} already existed). Powered by ${result.provider_used}.${profileMsg}`,
+        "ok"
+      );
+    }
+
+    loadWorkHistory();
+  } catch (e) {
+    showStatus("wh-import-status", `Import failed: ${e instanceof Error ? e.message : "unknown error"}`, "err");
+  } finally {
+    importBtn.disabled = false;
+  }
+}
+
+// ── RAG Document Management ─────────────────────────────────────────────────
+
+async function loadRagDocsList() {
+  const listEl = get("rag-docs-list");
+  try {
+    const res = await vaultApi.listDocuments();
+    if (res.documents.length === 0) {
+      listEl.innerHTML = `<div style="font-size:12px;color:#4b5563;">No documents uploaded yet.</div>`;
+      return;
+    }
+    listEl.innerHTML = res.documents.map((doc) => `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#0f0f1a;border:1px solid #1e1e3a;border-radius:8px;margin-bottom:6px;">
+        <div>
+          <div style="font-size:13px;color:#c4b5fd;font-weight:600;">${doc.source_filename}</div>
+          <div style="font-size:11px;color:#475569;">${doc.doc_type} · ${doc.chunk_count} chunks${doc.has_dense_embeddings ? " · dense embeddings" : " · TF-IDF"}</div>
+        </div>
+        <button class="btn" data-delete-filename="${doc.source_filename}" style="background:#1a0808;color:#f87171;border:1px solid #7f1d1d;font-size:11px;padding:4px 10px;">Delete</button>
+      </div>
+    `).join("");
+
+    // Wire delete buttons
+    listEl.querySelectorAll<HTMLButtonElement>("[data-delete-filename]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const filename = btn.getAttribute("data-delete-filename")!;
+        btn.disabled = true;
+        btn.textContent = "Deleting…";
+        try {
+          await vaultApi.deleteDocument(filename);
+          await loadRagDocsList();
+        } catch (e) {
+          btn.disabled = false;
+          btn.textContent = "Delete";
+          showStatus("rag-upload-status", `Delete failed: ${e instanceof Error ? e.message : "unknown"}`, "err");
+        }
+      });
+    });
+  } catch {
+    listEl.innerHTML = `<div style="font-size:12px;color:#4b5563;">Could not load documents (save auth first).</div>`;
+  }
+}
+
+async function uploadRagDocument() {
+  const btn = get("rag-upload-btn") as HTMLButtonElement;
+  const content = (document.getElementById("rag-doc-content") as HTMLTextAreaElement).value.trim();
+  const docType = (document.getElementById("rag-doc-type") as HTMLSelectElement).value as "resume" | "work_history" | "cover_letter_sample" | "other";
+  const filename = (document.getElementById("rag-doc-filename") as HTMLInputElement).value.trim() || `${docType}.md`;
+
+  if (!content) {
+    showStatus("rag-upload-status", "Paste your markdown content first.", "err");
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = "Chunking & uploading…";
+  try {
+    const res = await vaultApi.uploadMarkdownDoc({ content, docType, sourceFilename: filename });
+    showStatus("rag-upload-status", res.message, "ok");
+    (document.getElementById("rag-doc-content") as HTMLTextAreaElement).value = "";
+    await loadRagDocsList();
+  } catch (e) {
+    showStatus("rag-upload-status", `Upload failed: ${e instanceof Error ? e.message : "unknown"}`, "err");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "⬆ Upload to RAG Pipeline";
+  }
+}
+
+// Auto-update filename when doc type changes
+(document.getElementById("rag-doc-type") as HTMLSelectElement).addEventListener("change", (e) => {
+  const type = (e.target as HTMLSelectElement).value;
+  const defaultNames: Record<string, string> = {
+    resume: "resume.md",
+    work_history: "work_history.md",
+    cover_letter_sample: "cover_letter_samples.md",
+    other: "context.md",
+  };
+  (document.getElementById("rag-doc-filename") as HTMLInputElement).value = defaultNames[type] ?? "document.md";
+});
+
 // Module scripts are deferred — DOM is fully parsed when this runs.
 wireProviderAutoEnable();
 loadSettings();
 loadWorkHistory();
 loadPromptTemplates();
 loadModelRoutes();
+wireImportFromResume();
+loadRagDocsList();
 get("save-auth").addEventListener("click", saveAuth);
 get("test-api").addEventListener("click", testApi);
 get("save-api").addEventListener("click", saveApi);
@@ -437,3 +684,4 @@ get("save-profile").addEventListener("click", saveProfile);
 get("wh-add-btn").addEventListener("click", addWorkHistoryEntry);
 get("save-prompts").addEventListener("click", savePromptTemplates);
 get("save-model-routes").addEventListener("click", saveModelRoutes);
+get("rag-upload-btn").addEventListener("click", uploadRagDocument);

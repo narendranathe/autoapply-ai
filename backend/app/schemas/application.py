@@ -21,6 +21,7 @@ class ApplicationResponse(BaseModel):
     rewrite_strategy: str | None
     similarity_score: float | None
     changes_summary: str | None
+    notes: str | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -32,6 +33,12 @@ class ApplicationStatusUpdate(BaseModel):
     status: str = Field(
         ..., pattern=r"^(discovered|draft|tailored|applied|rejected|interview|offer)$"
     )
+
+
+class ApplicationNotesUpdate(BaseModel):
+    """Schema for updating application notes."""
+
+    notes: str | None = None
 
 
 class ApplicationListResponse(BaseModel):

@@ -498,6 +498,7 @@ async def generate_answer_drafts(
     api_key: str = "",
     ollama_model: str = "llama3.1:8b",
     past_accepted_answers: list[str] | None = None,
+    rag_context: str = "",
 ) -> list[str]:
     """
     Generate 3 draft answers to an open-ended application question.
@@ -524,6 +525,8 @@ Adapt the voice and structure above to the current question/company.
 Do NOT copy verbatim — generate fresh content grounded in work history.
 """
 
+    rag_section = f"\n{rag_context}\n" if rag_context.strip() else ""
+
     user_prompt = f"""QUESTION: {question_text}
 CATEGORY: {question_category}
 COMPANY: {company_name}
@@ -534,7 +537,7 @@ JOB DESCRIPTION (first 2000 chars):
 
 CANDIDATE WORK HISTORY (use ONLY these facts — no fabrication):
 {work_history_text[:3000]}
-
+{rag_section}
 ANSWERING FRAMEWORK FOR THIS CATEGORY:
 {framework_snippet}
 {memory_block}
@@ -673,6 +676,7 @@ async def generate_answer_drafts_cascade(
     candidate_name: str = "",
     max_length: int | None = None,
     category_instructions: str | None = None,  # extra style instructions from user settings
+    rag_context: str = "",
 ) -> tuple[list[str], str]:
     """
     Try providers in priority order. Use the first working one to generate 3 drafts.
@@ -734,6 +738,8 @@ Do NOT copy verbatim — generate fresh content grounded in work history.
                 f"\nUSER STYLE INSTRUCTIONS (MUST follow):\n{category_instructions.strip()}\n"
             )
 
+        rag_block = f"\n{rag_context}\n" if rag_context.strip() else ""
+
         user_prompt = f"""QUESTION: {question_text}
 CATEGORY: {question_category}
 COMPANY: {company_name}
@@ -743,7 +749,7 @@ JOB DESCRIPTION (first 2000 chars):
 {jd_text[:2000]}
 
 {wh_section}
-
+{rag_block}
 ANSWERING FRAMEWORK FOR THIS CATEGORY:
 {framework_snippet}
 {memory_block}{style_block}
@@ -804,6 +810,197 @@ DRAFT_3:
     else:
         fallback = _rule_based_answer_drafts(question_category, company_name, work_history_text)
     return fallback, "fallback"
+
+
+async def _call_single_provider(
+    name: str,
+    api_key: str,
+    model: str,
+    system_prompt: str,
+    user_prompt: str,
+    is_cover_letter: bool,
+) -> tuple[str, str]:
+    """Call one provider and return (first_draft_text, provider_name). Returns ("", name) on failure."""
+    try:
+        if name == "ollama":
+            return "", name
+        elif name == "anthropic" and api_key:
+            raw = await _call_anthropic(system_prompt, user_prompt, api_key)
+        elif name == "openai" and api_key:
+            raw = await _call_openai(system_prompt, user_prompt, api_key)
+        elif name == "gemini" and api_key:
+            raw = await _call_gemini(
+                system_prompt, user_prompt, api_key, model or "gemini-1.5-flash"
+            )
+        elif name == "groq" and api_key:
+            raw = await _call_groq(
+                system_prompt, user_prompt, api_key, model or "llama-3.3-70b-versatile"
+            )
+        elif name == "perplexity" and api_key:
+            raw = await _call_perplexity(system_prompt, user_prompt, api_key, model or "sonar")
+        elif name == "kimi" and api_key:
+            raw = await _call_kimi(system_prompt, user_prompt, api_key)
+        else:
+            return "", name
+
+        min_len = 200 if is_cover_letter else 80
+        if raw and len(raw) > min_len:
+            # Extract just the first draft from this provider's response
+            drafts = _parse_answer_drafts(raw)
+            if drafts:
+                return drafts[0], name
+    except Exception as e:
+        logger.warning(f"Parallel: provider '{name}' failed — {e}")
+    return "", name
+
+
+async def generate_answer_drafts_parallel(
+    question_text: str,
+    question_category: str,
+    company_name: str,
+    role_title: str,
+    jd_text: str,
+    work_history_text: str,
+    providers: list[dict],
+    past_accepted_answers: list[str] | None = None,
+    candidate_name: str = "",
+    max_length: int | None = None,
+    category_instructions: str | None = None,
+    rag_context: str = "",
+) -> tuple[list[str], list[str]]:
+    """
+    Run all providers concurrently. Each provider contributes one draft.
+    Returns (drafts, draft_providers) — parallel lists where drafts[i] came from draft_providers[i].
+    Falls back to cascade if parallel yields < 1 result.
+    """
+    is_cover_letter = question_category == "cover_letter"
+    sorted_providers = sorted(providers, key=lambda p: _PROVIDER_RANK.get(p.get("name", ""), 50))
+
+    if is_cover_letter:
+        system_prompt = _COVER_LETTER_SYSTEM_PROMPT
+        user_prompt = _build_cover_letter_prompt(
+            company_name=company_name,
+            role_title=role_title,
+            jd_text=jd_text,
+            work_history_text=work_history_text,
+            candidate_name=candidate_name or "the candidate",
+            past_accepted_answers=past_accepted_answers,
+        )
+    else:
+        system_prompt = _ANSWER_SYSTEM_PROMPT
+        config = _load_doc("resume_personal_config.md")
+        framework_snippet = _extract_category_framework(config, question_category)
+
+        memory_block = ""
+        if past_accepted_answers:
+            examples = "\n\n---\n".join(
+                f"EXAMPLE {i+1}:\n{a[:400]}" for i, a in enumerate(past_accepted_answers[:3])
+            )
+            memory_block = f"""
+PREVIOUSLY ACCEPTED ANSWERS (high quality — mirror this voice and style):
+{examples}
+
+Adapt the voice and structure above to the current question/company.
+Do NOT copy verbatim — generate fresh content grounded in work history.
+"""
+
+        wh_section = (
+            f"CANDIDATE WORK HISTORY (ground every answer in these facts):\n{work_history_text[:3000]}"
+            if work_history_text.strip()
+            else "CANDIDATE WORK HISTORY: Not provided — write compelling, honest general answers."
+        )
+
+        if max_length and max_length > 0:
+            max_words = max(50, (max_length // 5) - 20)
+            length_instruction = f"CRITICAL: The application field has a {max_length}-character limit. Keep your answer under {max_words} words."
+        else:
+            length_instruction = "Target 150-220 words."
+
+        style_block = ""
+        if category_instructions and category_instructions.strip():
+            style_block = (
+                f"\nUSER STYLE INSTRUCTIONS (MUST follow):\n{category_instructions.strip()}\n"
+            )
+
+        rag_block = f"\n{rag_context}\n" if rag_context.strip() else ""
+
+        user_prompt = f"""QUESTION: {question_text}
+CATEGORY: {question_category}
+COMPANY: {company_name}
+ROLE: {role_title}
+
+JOB DESCRIPTION (first 2000 chars):
+{jd_text[:2000]}
+
+{wh_section}
+{rag_block}{memory_block}
+{framework_snippet}
+{style_block}
+{length_instruction}
+
+Write ONE focused, genuine answer (not DRAFT_1/DRAFT_2 format). Use first person.
+"""
+
+    # Run all providers concurrently with a 30-second timeout per provider
+    tasks = [
+        _call_single_provider(
+            name=p.get("name", ""),
+            api_key=p.get("api_key", ""),
+            model=p.get("model", ""),
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            is_cover_letter=is_cover_letter,
+        )
+        for p in sorted_providers
+        if p.get("api_key") and p.get("name") != "ollama"
+    ]
+
+    if not tasks:
+        fallback_drafts, _ = await generate_answer_drafts_cascade(
+            question_text=question_text,
+            question_category=question_category,
+            company_name=company_name,
+            role_title=role_title,
+            jd_text=jd_text,
+            work_history_text=work_history_text,
+            providers=providers,
+            past_accepted_answers=past_accepted_answers,
+            candidate_name=candidate_name,
+            max_length=max_length,
+            category_instructions=category_instructions,
+            rag_context=rag_context,
+        )
+        return fallback_drafts, []
+
+    results = await asyncio.gather(*tasks, return_exceptions=False)
+
+    # Collect successful results
+    drafts: list[str] = []
+    draft_providers: list[str] = []
+    for draft_text, provider_name in results:
+        if draft_text:
+            drafts.append(draft_text)
+            draft_providers.append(provider_name)
+            logger.info(f"Parallel: got draft from '{provider_name}'")
+
+    if not drafts:
+        logger.warning("Parallel: all providers failed, falling back to cascade")
+        fallback_drafts, used = await generate_answer_drafts_cascade(
+            question_text=question_text,
+            question_category=question_category,
+            company_name=company_name,
+            role_title=role_title,
+            jd_text=jd_text,
+            work_history_text=work_history_text,
+            providers=providers,
+            past_accepted_answers=past_accepted_answers,
+            candidate_name=candidate_name,
+            max_length=max_length,
+            category_instructions=category_instructions,
+        )
+        return fallback_drafts, [used] * len(fallback_drafts) if used != "fallback" else []
+
+    return drafts, draft_providers
 
 
 def _rule_based_cover_letter_drafts(company: str, role: str, work_history: str) -> list[str]:
@@ -1088,3 +1285,337 @@ def _latex_to_markdown_preview(latex: str, profile: PersonalProfile) -> str:
             md_lines.append("")
 
     return "\n".join(md_lines)
+
+
+# ── Cover Letter Generation ─────────────────────────────────────────────────
+
+_TONE_INSTRUCTIONS: dict[str, str] = {
+    "professional": "Write in a polished, formal tone appropriate for corporate environments.",
+    "enthusiastic": "Write in an energetic, passionate tone that conveys genuine excitement for the role.",
+    "concise": "Write in a tight, direct style — every sentence must earn its place. No filler.",
+    "conversational": "Write in a warm, natural tone — formal enough for a job application but human and approachable.",
+}
+
+
+def _build_cover_letter_prompt_v2(
+    company_name: str,
+    role_title: str,
+    jd_text: str,
+    work_history_text: str,
+    candidate_name: str = "the candidate",
+    tone: str = "professional",
+    word_limit: int = 400,
+    num_drafts: int = 3,
+    past_accepted: list[str] | None = None,
+    rag_context: str = "",
+) -> str:
+    tone_instruction = _TONE_INSTRUCTIONS.get(tone, _TONE_INSTRUCTIONS["professional"])
+    word_range = f"{max(150, word_limit - 60)}-{word_limit}"
+
+    memory_block = ""
+    if past_accepted:
+        examples = "\n\n---\n".join(
+            f"PREVIOUS ACCEPTED COVER LETTER {i + 1}:\n{a[:600]}"
+            for i, a in enumerate(past_accepted[:2])
+        )
+        memory_block = f"""
+PREVIOUSLY ACCEPTED COVER LETTERS (mirror this voice — do NOT copy verbatim):
+{examples}
+
+"""
+
+    wh_section = (
+        f"CANDIDATE WORK HISTORY:\n{work_history_text[:3500]}"
+        if work_history_text.strip()
+        else "CANDIDATE WORK HISTORY: Not provided — write using professional language and genuine enthusiasm."
+    )
+
+    rag_section = f"\n{rag_context}\n" if rag_context.strip() else ""
+
+    draft_instructions = "\n".join(
+        f"DRAFT_{i + 1}:\n[{word_range} words — {'different opening angle' if i > 0 else 'direct value-prop opening'}]"
+        for i in range(num_drafts)
+    )
+
+    return f"""Write {num_drafts} cover letter draft{"s" if num_drafts > 1 else ""} for the following application.
+
+POSITION: {role_title}
+COMPANY: {company_name}
+CANDIDATE NAME: {candidate_name}
+
+TONE INSTRUCTION: {tone_instruction}
+TARGET LENGTH: {word_range} words per draft
+
+JOB DESCRIPTION:
+{jd_text[:2500]}
+
+{wh_section}
+{rag_section}
+{memory_block}Respond in EXACTLY this format — {num_drafts} separate complete drafts:
+{draft_instructions}
+"""
+
+
+async def generate_cover_letter(
+    company_name: str,
+    role_title: str,
+    jd_text: str,
+    work_history_text: str,
+    providers: list[dict],
+    candidate_name: str = "",
+    tone: str = "professional",
+    word_limit: int = 400,
+    past_accepted: list[str] | None = None,
+    rag_context: str = "",
+) -> tuple[list[str], list[str]]:
+    """
+    Generate cover letter drafts in parallel across all enabled providers.
+
+    Returns (drafts, draft_providers) — parallel lists.
+    Each provider contributes one draft (different opening angle).
+    Falls back to rule-based if all LLMs fail.
+    """
+    num_providers = max(1, len(providers))
+    system_prompt = (
+        "You are an expert career coach specializing in compelling cover letters. "
+        "You write cover letters that are tailored, specific, and human — never generic. "
+        "You ground every claim in the candidate's real work history."
+    )
+
+    async def _call_one(p: dict, draft_num: int) -> tuple[str, str]:
+        """Call one provider and extract a single cover letter draft."""
+        user_prompt = _build_cover_letter_prompt_v2(
+            company_name=company_name,
+            role_title=role_title,
+            jd_text=jd_text,
+            work_history_text=work_history_text,
+            candidate_name=candidate_name or "the candidate",
+            tone=tone,
+            word_limit=word_limit,
+            num_drafts=1,  # one draft per provider call
+            past_accepted=past_accepted,
+            rag_context=rag_context,
+        )
+        name = p.get("name", "")
+        api_key = p.get("api_key", "")
+        model = p.get("model", "")
+        try:
+            if name == "anthropic" and api_key:
+                raw = await _call_anthropic(system_prompt, user_prompt, api_key)
+            elif name == "openai" and api_key:
+                raw = await _call_openai(system_prompt, user_prompt, api_key)
+            elif name == "gemini" and api_key:
+                raw = await _call_gemini(
+                    system_prompt, user_prompt, api_key, model or "gemini-1.5-flash"
+                )
+            elif name == "groq" and api_key:
+                raw = await _call_groq(
+                    system_prompt, user_prompt, api_key, model or "llama-3.3-70b-versatile"
+                )
+            elif name == "kimi" and api_key:
+                raw = await _call_kimi(system_prompt, user_prompt, api_key)
+            else:
+                return ("", "")
+            # Strip any DRAFT_1: prefix the model may echo back
+            text = re.sub(r"^DRAFT_\d+:\s*", "", raw.strip(), flags=re.IGNORECASE).strip()
+            if text and len(text) > 100:
+                return (text, name)
+        except Exception as exc:
+            logger.warning(f"CoverLetter: provider '{name}' draft {draft_num} failed — {exc}")
+        return ("", "")
+
+    if not providers:
+        # No LLMs configured — return rule-based fallback
+        fallback = _rule_based_cover_letter_drafts(company_name, role_title, work_history_text)
+        return (fallback[:1], ["fallback"])
+
+    # Run all providers in parallel
+    tasks = [_call_one(p, i) for i, p in enumerate(providers[:num_providers])]
+    results = await asyncio.gather(*tasks)
+
+    drafts = [text for text, _ in results if text]
+    draft_providers = [prov for text, prov in results if text]
+
+    if not drafts:
+        fallback = _rule_based_cover_letter_drafts(company_name, role_title, work_history_text)
+        return (fallback[:1], ["fallback"])
+
+    return (drafts, draft_providers)
+
+
+# ── Professional Summary Generation ─────────────────────────────────────────
+
+
+async def generate_professional_summary(
+    company_name: str,
+    role_title: str,
+    jd_text: str,
+    work_history_text: str,
+    providers: list[dict],
+    candidate_name: str = "",
+    word_limit: int = 80,
+) -> tuple[str, str]:
+    """
+    Generate a 2-4 sentence professional summary tailored to a specific role.
+
+    Returns (summary_text, provider_used).
+    Falls back to a rule-based summary if LLMs are unavailable.
+    """
+    system_prompt = (
+        "You are a professional resume writer. Generate concise, powerful professional summaries "
+        "that position candidates for specific roles. Be specific, not generic."
+    )
+    user_prompt = f"""Write a professional summary for a resume targeting this role.
+
+POSITION: {role_title}
+COMPANY: {company_name}
+CANDIDATE: {candidate_name or "the candidate"}
+TARGET WORD COUNT: {word_limit} words (2-4 sentences)
+
+JOB DESCRIPTION:
+{jd_text[:2000]}
+
+CANDIDATE BACKGROUND:
+{work_history_text[:2500]}
+
+Write ONE professional summary (no headers, no quotes). Be specific about skills and impact.
+Lead with years of experience or key expertise. End with value proposition for this role."""
+
+    sorted_providers = sorted(providers, key=lambda p: _PROVIDER_RANK.get(p.get("name", ""), 50))
+    for p in sorted_providers:
+        name = p.get("name", "")
+        api_key = p.get("api_key", "")
+        model = p.get("model", "")
+        try:
+            if name == "anthropic" and api_key:
+                raw = await _call_anthropic(system_prompt, user_prompt, api_key)
+            elif name == "openai" and api_key:
+                raw = await _call_openai(system_prompt, user_prompt, api_key)
+            elif name == "gemini" and api_key:
+                raw = await _call_gemini(
+                    system_prompt, user_prompt, api_key, model or "gemini-1.5-flash"
+                )
+            elif name == "groq" and api_key:
+                raw = await _call_groq(
+                    system_prompt, user_prompt, api_key, model or "llama-3.3-70b-versatile"
+                )
+            elif name == "kimi" and api_key:
+                raw = await _call_kimi(system_prompt, user_prompt, api_key)
+            else:
+                continue
+            text = raw.strip()
+            if text and len(text) > 50:
+                return (text[: word_limit * 7], name)  # ~7 chars/word safety cap
+        except Exception as exc:
+            logger.warning(f"Summary: provider '{name}' failed — {exc}")
+
+    # Rule-based fallback
+    years = ""
+    if work_history_text:
+        import re as _re
+
+        yr_match = _re.search(r"(\d+)\s*(?:\+\s*)?years?", work_history_text, _re.IGNORECASE)
+        if yr_match:
+            years = f"{yr_match.group(1)}+ years of experience"
+    fallback = (
+        f"{'Experienced' if not years else years.capitalize()} professional "
+        f"seeking {role_title} at {company_name}. "
+        "Proven track record of delivering impactful results and driving technical excellence."
+    )
+    return (fallback, "fallback")
+
+
+# ── Tailored Bullet Points Generation ───────────────────────────────────────
+
+
+async def generate_role_bullets(
+    company_name: str,
+    role_title: str,
+    jd_text: str,
+    work_history_text: str,
+    providers: list[dict],
+    num_bullets: int = 5,
+    target_company_for_context: str = "",
+) -> tuple[list[str], str]:
+    """
+    Generate tailored resume bullet points for a role, grounded in work history.
+
+    Returns (bullets_list, provider_used).
+    Each bullet starts with a strong action verb.
+    Falls back to extracting existing bullets from work history if LLMs fail.
+    """
+    system_prompt = (
+        "You are a professional resume writer specializing in ATS-optimized bullet points. "
+        "Write achievement-focused bullets using the XYZ formula: "
+        "Accomplished [X] as measured by [Y] by doing [Z]. "
+        "Start each bullet with a strong past-tense action verb."
+    )
+    user_prompt = f"""Generate {num_bullets} tailored resume bullet points.
+
+TARGET ROLE: {role_title}
+COMPANY: {company_name}{f' (targeting {target_company_for_context})' if target_company_for_context else ''}
+
+JOB DESCRIPTION (keywords to match):
+{jd_text[:2000]}
+
+CANDIDATE'S ACTUAL WORK HISTORY (base bullets on these real facts):
+{work_history_text[:3000]}
+
+Rules:
+1. Each bullet must start with a strong action verb (Led, Built, Reduced, Increased, etc.)
+2. Include metrics where possible (%, $, time, scale)
+3. Use keywords from the JD naturally
+4. Keep each bullet under 25 words
+5. Do NOT invent facts not in the work history
+
+Return EXACTLY {num_bullets} bullets, one per line, each starting with "• "."""
+
+    sorted_providers = sorted(providers, key=lambda p: _PROVIDER_RANK.get(p.get("name", ""), 50))
+    for p in sorted_providers:
+        name = p.get("name", "")
+        api_key = p.get("api_key", "")
+        model = p.get("model", "")
+        try:
+            if name == "anthropic" and api_key:
+                raw = await _call_anthropic(system_prompt, user_prompt, api_key)
+            elif name == "openai" and api_key:
+                raw = await _call_openai(system_prompt, user_prompt, api_key)
+            elif name == "gemini" and api_key:
+                raw = await _call_gemini(
+                    system_prompt, user_prompt, api_key, model or "gemini-1.5-flash"
+                )
+            elif name == "groq" and api_key:
+                raw = await _call_groq(
+                    system_prompt, user_prompt, api_key, model or "llama-3.3-70b-versatile"
+                )
+            elif name == "kimi" and api_key:
+                raw = await _call_kimi(system_prompt, user_prompt, api_key)
+            else:
+                continue
+            import re as _re
+
+            lines = [
+                line.lstrip("•- ").strip()
+                for line in raw.strip().splitlines()
+                if line.strip() and len(line.strip()) > 10
+            ]
+            # Normalize: ensure bullet prefix
+            bullets = [f"• {b}" if not b.startswith("•") else b for b in lines[:num_bullets]]
+            if bullets:
+                return (bullets, name)
+        except Exception as exc:
+            logger.warning(f"Bullets: provider '{name}' failed — {exc}")
+
+    # Fallback: extract existing bullets from work history
+    import re as _re
+
+    existing = _re.findall(r"[•\-\*]\s*(.+)", work_history_text)
+    fallback_bullets = (
+        [f"• {b.strip()}" for b in existing[:num_bullets]]
+        if existing
+        else [
+            f"• Delivered high-impact work as {role_title} contributing to team success.",
+            f"• Collaborated cross-functionally to drive results at {company_name}.",
+        ]
+    )
+    return (fallback_bullets[:num_bullets], "fallback")

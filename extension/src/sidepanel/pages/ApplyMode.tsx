@@ -1,12 +1,32 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { ATSScoreResult, PageContext, ResumeCard } from "../../shared/types";
-import { applicationsApi, vaultApi, workHistoryApi, type GenerateTailoredResponse, type RetrieveResponse, type SimilarAnswer, type TrackedApplication } from "../../shared/api";
+import { applicationsApi, vaultApi, workHistoryApi, type GenerateTailoredResponse, type InterviewQuestion, type RetrieveResponse, type SimilarAnswer, type TrackedApplication } from "../../shared/api";
 import ATSScoreBar from "../components/ATSScoreBar";
 import ResumeCardComponent from "../components/ResumeCard";
 
+// ── Draft persistence helpers (sessionStorage, keyed by job URL) ────────────
+
+function draftKey(jobUrl: string | undefined, suffix: string): string {
+  const base = jobUrl ? btoa(jobUrl).slice(0, 32) : "nojob";
+  return `aap_drafts_${base}_${suffix}`;
+}
+
+function loadDraftSession<T>(jobUrl: string | undefined, suffix: string, fallback: T): T {
+  try {
+    const raw = sessionStorage.getItem(draftKey(jobUrl, suffix));
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch { return fallback; }
+}
+
+function saveDraftSession(jobUrl: string | undefined, suffix: string, value: unknown): void {
+  try {
+    sessionStorage.setItem(draftKey(jobUrl, suffix), JSON.stringify(value));
+  } catch { /* storage full — ignore */ }
+}
+
 interface Props { context: PageContext }
 
-type Tab = "resumes" | "fields" | "questions" | "history";
+type Tab = "resumes" | "fields" | "questions" | "history" | "prep" | "cover";
 
 function scoreColor(s: number): string {
   if (s >= 80) return "#10b981";
@@ -84,26 +104,35 @@ function getProfileValue(fieldType: string, profile: UserProfile | null): string
 }
 
 export default function ApplyMode({ context }: Props) {
+  const jobUrl = context.jobUrl;
   const [tab, setTab] = useState<Tab>("resumes");
   const [resumes, setResumes] = useState<ResumeCard[]>([]);
   const [ats, setAts] = useState<ATSScoreResult | null>(null);
   const [loading, setLoading] = useState(false);
-  const [answerDrafts, setAnswerDrafts] = useState<Record<string, string[]>>({});
-  const [selectedAnswers, setSelectedAnswers] = useState<Record<string, number>>({});
+  const [answerDrafts, setAnswerDrafts] = useState<Record<string, string[]>>(
+    () => loadDraftSession(jobUrl, "answerDrafts", {})
+  );
+  const [selectedAnswers, setSelectedAnswers] = useState<Record<string, number>>(
+    () => loadDraftSession(jobUrl, "selectedAnswers", {})
+  );
   const [savingAnswer, setSavingAnswer] = useState<string | null>(null);
   const [generatingAnswer, setGeneratingAnswer] = useState<string | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [workHistoryText, setWorkHistoryText] = useState<string>("");
   const [providers, setProviders] = useState<Array<{ name: string; apiKey: string; model?: string }>>([]);
   const [providersLoaded, setProvidersLoaded] = useState(false);
-  const [draftProviders, setDraftProviders] = useState<Record<string, string[]>>({});
+  const [draftProviders, setDraftProviders] = useState<Record<string, string[]>>(
+    () => loadDraftSession(jobUrl, "draftProviders", {})
+  );
   // answerId is set after saveAnswer — needed to record feedback
   const [savedAnswerIds, setSavedAnswerIds] = useState<Record<string, string>>({});
   const [generationErrors, setGenerationErrors] = useState<Record<string, string>>({});
   // "From Memory" similar answers per question
   const [memoryAnswers, setMemoryAnswers] = useState<Record<string, SimilarAnswer[]>>({});
   // C3: edited answer text — tracks live edits to LLM drafts before saving
-  const [editedTexts, setEditedTexts] = useState<Record<string, string>>({});
+  const [editedTexts, setEditedTexts] = useState<Record<string, string>>(
+    () => loadDraftSession(jobUrl, "editedTexts", {})
+  );
   // C2: resume upload state
   const [uploadError, setUploadError] = useState<string>("");
   const [uploadSuccess, setUploadSuccess] = useState<string>("");
@@ -114,6 +143,12 @@ export default function ApplyMode({ context }: Props) {
   // C5/C6: application tracking
   const [trackedAppId, setTrackedAppId] = useState<string | null>(null);
   const [pastApplications, setPastApplications] = useState<TrackedApplication[]>([]);
+  // Resume content viewer
+  const [viewingResumeId, setViewingResumeId] = useState<string | null>(null);
+  const [resumeContent, setResumeContent] = useState<string>("");
+  // Resume rename
+  const [renamingResumeId, setRenamingResumeId] = useState<string | null>(null);
+  const [renameTag, setRenameTag] = useState("");
   // L6: resume tailoring
   const [tailoringResumeId, setTailoringResumeId] = useState<string | null>(null);
   const [tailorResults, setTailorResults] = useState<Record<string, GenerateTailoredResponse>>({});
@@ -122,7 +157,68 @@ export default function ApplyMode({ context }: Props) {
   const [allApplications, setAllApplications] = useState<TrackedApplication[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [appStats, setAppStats] = useState<{ total: number; by_status: Record<string, number>; unique_companies: number } | null>(null);
+  const [appFunnel, setAppFunnel] = useState<Awaited<ReturnType<typeof applicationsApi.getFunnel>> | null>(null);
   const [updatingStatus, setUpdatingStatus] = useState<string | null>(null);
+  const [historySearch, setHistorySearch] = useState("");
+  const [historyStatusFilter, setHistoryStatusFilter] = useState<string>("all");
+  // Vault analytics
+  const [vaultAnalytics, setVaultAnalytics] = useState<Awaited<ReturnType<typeof vaultApi.getAnalytics>> | null>(null);
+  // Answer bank search
+  const [answerBankSearch, setAnswerBankSearch] = useState("");
+  const [answerBankResults, setAnswerBankResults] = useState<Array<{ answer_id: string; question_text: string; answer_text: string; company_name: string; question_category: string; reward_score: number | null; feedback: string }>>([]);
+  const [answerBankSearching, setAnswerBankSearching] = useState(false);
+  // T3: interview prep
+  const [interviewQuestions, setInterviewQuestions] = useState<InterviewQuestion[]>(
+    () => loadDraftSession(jobUrl, "interviewQuestions", [])
+  );
+  const [interviewLoading, setInterviewLoading] = useState(false);
+  const [interviewError, setInterviewError] = useState<string>("");
+  const [expandedPrepIdx, setExpandedPrepIdx] = useState<number | null>(null);
+  const [prepCategoryFilter, setPrepCategoryFilter] = useState<"all" | "behavioral" | "motivation" | "technical" | "general">("all");
+  // Trim answer to char limit
+  const [trimmingAnswer, setTrimmingAnswer] = useState<string | null>(null);
+  // Copy all answers
+  const [copiedAllAnswers, setCopiedAllAnswers] = useState(false);
+  // Cover letter tab
+  const [coverDrafts, setCoverDrafts] = useState<string[]>(
+    () => loadDraftSession(jobUrl, "coverDrafts", [])
+  );
+  const [coverDraftProviders, setCoverDraftProviders] = useState<string[]>(
+    () => loadDraftSession(jobUrl, "coverDraftProviders", [])
+  );
+  const [coverSelectedDraft, setCoverSelectedDraft] = useState(0);
+  const [coverLetter, setCoverLetter] = useState<string>(
+    () => loadDraftSession(jobUrl, "coverLetter", "")
+  );
+  const [coverLoading, setCoverLoading] = useState(false);
+  const [coverError, setCoverError] = useState<string>("");
+  const [coverTone, setCoverTone] = useState<"professional" | "enthusiastic" | "concise">("professional");
+  const [coverWordLimit, setCoverWordLimit] = useState<300 | 400 | 500>(400);
+  const [coverCopied, setCoverCopied] = useState(false);
+  const [savingCoverLetter, setSavingCoverLetter] = useState(false);
+  const [savedCoverLetters, setSavedCoverLetters] = useState<Array<{ id: string; company_name: string; role_title: string | null; answer_text: string; created_at: string }>>([]);
+  const [coverLettersSectionOpen, setCoverLettersSectionOpen] = useState(false);
+  // Interview prep bulk save
+  const [savingAllPrep, setSavingAllPrep] = useState(false);
+  const [savedAllPrep, setSavedAllPrep] = useState(false);
+  // AI Writing Tools (summary + bullets)
+  const [generatingSummary, setGeneratingSummary] = useState(false);
+  const [generatedSummary, setGeneratedSummary] = useState<string>("");
+  const [summaryError, setSummaryError] = useState<string>("");
+  const [summaryCopied, setSummaryCopied] = useState(false);
+  const [generatingBullets, setGeneratingBullets] = useState(false);
+  const [generatedBullets, setGeneratedBullets] = useState<string[]>([]);
+  const [bulletsError, setBulletsError] = useState<string>("");
+  const [bulletsCopied, setBulletsCopied] = useState(false);
+  // RAG document management
+  const [ragDocContent, setRagDocContent] = useState<string>("");
+  const [ragDocType, setRagDocType] = useState<"resume" | "work_history">("resume");
+  const [ragDocFilename, setRagDocFilename] = useState<string>("resume.md");
+  const [uploadingRagDoc, setUploadingRagDoc] = useState(false);
+  const [ragUploadResult, setRagUploadResult] = useState<string>("");
+  const [ragUploadError, setRagUploadError] = useState<string>("");
+  const [ragDocList, setRagDocList] = useState<Array<{ source_filename: string; doc_type: string; chunk_count: number; has_dense_embeddings: boolean; created_at: string }>>([]);
+  const [ragDocsLoaded, setRagDocsLoaded] = useState(false);
 
   const PROVIDER_RANK: Record<string, number> = { anthropic: 1, openai: 2, gemini: 3, groq: 4, perplexity: 5, kimi: 6 };
   const PROVIDER_MODELS: Record<string, string> = { anthropic: "claude-sonnet-4-6", openai: "gpt-4o", gemini: "gemini-1.5-flash", groq: "llama-3.3-70b-versatile", perplexity: "sonar", kimi: "moonshot-v1-32k" };
@@ -185,6 +281,20 @@ export default function ApplyMode({ context }: Props) {
       .finally(() => setLoading(false));
   }, [context.company]);
 
+  // Draft persistence — save to sessionStorage whenever drafts change
+  const persistDrafts = useCallback(() => {
+    saveDraftSession(jobUrl, "answerDrafts", answerDrafts);
+    saveDraftSession(jobUrl, "selectedAnswers", selectedAnswers);
+    saveDraftSession(jobUrl, "draftProviders", draftProviders);
+    saveDraftSession(jobUrl, "editedTexts", editedTexts);
+    saveDraftSession(jobUrl, "coverLetter", coverLetter);
+    saveDraftSession(jobUrl, "coverDrafts", coverDrafts);
+    saveDraftSession(jobUrl, "coverDraftProviders", coverDraftProviders);
+    saveDraftSession(jobUrl, "interviewQuestions", interviewQuestions);
+  }, [jobUrl, answerDrafts, selectedAnswers, draftProviders, editedTexts, coverLetter, coverDrafts, coverDraftProviders, interviewQuestions]);
+
+  useEffect(() => { persistDrafts(); }, [persistDrafts]);
+
   // C5: Auto-track this application visit (upsert — idempotent)
   useEffect(() => {
     if (!context.company) return;
@@ -223,9 +333,13 @@ export default function ApplyMode({ context }: Props) {
     Promise.all([
       applicationsApi.list(),
       applicationsApi.getStats(),
-    ]).then(([listRes, statsRes]) => {
+      applicationsApi.getFunnel().catch(() => null),
+      vaultApi.getAnalytics().catch(() => null),
+    ]).then(([listRes, statsRes, funnelRes, analyticsRes]) => {
       setAllApplications(listRes.items);
       setAppStats(statsRes);
+      if (funnelRes) setAppFunnel(funnelRes);
+      if (analyticsRes) setVaultAnalytics(analyticsRes);
     }).catch(() => {}).finally(() => setHistoryLoading(false));
   }, [tab]);
 
@@ -338,6 +452,119 @@ export default function ApplyMode({ context }: Props) {
       // silently fail — status badge will show stale value
     } finally {
       setUpdatingStatus(null);
+    }
+  };
+
+  // Quick "Mark as Applied" from context bar
+  const [markingApplied, setMarkingApplied] = useState(false);
+  const [appliedMarked, setAppliedMarked] = useState(false);
+  const handleMarkApplied = async () => {
+    if (!context.company) return;
+    setMarkingApplied(true);
+    try {
+      const result = await applicationsApi.track({
+        companyName: context.company,
+        roleTitle: context.roleTitle,
+        jobUrl: context.jobUrl,
+        platform: context.platform,
+      });
+      await applicationsApi.updateStatus(result.application_id, "applied");
+      setAppliedMarked(true);
+      setTrackedAppId(result.application_id);
+      setTimeout(() => setAppliedMarked(false), 3000);
+    } catch {
+      // ignore
+    } finally {
+      setMarkingApplied(false);
+    }
+  };
+
+  const handleGenerateCoverLetter = async () => {
+    if (!context.company) return;
+    setCoverLoading(true);
+    setCoverError("");
+    setCoverLetter("");
+    try {
+      const providers = await getFreshProviders();
+      // Get candidate name from stored profile
+      const profileData = await new Promise<{ firstName?: string; lastName?: string }>((resolve) => {
+        chrome.storage.local.get("profile", (d) => resolve(d.profile ?? {}));
+      });
+      const candidateName = [profileData.firstName, profileData.lastName].filter(Boolean).join(" ");
+      const result = await vaultApi.generateCoverLetter({
+        companyName: context.company,
+        roleTitle: context.roleTitle,
+        jdText: context.jdText ?? "",
+        tone: coverTone,
+        wordLimit: coverWordLimit,
+        candidateName,
+        providers,
+      });
+      const drafts = result.drafts ?? [];
+      const draftProviders = result.draft_providers ?? [];
+      setCoverDrafts(drafts);
+      setCoverDraftProviders(draftProviders);
+      setCoverSelectedDraft(0);
+      setCoverLetter(drafts[0] ?? "");
+    } catch (err) {
+      setCoverError(err instanceof Error ? err.message : "Generation failed");
+    } finally {
+      setCoverLoading(false);
+    }
+  };
+
+  const handleSaveCoverLetter = async () => {
+    if (!coverLetter.trim() || !context.company) return;
+    setSavingCoverLetter(true);
+    try {
+      await vaultApi.saveAnswer({
+        questionText: `Cover letter for ${context.roleTitle || "position"} at ${context.company}`,
+        questionCategory: "cover_letter",
+        answerText: coverLetter.trim(),
+        companyName: context.company,
+        roleTitle: context.roleTitle,
+        llmProviderUsed: coverDraftProviders[coverSelectedDraft],
+      });
+    } catch { /* ignore */ } finally {
+      setSavingCoverLetter(false);
+    }
+  };
+
+  const handleCopyLetter = async () => {
+    if (!coverLetter) return;
+    try {
+      await navigator.clipboard.writeText(coverLetter);
+    } catch {
+      const ta = document.createElement("textarea");
+      ta.value = coverLetter;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+    }
+    setCoverCopied(true);
+    setTimeout(() => setCoverCopied(false), 2000);
+  };
+
+  const handleInterviewPrep = async () => {
+    if (!context.company) return;
+    setInterviewLoading(true);
+    setInterviewError("");
+    setInterviewQuestions([]);
+    setPrepCategoryFilter("all");
+    try {
+      const providers = await getFreshProviders();
+      const result = await vaultApi.interviewPrep({
+        companyName: context.company,
+        roleTitle: context.roleTitle,
+        jdText: context.jdText ?? "",
+        providers,
+      });
+      setInterviewQuestions(result.questions);
+    } catch (e) {
+      setInterviewError(e instanceof Error ? e.message : "Failed to generate interview prep");
+    } finally {
+      setInterviewLoading(false);
     }
   };
 
@@ -455,6 +682,115 @@ export default function ApplyMode({ context }: Props) {
     chrome.runtime.sendMessage({ type: "FILL_ANSWER", payload: { questionId, text: memory.answer_text } });
   };
 
+  const handleTrimAnswer = async (questionId: string, maxLength: number) => {
+    const currentText = editedTexts[questionId] ?? answerDrafts[questionId]?.[selectedAnswers[questionId] ?? 0] ?? "";
+    if (!currentText || currentText.length <= maxLength) return;
+    setTrimmingAnswer(questionId);
+    try {
+      const freshProviders = await getFreshProviders();
+      const res = await vaultApi.trimAnswer({ answerText: currentText, maxChars: maxLength, providers: freshProviders });
+      setEditedTexts((prev) => ({ ...prev, [questionId]: res.trimmed }));
+    } catch { /* silently ignore */ } finally {
+      setTrimmingAnswer(null);
+    }
+  };
+
+  const handleGenerateSummary = async () => {
+    if (!context.company || !context.roleTitle) {
+      setSummaryError("Company and role title are required. Navigate to a job posting first.");
+      return;
+    }
+    setGeneratingSummary(true);
+    setSummaryError("");
+    setGeneratedSummary("");
+    try {
+      const freshProviders = await getFreshProviders();
+      const candidateName = profile ? `${profile.firstName ?? ""} ${profile.lastName ?? ""}`.trim() : "";
+      const res = await vaultApi.generateSummary({
+        companyName: context.company,
+        roleTitle: context.roleTitle,
+        jdText: context.jdText ?? "",
+        wordLimit: 80,
+        candidateName,
+        providers: freshProviders,
+      });
+      setGeneratedSummary(res.summary);
+    } catch (err) {
+      setSummaryError(err instanceof Error ? err.message : "Summary generation failed.");
+    } finally {
+      setGeneratingSummary(false);
+    }
+  };
+
+  const handleGenerateBullets = async () => {
+    if (!context.company || !context.roleTitle) {
+      setBulletsError("Company and role title are required. Navigate to a job posting first.");
+      return;
+    }
+    setGeneratingBullets(true);
+    setBulletsError("");
+    setGeneratedBullets([]);
+    try {
+      const freshProviders = await getFreshProviders();
+      const res = await vaultApi.generateBullets({
+        companyName: context.company,
+        roleTitle: context.roleTitle,
+        jdText: context.jdText ?? "",
+        numBullets: 5,
+        targetCompany: context.company,
+        providers: freshProviders,
+      });
+      setGeneratedBullets(res.bullets);
+    } catch (err) {
+      setBulletsError(err instanceof Error ? err.message : "Bullets generation failed.");
+    } finally {
+      setGeneratingBullets(false);
+    }
+  };
+
+  const loadRagDocs = async () => {
+    try {
+      const res = await vaultApi.listDocuments();
+      setRagDocList(res.documents);
+      setRagDocsLoaded(true);
+    } catch {
+      setRagDocsLoaded(true);
+    }
+  };
+
+  const handleUploadRagDoc = async () => {
+    if (!ragDocContent.trim()) {
+      setRagUploadError("Paste your markdown content first.");
+      return;
+    }
+    setUploadingRagDoc(true);
+    setRagUploadError("");
+    setRagUploadResult("");
+    try {
+      const res = await vaultApi.uploadMarkdownDoc({
+        content: ragDocContent,
+        docType: ragDocType,
+        sourceFilename: ragDocFilename || `${ragDocType}.md`,
+      });
+      setRagUploadResult(`✓ ${res.message}`);
+      setRagDocContent("");
+      await loadRagDocs();
+    } catch (err) {
+      setRagUploadError(err instanceof Error ? err.message : "Upload failed.");
+    } finally {
+      setUploadingRagDoc(false);
+    }
+  };
+
+  const handleDeleteRagDoc = async (filename: string) => {
+    try {
+      await vaultApi.deleteDocument(filename);
+      setRagDocList((prev) => prev.filter((d) => d.source_filename !== filename));
+    } catch {
+      /* ignore */
+    }
+  };
+
   // Keep a ref to the latest providers so auto-generate always uses fresh values
   const providersRef = React.useRef(providers);
   providersRef.current = providers;
@@ -524,7 +860,9 @@ export default function ApplyMode({ context }: Props) {
     { key: "resumes", label: "Resumes", count: resumes.length },
     { key: "fields", label: "Fields", count: context.detectedFields.length },
     { key: "questions", label: "Q&A", count: context.openQuestions.length },
+    { key: "cover", label: "Cover", count: coverLetter ? 1 : 0 },
     { key: "history", label: "History", count: allApplications.length },
+    { key: "prep", label: "Prep", count: interviewQuestions.length },
   ];
 
   return (
@@ -549,6 +887,27 @@ export default function ApplyMode({ context }: Props) {
             {context.roleTitle}
           </div>
         </div>
+        {/* Quick "Mark as Applied" button */}
+        <button
+          onClick={handleMarkApplied}
+          disabled={markingApplied || appliedMarked}
+          title="Mark this job as Applied in your tracker"
+          style={{
+            flexShrink: 0,
+            background: appliedMarked ? "#166534" : "#0a1628",
+            color: appliedMarked ? "#86efac" : "#60a5fa",
+            border: `1px solid ${appliedMarked ? "#166534" : "#1e3a5f"}`,
+            borderRadius: 8,
+            padding: "4px 8px",
+            fontSize: 10,
+            fontWeight: 700,
+            cursor: markingApplied ? "wait" : "pointer",
+            transition: "all .2s",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {appliedMarked ? "✓ Applied" : markingApplied ? "…" : "✓ Mark Applied"}
+        </button>
         {ats && (
           <div style={{
             flexShrink: 0,
@@ -686,6 +1045,150 @@ export default function ApplyMode({ context }: Props) {
               </Section>
             )}
 
+            {/* AI Writing Tools: Summary + Bullets */}
+            <Section label="AI Writing Tools">
+              <div style={{ display: "flex", gap: 6 }}>
+                <button
+                  onClick={handleGenerateSummary}
+                  disabled={generatingSummary}
+                  style={{ ...btnStyle("generate", generatingSummary), flex: 1, fontSize: 10, padding: "5px 8px" }}
+                >
+                  {generatingSummary ? "Generating…" : "✦ Generate Summary"}
+                </button>
+                <button
+                  onClick={handleGenerateBullets}
+                  disabled={generatingBullets}
+                  style={{ ...btnStyle("generate", generatingBullets), flex: 1, fontSize: 10, padding: "5px 8px" }}
+                >
+                  {generatingBullets ? "Generating…" : "✦ Generate Bullets"}
+                </button>
+              </div>
+
+              {summaryError && (
+                <div style={{ fontSize: 10, color: "#f87171", padding: "4px 8px", background: "#1a0808", borderRadius: 5, border: "1px solid #7f1d1d", marginTop: 4 }}>
+                  {summaryError}
+                </div>
+              )}
+              {generatedSummary && (
+                <div style={{ marginTop: 6, background: "#0a0a14", border: "1px solid #1f1f38", borderRadius: 8, padding: "8px 10px" }}>
+                  <div style={{ fontSize: 10, color: "#7c3aed", fontWeight: 700, marginBottom: 4, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span>Professional Summary</span>
+                    <button
+                      onClick={() => { navigator.clipboard.writeText(generatedSummary); setSummaryCopied(true); setTimeout(() => setSummaryCopied(false), 2000); }}
+                      style={{ ...btnStyle("ghost"), fontSize: 9, padding: "2px 6px" }}
+                    >
+                      {summaryCopied ? "✓ Copied" : "Copy"}
+                    </button>
+                  </div>
+                  <p style={{ margin: 0, fontSize: 11, color: "#cbd5e1", lineHeight: 1.6 }}>{generatedSummary}</p>
+                </div>
+              )}
+
+              {bulletsError && (
+                <div style={{ fontSize: 10, color: "#f87171", padding: "4px 8px", background: "#1a0808", borderRadius: 5, border: "1px solid #7f1d1d", marginTop: 4 }}>
+                  {bulletsError}
+                </div>
+              )}
+              {generatedBullets.length > 0 && (
+                <div style={{ marginTop: 6, background: "#0a0a14", border: "1px solid #1f1f38", borderRadius: 8, padding: "8px 10px" }}>
+                  <div style={{ fontSize: 10, color: "#7c3aed", fontWeight: 700, marginBottom: 6, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span>Resume Bullets</span>
+                    <button
+                      onClick={() => { navigator.clipboard.writeText(generatedBullets.map((b) => `• ${b}`).join("\n")); setBulletsCopied(true); setTimeout(() => setBulletsCopied(false), 2000); }}
+                      style={{ ...btnStyle("ghost"), fontSize: 9, padding: "2px 6px" }}
+                    >
+                      {bulletsCopied ? "✓ Copied" : "Copy All"}
+                    </button>
+                  </div>
+                  {generatedBullets.map((bullet, i) => (
+                    <div key={i} style={{ display: "flex", gap: 6, fontSize: 11, color: "#cbd5e1", lineHeight: 1.5, padding: "3px 0", borderBottom: i < generatedBullets.length - 1 ? "1px solid #1a1a2e" : "none" }}>
+                      <span style={{ color: "#7c3aed", flexShrink: 0 }}>•</span>
+                      <span>{bullet}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Section>
+
+            {/* RAG Document Upload */}
+            <Section label="RAG Context Docs">
+              <div style={{ fontSize: 10, color: "#94a3b8", marginBottom: 6, lineHeight: 1.5 }}>
+                Paste your <strong style={{ color: "#c4b5fd" }}>resume.md</strong> or <strong style={{ color: "#c4b5fd" }}>work history</strong> — used to ground cover letters &amp; answers with your real experience.
+              </div>
+
+              {/* Existing docs */}
+              {!ragDocsLoaded && (
+                <button onClick={loadRagDocs} style={{ ...btnStyle("ghost"), fontSize: 9, padding: "3px 8px", marginBottom: 6 }}>
+                  Load uploaded docs
+                </button>
+              )}
+              {ragDocsLoaded && ragDocList.length > 0 && (
+                <div style={{ marginBottom: 8 }}>
+                  {ragDocList.map((doc) => (
+                    <div key={doc.source_filename} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 8px", background: "#0f0f23", border: "1px solid #1f1f38", borderRadius: 6, marginBottom: 3 }}>
+                      <div>
+                        <div style={{ fontSize: 10, color: "#c4b5fd", fontWeight: 700 }}>{doc.source_filename}</div>
+                        <div style={{ fontSize: 9, color: "#475569" }}>{doc.chunk_count} chunks · {doc.doc_type}{doc.has_dense_embeddings ? " · dense" : ""}</div>
+                      </div>
+                      <button
+                        onClick={() => handleDeleteRagDoc(doc.source_filename)}
+                        style={{ ...btnStyle("ghost"), fontSize: 9, padding: "2px 6px", color: "#f87171" }}
+                        title="Delete"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Upload form */}
+              <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
+                <select
+                  value={ragDocType}
+                  onChange={(e) => {
+                    const t = e.target.value as "resume" | "work_history";
+                    setRagDocType(t);
+                    setRagDocFilename(t === "resume" ? "resume.md" : "work_history.md");
+                  }}
+                  style={{ fontSize: 10, background: "#0a0a14", border: "1px solid #1f1f38", color: "#c4b5fd", borderRadius: 5, padding: "3px 6px", flex: 1 }}
+                >
+                  <option value="resume">resume.md</option>
+                  <option value="work_history">work_history.md</option>
+                </select>
+                <input
+                  value={ragDocFilename}
+                  onChange={(e) => setRagDocFilename(e.target.value)}
+                  style={{ fontSize: 10, background: "#0a0a14", border: "1px solid #1f1f38", color: "#94a3b8", borderRadius: 5, padding: "3px 6px", flex: 1 }}
+                  placeholder="filename.md"
+                />
+              </div>
+              <textarea
+                value={ragDocContent}
+                onChange={(e) => setRagDocContent(e.target.value)}
+                placeholder={"Paste your resume.md or work_history.md content here…"}
+                rows={4}
+                style={{ width: "100%", fontSize: 10, background: "#0a0a14", border: "1px solid #1f1f38", color: "#94a3b8", borderRadius: 6, padding: "6px 8px", resize: "vertical", boxSizing: "border-box", lineHeight: 1.5 }}
+              />
+              <button
+                onClick={handleUploadRagDoc}
+                disabled={uploadingRagDoc || !ragDocContent.trim()}
+                style={{ ...btnStyle("generate", uploadingRagDoc || !ragDocContent.trim()), marginTop: 4, width: "100%", fontSize: 10 }}
+              >
+                {uploadingRagDoc ? "Chunking & uploading…" : "⬆ Upload to RAG Pipeline"}
+              </button>
+              {ragUploadError && (
+                <div style={{ fontSize: 10, color: "#f87171", padding: "4px 8px", background: "#1a0808", borderRadius: 5, border: "1px solid #7f1d1d", marginTop: 4 }}>
+                  {ragUploadError}
+                </div>
+              )}
+              {ragUploadResult && (
+                <div style={{ fontSize: 10, color: "#6ee7b7", padding: "4px 8px", background: "#071a12", borderRadius: 5, border: "1px solid #064e3b", marginTop: 4 }}>
+                  {ragUploadResult}
+                </div>
+              )}
+            </Section>
+
             {/* C2: Resume upload */}
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#475569", paddingLeft: 2 }}>
@@ -725,6 +1228,62 @@ export default function ApplyMode({ context }: Props) {
               {resumes.map((r) => (
                 <div key={r.resumeId}>
                   <ResumeCardComponent resume={r} onAttach={() => handleAttach(r)} />
+                  {/* View content inline + Rename */}
+                  <div style={{ display: "flex", gap: 6, marginTop: 4, marginBottom: context.jdText ? 0 : 8 }}>
+                    <button
+                      onClick={async () => {
+                        if (viewingResumeId === r.resumeId) { setViewingResumeId(null); return; }
+                        const res = await vaultApi.getResume(r.resumeId).catch(() => null);
+                        if (res) {
+                          setResumeContent(res.markdown_content || res.raw_text || res.latex_content || "No content available.");
+                          setViewingResumeId(r.resumeId);
+                        }
+                      }}
+                      style={{ ...btnStyle("ghost"), fontSize: 10, padding: "3px 8px" }}
+                    >
+                      {viewingResumeId === r.resumeId ? "Hide" : "View"}
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (renamingResumeId === r.resumeId) { setRenamingResumeId(null); return; }
+                        setRenameTag(r.versionTag ?? r.filename ?? "");
+                        setRenamingResumeId(r.resumeId);
+                      }}
+                      style={{ ...btnStyle("ghost"), fontSize: 10, padding: "3px 8px" }}
+                    >
+                      {renamingResumeId === r.resumeId ? "Cancel" : "Rename"}
+                    </button>
+                  </div>
+                  {renamingResumeId === r.resumeId && (
+                    <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+                      <input
+                        type="text"
+                        value={renameTag}
+                        onChange={(e) => setRenameTag(e.target.value)}
+                        placeholder="Version tag (e.g. v2, Q2-2025)"
+                        style={{ flex: 1, background: "#0a0a14", border: "1px solid #1f1f38", borderRadius: 6, color: "#e2e8f0", fontSize: 11, padding: "4px 8px", outline: "none" }}
+                      />
+                      <button
+                        onClick={async () => {
+                          try {
+                            await vaultApi.patchResume(r.resumeId, { versionTag: renameTag.trim() || undefined });
+                            setResumes((prev) => prev.map((res) => res.resumeId === r.resumeId ? { ...res, versionTag: renameTag.trim() || null } : res));
+                            setRenamingResumeId(null);
+                          } catch { /* silently ignore */ }
+                        }}
+                        style={{ ...btnStyle("primary"), fontSize: 10, padding: "4px 10px" }}
+                      >
+                        Save
+                      </button>
+                    </div>
+                  )}
+                  {viewingResumeId === r.resumeId && (
+                    <div style={{ marginBottom: 6, background: "#0a0a14", border: "1px solid #1f1f38", borderRadius: 8, padding: "8px 10px", maxHeight: 300, overflowY: "auto" }}>
+                      <pre style={{ margin: 0, fontSize: 10, color: "#94a3b8", whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "system-ui,sans-serif", lineHeight: 1.5 }}>
+                        {resumeContent}
+                      </pre>
+                    </div>
+                  )}
                   {/* L6: Tailor for this job button */}
                   {context.jdText && (
                     <div style={{ marginTop: 4, marginBottom: 8 }}>
@@ -893,12 +1452,29 @@ export default function ApplyMode({ context }: Props) {
                             <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5, maxHeight: 80, overflowY: "auto", marginBottom: 6 }}>
                               {mem.answer_text.slice(0, 200)}{mem.answer_text.length > 200 ? "…" : ""}
                             </div>
-                            <button
-                              onClick={() => handleUseMemoryAnswer(q.questionId, q.questionText, q.category, mem)}
-                              style={{ ...btnStyle("fill"), fontSize: 10, background: "#064e3b", color: "#6ee7b7" }}
-                            >
-                              Use This
-                            </button>
+                            <div style={{ display: "flex", gap: 6 }}>
+                              <button
+                                onClick={() => handleUseMemoryAnswer(q.questionId, q.questionText, q.category, mem)}
+                                style={{ ...btnStyle("fill"), fontSize: 10, background: "#064e3b", color: "#6ee7b7" }}
+                              >
+                                Use This
+                              </button>
+                              <button
+                                onClick={async () => {
+                                  try {
+                                    await vaultApi.deleteAnswer(mem.answer_id);
+                                    setMemoryAnswers((prev) => ({
+                                      ...prev,
+                                      [q.questionId]: (prev[q.questionId] ?? []).filter((a) => a.answer_id !== mem.answer_id),
+                                    }));
+                                  } catch { /* silently ignore */ }
+                                }}
+                                style={{ ...btnStyle("ghost"), fontSize: 10, padding: "3px 8px", color: "#f87171", border: "1px solid #7f1d1d" }}
+                                title="Remove from bank"
+                              >
+                                ✕
+                              </button>
+                            </div>
                           </div>
                         ))}
                         <div style={{ height: 1, background: "#1a1a2e", margin: "2px 0" }} />
@@ -983,6 +1559,28 @@ export default function ApplyMode({ context }: Props) {
                             {generationErrors[q.questionId]}
                           </div>
                         )}
+                        {/* Char counter + trim button when answer exceeds field limit */}
+                        {(() => {
+                          const currentText = editedTexts[q.questionId] ?? drafts[selectedIdx];
+                          const charCount = currentText?.length ?? 0;
+                          const overLimit = q.maxLength && charCount > q.maxLength;
+                          return overLimit ? (
+                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              <span style={{ fontSize: 10, color: "#f87171", fontWeight: 600 }}>
+                                {charCount}/{q.maxLength} chars
+                              </span>
+                              <button
+                                onClick={() => handleTrimAnswer(q.questionId, q.maxLength!)}
+                                disabled={trimmingAnswer === q.questionId}
+                                style={{ ...btnStyle("ghost", trimmingAnswer === q.questionId), fontSize: 10, padding: "2px 8px" }}
+                              >
+                                {trimmingAnswer === q.questionId ? "Trimming…" : "✂ Trim to limit"}
+                              </button>
+                            </div>
+                          ) : q.maxLength ? (
+                            <span style={{ fontSize: 10, color: "#4ade80" }}>{charCount}/{q.maxLength} chars</span>
+                          ) : null;
+                        })()}
                         <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
                           <button
                             onClick={() => handleGenerateAnswers(q.questionId, q.questionText, q.category, true, q.maxLength)}
@@ -1004,6 +1602,28 @@ export default function ApplyMode({ context }: Props) {
                   </div>
                 );
               })
+            )}
+            {/* Copy All Answers button */}
+            {context.openQuestions.length > 0 && Object.keys(answerDrafts).length > 0 && (
+              <div style={{ marginTop: 8, display: "flex", justifyContent: "flex-end" }}>
+                <button
+                  onClick={() => {
+                    const lines = context.openQuestions.flatMap((q) => {
+                      const drafts = answerDrafts[q.questionId];
+                      const selectedIdx = selectedAnswers[q.questionId] ?? 0;
+                      const text = editedTexts[q.questionId] ?? drafts?.[selectedIdx] ?? "";
+                      if (!text) return [];
+                      return [`Q: ${q.questionText}`, `A: ${text}`, ""];
+                    });
+                    navigator.clipboard.writeText(lines.join("\n"));
+                    setCopiedAllAnswers(true);
+                    setTimeout(() => setCopiedAllAnswers(false), 2000);
+                  }}
+                  style={{ ...btnStyle("ghost"), fontSize: 10, padding: "4px 12px" }}
+                >
+                  {copiedAllAnswers ? "✓ Copied All" : "Copy All Answers"}
+                </button>
+              </div>
             )}
           </Section>
         )}
@@ -1027,20 +1647,513 @@ export default function ApplyMode({ context }: Props) {
               </div>
             )}
 
+            {/* Application funnel */}
+            {appFunnel && appFunnel.total > 0 && (
+              <Section label="Application Funnel">
+                {/* Rate badges */}
+                <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+                  {[
+                    { label: "Response Rate", value: `${appFunnel.response_rate_pct}%`, color: "#10b981" },
+                    { label: "Offer Rate", value: `${appFunnel.offer_rate_pct}%`, color: "#c4b5fd" },
+                  ].map(({ label, value, color }) => (
+                    <div key={label} style={{ flex: 1, textAlign: "center", background: "#0a0a14", border: "1px solid #1f1f38", borderRadius: 8, padding: "5px 4px" }}>
+                      <div style={{ fontSize: 14, fontWeight: 700, color }}>{value}</div>
+                      <div style={{ fontSize: 8, color: "#475569", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>{label}</div>
+                    </div>
+                  ))}
+                </div>
+                {/* Stage bars */}
+                {appFunnel.funnel.filter(s => s.count > 0).map(({ stage, count, pct_of_total }) => {
+                  const stageColor: Record<string, string> = {
+                    discovered: "#475569", applied: "#3b82f6", tailored: "#8b5cf6",
+                    phone_screen: "#f59e0b", interview: "#f97316", offer: "#10b981", rejected: "#f87171",
+                  };
+                  const barColor = stageColor[stage] ?? "#64748b";
+                  const barWidth = Math.max(pct_of_total, 3);
+                  return (
+                    <div key={stage} style={{ marginBottom: 4 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
+                        <span style={{ fontSize: 10, color: "#94a3b8", textTransform: "capitalize" }}>{stage.replace("_", " ")}</span>
+                        <span style={{ fontSize: 10, color: "#64748b" }}>{count} ({pct_of_total}%)</span>
+                      </div>
+                      <div style={{ height: 6, background: "#1a1a2e", borderRadius: 3, overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: `${barWidth}%`, background: barColor, borderRadius: 3, transition: "width 0.4s ease" }} />
+                      </div>
+                    </div>
+                  );
+                })}
+                {/* 30-day volume sparkline (simple text bars) */}
+                {appFunnel.daily_volume_30d.length > 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    <div style={{ fontSize: 9, color: "#475569", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>30-Day Activity</div>
+                    <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 28 }}>
+                      {(() => {
+                        const maxCount = Math.max(...appFunnel.daily_volume_30d.map(d => d.count), 1);
+                        // Fill all 30 days
+                        const today = new Date();
+                        const days: Record<string, number> = {};
+                        appFunnel.daily_volume_30d.forEach(d => { days[d.date] = d.count; });
+                        return Array.from({ length: 30 }, (_, i) => {
+                          const d = new Date(today);
+                          d.setDate(d.getDate() - (29 - i));
+                          const key = d.toISOString().slice(0, 10);
+                          const c = days[key] ?? 0;
+                          const h = Math.round((c / maxCount) * 26) + 2;
+                          return (
+                            <div key={key} title={`${key}: ${c}`} style={{
+                              flex: 1, height: h, background: c > 0 ? "#7c3aed" : "#1a1a2e",
+                              borderRadius: 2, minWidth: 2, cursor: "default",
+                            }} />
+                          );
+                        });
+                      })()}
+                    </div>
+                  </div>
+                )}
+              </Section>
+            )}
+
+            {/* Vault analytics mini-dashboard */}
+            {vaultAnalytics && (
+              <Section label="Answer Vault Stats">
+                <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
+                  {[
+                    { label: "Answers Saved", value: vaultAnalytics.answers.total },
+                    { label: "Resumes", value: vaultAnalytics.resumes.total },
+                    { label: "Avg Reward", value: vaultAnalytics.answers.avg_reward_score != null ? vaultAnalytics.answers.avg_reward_score.toFixed(2) : "—" },
+                    { label: "Accept Rate", value: (() => { const used = vaultAnalytics.answers.feedback_distribution["used_as_is"] ?? 0; const total = vaultAnalytics.answers.total; return total > 0 ? `${Math.round(used / total * 100)}%` : "—"; })() },
+                  ].map(({ label, value }) => (
+                    <div key={label} style={{ flex: 1, textAlign: "center", background: "#0a0a14", border: "1px solid #1f1f38", borderRadius: 8, padding: "5px 2px" }}>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: "#a78bfa" }}>{value}</div>
+                      <div style={{ fontSize: 8, color: "#475569", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>{label}</div>
+                    </div>
+                  ))}
+                </div>
+                {vaultAnalytics.top_companies_by_answers.length > 0 && (
+                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                    {vaultAnalytics.top_companies_by_answers.slice(0, 5).map(({ company, answer_count }) => (
+                      <span key={company} style={{ background: "#12121e", border: "1px solid #1f1f38", borderRadius: 99, fontSize: 9, padding: "2px 7px", color: "#7c3aed" }}>
+                        {company} <span style={{ color: "#475569" }}>({answer_count})</span>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </Section>
+            )}
+
+            {/* Answer bank search */}
+            <Section label="Search Answer Bank">
+              <div style={{ display: "flex", gap: 6 }}>
+                <input
+                  type="text"
+                  placeholder="Search past answers…"
+                  value={answerBankSearch}
+                  onChange={(e) => setAnswerBankSearch(e.target.value)}
+                  onKeyDown={async (e) => {
+                    if (e.key !== "Enter" || !answerBankSearch.trim()) return;
+                    setAnswerBankSearching(true);
+                    setAnswerBankResults([]);
+                    try {
+                      const res = await vaultApi.searchAnswers({ q: answerBankSearch.trim(), limit: 10 });
+                      setAnswerBankResults(res.answers as typeof answerBankResults);
+                    } catch { /* silently ignore */ } finally {
+                      setAnswerBankSearching(false);
+                    }
+                  }}
+                  style={{ flex: 1, background: "#12121e", border: "1px solid #1f1f38", borderRadius: 6, color: "#e2e8f0", fontSize: 11, padding: "5px 8px", outline: "none" }}
+                />
+                <button
+                  onClick={async () => {
+                    if (!answerBankSearch.trim()) return;
+                    setAnswerBankSearching(true);
+                    setAnswerBankResults([]);
+                    try {
+                      const res = await vaultApi.searchAnswers({ q: answerBankSearch.trim(), limit: 10 });
+                      setAnswerBankResults(res.answers as typeof answerBankResults);
+                    } catch { /* silently ignore */ } finally {
+                      setAnswerBankSearching(false);
+                    }
+                  }}
+                  disabled={answerBankSearching}
+                  style={{ ...btnStyle("ghost", answerBankSearching), fontSize: 10, padding: "5px 10px" }}
+                >
+                  {answerBankSearching ? "…" : "Search"}
+                </button>
+              </div>
+              {answerBankResults.length > 0 && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
+                  {answerBankResults.map((a) => (
+                    <AnswerBankCard
+                      key={a.answer_id}
+                      answer={a}
+                      onDelete={() => setAnswerBankResults((prev) => prev.filter((x) => x.answer_id !== a.answer_id))}
+                      onEdit={(newText) => setAnswerBankResults((prev) => prev.map((x) => x.answer_id === a.answer_id ? { ...x, answer_text: newText } : x))}
+                    />
+                  ))}
+                </div>
+              )}
+              {!answerBankSearching && answerBankResults.length === 0 && answerBankSearch.trim() && (
+                <div style={{ fontSize: 10, color: "#475569", marginTop: 4, textAlign: "center" }}>No results — try a different term.</div>
+              )}
+            </Section>
+
+            {/* Export + Search + Filter bar */}
+            <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+              <input
+                type="text"
+                placeholder="Search company or role…"
+                value={historySearch}
+                onChange={(e) => setHistorySearch(e.target.value)}
+                style={{
+                  flex: 1,
+                  background: "#12121e",
+                  border: "1px solid #1f1f38",
+                  borderRadius: 6,
+                  color: "#e2e8f0",
+                  fontSize: 11,
+                  padding: "5px 8px",
+                  outline: "none",
+                }}
+              />
+              <select
+                value={historyStatusFilter}
+                onChange={(e) => setHistoryStatusFilter(e.target.value)}
+                style={{
+                  background: "#12121e",
+                  border: "1px solid #1f1f38",
+                  borderRadius: 6,
+                  color: "#9ca3af",
+                  fontSize: 11,
+                  padding: "5px 6px",
+                  outline: "none",
+                }}
+              >
+                <option value="all">All</option>
+                <option value="discovered">Discovered</option>
+                <option value="applied">Applied</option>
+                <option value="tailored">Tailored</option>
+                <option value="interview">Interview</option>
+                <option value="offer">Offer</option>
+                <option value="rejected">Rejected</option>
+              </select>
+              <button
+                onClick={() => applicationsApi.exportCsv().catch(() => {})}
+                style={{ ...btnStyle("ghost"), fontSize: 10, padding: "5px 8px", whiteSpace: "nowrap" }}
+                title="Export all applications as CSV"
+              >
+                ⬇ CSV
+              </button>
+            </div>
+
             <Section label="All Applications">
               {historyLoading && <LoadingRow />}
               {!historyLoading && allApplications.length === 0 && (
                 <EmptyState message="No applications tracked yet." hint="Applications are recorded automatically when you visit job pages." />
               )}
-              {allApplications.map((app) => (
-                <ApplicationRow
-                  key={app.id}
-                  app={app}
-                  updating={updatingStatus === app.id}
-                  onStatusChange={(s) => handleStatusUpdate(app.id, s)}
+              {(() => {
+                const q = historySearch.toLowerCase();
+                const filtered = allApplications.filter((app) => {
+                  const matchesSearch = !q ||
+                    app.company_name.toLowerCase().includes(q) ||
+                    app.role_title.toLowerCase().includes(q);
+                  const matchesStatus = historyStatusFilter === "all" || app.status === historyStatusFilter;
+                  return matchesSearch && matchesStatus;
+                });
+                if (!historyLoading && filtered.length === 0 && allApplications.length > 0) {
+                  return <EmptyState message="No matches." hint="Try adjusting the search or filter." />;
+                }
+                return filtered.map((app) => (
+                  <ApplicationRow
+                    key={app.id}
+                    app={app}
+                    updating={updatingStatus === app.id}
+                    onStatusChange={(s) => handleStatusUpdate(app.id, s)}
+                    onNotesChange={async (notes) => {
+                      await applicationsApi.updateNotes(app.id, notes);
+                      setAllApplications((prev) => prev.map((a) => a.id === app.id ? { ...a, notes } : a));
+                    }}
+                  />
+                ));
+              })()}
+            </Section>
+          </>
+        )}
+
+        {/* T3 — Interview Prep tab */}
+        {tab === "prep" && (
+          <>
+            <div style={{ marginBottom: 10 }}>
+              <button
+                onClick={handleInterviewPrep}
+                disabled={interviewLoading || !context.company}
+                style={{
+                  width: "100%",
+                  padding: "10px",
+                  background: "linear-gradient(135deg,#6d28d9 0%,#4f46e5 100%)",
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: 8,
+                  fontSize: 12,
+                  fontWeight: 700,
+                  cursor: interviewLoading ? "not-allowed" : "pointer",
+                  opacity: interviewLoading ? 0.6 : 1,
+                }}
+              >
+                {interviewLoading ? "Generating questions…" : `⚡ Generate Interview Prep for ${context.company || "this role"}`}
+              </button>
+              {interviewError && (
+                <div style={{ marginTop: 6, fontSize: 11, color: "#f87171" }}>{interviewError}</div>
+              )}
+            </div>
+
+            {interviewQuestions.length === 0 && !interviewLoading && (
+              <EmptyState
+                message="No questions generated yet."
+                hint="Click the button above to generate 10 likely interview questions with suggested answers."
+              />
+            )}
+
+            {interviewQuestions.length > 0 && (
+              <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 4 }}>
+                {(["all", "behavioral", "motivation", "technical", "general"] as const).map((cat) => {
+                  const count = cat === "all" ? interviewQuestions.length : interviewQuestions.filter((q) => q.category === cat).length;
+                  if (cat !== "all" && count === 0) return null;
+                  const isActive = prepCategoryFilter === cat;
+                  return (
+                    <button
+                      key={cat}
+                      onClick={() => { setPrepCategoryFilter(cat); setExpandedPrepIdx(null); }}
+                      style={{
+                        background: isActive ? (CATEGORY_COLORS[cat] ?? "#475569") + "22" : "#12121e",
+                        border: `1px solid ${isActive ? (CATEGORY_COLORS[cat] ?? "#475569") : "#1f1f38"}`,
+                        borderRadius: 99,
+                        padding: "2px 8px",
+                        fontSize: 9,
+                        fontWeight: 700,
+                        color: CATEGORY_COLORS[cat] ?? "#475569",
+                        cursor: "pointer",
+                      }}
+                    >
+                      {cat === "all" ? `All (${count})` : `${cat} (${count})`}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {interviewQuestions.length > 0 && (
+              <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 6 }}>
+                <button
+                  onClick={async () => {
+                    if (!context.company || savingAllPrep) return;
+                    setSavingAllPrep(true);
+                    try {
+                      await vaultApi.bulkSaveAnswers({
+                        companyName: context.company,
+                        roleTitle: context.roleTitle,
+                        answers: interviewQuestions.map((q) => ({
+                          questionText: q.question,
+                          questionCategory: q.category === "behavioral" ? "challenge" : q.category === "motivation" ? "motivation" : "custom",
+                          answerText: q.suggested_answer,
+                          wasDefault: true,
+                        })),
+                      });
+                      setSavedAllPrep(true);
+                      setTimeout(() => setSavedAllPrep(false), 3000);
+                    } catch { /* silently ignore */ } finally {
+                      setSavingAllPrep(false);
+                    }
+                  }}
+                  disabled={savingAllPrep || !context.company}
+                  style={{ ...btnStyle("ghost", savingAllPrep), fontSize: 10, padding: "4px 12px" }}
+                >
+                  {savingAllPrep ? "Saving…" : savedAllPrep ? "✓ Saved All" : "Save All to Bank"}
+                </button>
+              </div>
+            )}
+
+            {interviewQuestions
+              .filter((q) => prepCategoryFilter === "all" || q.category === prepCategoryFilter)
+              .map((q, idx) => (
+                <PrepQuestion
+                  key={idx}
+                  question={q}
+                  index={idx}
+                  expanded={expandedPrepIdx === idx}
+                  onToggle={() => setExpandedPrepIdx(expandedPrepIdx === idx ? null : idx)}
+                  onSaveToBank={async () => {
+                    await vaultApi.saveAnswer({
+                      questionText: q.question,
+                      questionCategory: q.category === "behavioral" ? "challenge" : q.category === "motivation" ? "motivation" : "custom",
+                      answerText: q.suggested_answer,
+                      companyName: context.company,
+                      roleTitle: context.roleTitle,
+                      wasDefault: true,
+                    });
+                  }}
                 />
               ))}
-            </Section>
+          </>
+        )}
+
+        {/* Cover Letter tab */}
+        {tab === "cover" && (
+          <>
+            {/* Controls */}
+            <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+              <select
+                value={coverTone}
+                onChange={(e) => setCoverTone(e.target.value as typeof coverTone)}
+                style={{ background: "#12121e", border: "1px solid #1f1f38", borderRadius: 6, color: "#9ca3af", fontSize: 11, padding: "5px 6px", outline: "none" }}
+              >
+                <option value="professional">Professional</option>
+                <option value="enthusiastic">Enthusiastic</option>
+                <option value="concise">Concise</option>
+              </select>
+              <select
+                value={coverWordLimit}
+                onChange={(e) => setCoverWordLimit(Number(e.target.value) as typeof coverWordLimit)}
+                style={{ background: "#12121e", border: "1px solid #1f1f38", borderRadius: 6, color: "#9ca3af", fontSize: 11, padding: "5px 6px", outline: "none" }}
+              >
+                <option value={300}>~300 words</option>
+                <option value={400}>~400 words</option>
+                <option value={500}>~500 words</option>
+              </select>
+              <button
+                onClick={handleGenerateCoverLetter}
+                disabled={coverLoading || !context.company}
+                style={{ ...btnStyle("generate", coverLoading || !context.company), flex: 1, minWidth: 100 }}
+              >
+                {coverLoading ? "Generating…" : "⚡ Generate"}
+              </button>
+            </div>
+
+            {coverError && (
+              <div style={{ fontSize: 11, color: "#f87171", marginBottom: 8 }}>{coverError}</div>
+            )}
+
+            {!coverLetter && !coverLoading && (
+              <EmptyState
+                message="No cover letter yet."
+                hint={`Select tone and word length above, then click Generate to create a cover letter for ${context.company || "this company"}.`}
+              />
+            )}
+
+            {coverLetter && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {coverDrafts.length > 1 && (
+                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                    {coverDrafts.map((_, i) => (
+                      <button
+                        key={i}
+                        onClick={() => { setCoverSelectedDraft(i); setCoverLetter(coverDrafts[i]); }}
+                        style={{
+                          background: coverSelectedDraft === i ? "#3730a3" : "#12121e",
+                          color: coverSelectedDraft === i ? "#c4b5fd" : "#64748b",
+                          border: `1px solid ${coverSelectedDraft === i ? "#4f46e5" : "#1f1f38"}`,
+                          borderRadius: 6,
+                          padding: "3px 10px",
+                          fontSize: 10,
+                          fontWeight: 600,
+                          cursor: "pointer",
+                        }}
+                      >
+                        Draft {i + 1}{coverDraftProviders[i] ? ` (${coverDraftProviders[i]})` : ""}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontSize: 10, color: "#475569" }}>
+                    {coverLetter.split(/\s+/).filter(Boolean).length} words
+                  </span>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button
+                      onClick={() => void handleSaveCoverLetter()}
+                      disabled={savingCoverLetter}
+                      style={{ background: "#12121e", color: "#a78bfa", border: "1px solid #2d1b69", borderRadius: 6, padding: "3px 10px", fontSize: 10, fontWeight: 600, cursor: savingCoverLetter ? "wait" : "pointer", opacity: savingCoverLetter ? 0.6 : 1 }}
+                    >
+                      {savingCoverLetter ? "Saving…" : "Save"}
+                    </button>
+                    <button
+                      onClick={handleCopyLetter}
+                      style={{
+                        background: coverCopied ? "#166534" : "#1e1e3a",
+                        color: coverCopied ? "#86efac" : "#c4b5fd",
+                        border: `1px solid ${coverCopied ? "#166534" : "#3730a3"}`,
+                        borderRadius: 6,
+                        padding: "3px 10px",
+                        fontSize: 10,
+                        fontWeight: 600,
+                        cursor: "pointer",
+                      }}
+                    >
+                      {coverCopied ? "✓ Copied" : "Copy"}
+                    </button>
+                  </div>
+                </div>
+                <textarea
+                  value={coverLetter}
+                  onChange={(e) => setCoverLetter(e.target.value)}
+                  style={{
+                    width: "100%",
+                    minHeight: 320,
+                    background: "#0a0a14",
+                    border: "1px solid #1f1f38",
+                    borderRadius: 8,
+                    color: "#e2e8f0",
+                    fontSize: 12,
+                    lineHeight: 1.6,
+                    padding: "10px 12px",
+                    outline: "none",
+                    resize: "vertical",
+                    fontFamily: "system-ui, sans-serif",
+                  }}
+                />
+              </div>
+            )}
+
+            {/* Past saved cover letters for this company */}
+            <div style={{ marginTop: 8 }}>
+              <button
+                onClick={async () => {
+                  if (!coverLettersSectionOpen) {
+                    try {
+                      const res = await vaultApi.listCoverLetters(context.company, 10);
+                      setSavedCoverLetters(res.items);
+                    } catch { /* ignore */ }
+                  }
+                  setCoverLettersSectionOpen((v) => !v);
+                }}
+                style={{ background: "transparent", border: "none", color: "#475569", cursor: "pointer", fontSize: 10, fontWeight: 700, padding: 0 }}
+              >
+                {coverLettersSectionOpen ? "▲ Hide past letters" : "▼ Past saved letters"}
+              </button>
+              {coverLettersSectionOpen && (
+                <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 6 }}>
+                  {savedCoverLetters.length === 0 && (
+                    <div style={{ fontSize: 11, color: "#374151" }}>No saved cover letters yet.</div>
+                  )}
+                  {savedCoverLetters.map((cl) => (
+                    <div key={cl.id} style={{ background: "#12121e", border: "1px solid #1f1f38", borderRadius: 8, padding: "8px 10px" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                        <span style={{ fontSize: 11, color: "#c4b5fd", fontWeight: 600 }}>{cl.company_name}{cl.role_title ? ` — ${cl.role_title}` : ""}</span>
+                        <span style={{ fontSize: 9, color: "#374151" }}>{new Date(cl.created_at).toLocaleDateString()}</span>
+                      </div>
+                      <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 6, lineHeight: 1.5 }}>
+                        {cl.answer_text.slice(0, 120)}…
+                      </div>
+                      <button
+                        onClick={() => { setCoverLetter(cl.answer_text); setCoverLettersSectionOpen(false); }}
+                        style={{ background: "#1a1a2e", border: "1px solid #2d1b69", borderRadius: 5, color: "#a78bfa", cursor: "pointer", fontSize: 10, fontWeight: 700, padding: "3px 10px" }}
+                      >
+                        Load
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </>
         )}
 
@@ -1159,16 +2272,28 @@ function ApplicationRow({
   app,
   updating,
   onStatusChange,
+  onNotesChange,
 }: {
   app: TrackedApplication;
   updating: boolean;
   onStatusChange: (s: string) => void;
+  onNotesChange?: (notes: string | null) => Promise<void>;
 }) {
   const [showMenu, setShowMenu] = React.useState(false);
+  const [showNotes, setShowNotes] = React.useState(false);
+  const [notesText, setNotesText] = React.useState(app.notes ?? "");
+  const [savingNotes, setSavingNotes] = React.useState(false);
   const colors = STATUS_COLORS[app.status] ?? STATUS_COLORS.discovered;
 
+  const handleSaveNotes = async () => {
+    if (!onNotesChange) return;
+    setSavingNotes(true);
+    try { await onNotesChange(notesText.trim() || null); } catch { /* ignore */ } finally { setSavingNotes(false); setShowNotes(false); }
+  };
+
   return (
-    <div style={{ background: "#12121e", border: "1px solid #1f1f38", borderRadius: 8, padding: "8px 10px", display: "flex", gap: 8, alignItems: "flex-start" }}>
+    <div style={{ background: "#12121e", border: "1px solid #1f1f38", borderRadius: 8, padding: "8px 10px" }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 12, color: "#e2e8f0", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {app.company_name}
@@ -1176,9 +2301,27 @@ function ApplicationRow({
         <div style={{ fontSize: 10, color: "#64748b", marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {app.role_title}
         </div>
-        <div style={{ fontSize: 9, color: "#374151", marginTop: 2 }}>
-          {new Date(app.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
-          {app.platform && app.platform !== "generic" && ` · ${app.platform}`}
+        <div style={{ fontSize: 9, color: "#374151", marginTop: 2, display: "flex", alignItems: "center", gap: 6 }}>
+          <span>{new Date(app.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span>
+          {app.platform && app.platform !== "generic" && <span>· {app.platform}</span>}
+          {app.job_url && (
+            <a
+              href={app.job_url}
+              target="_blank"
+              rel="noreferrer"
+              title="Open job posting"
+              style={{ color: "#4f46e5", textDecoration: "none", fontSize: 10, lineHeight: 1 }}
+              onClick={(e) => { e.stopPropagation(); chrome.tabs.create({ url: app.job_url! }); e.preventDefault(); }}
+            >↗</a>
+          )}
+          {/* Notes toggle */}
+          <button
+            onClick={() => { setNotesText(app.notes ?? ""); setShowNotes((v) => !v); }}
+            style={{ background: "transparent", border: "none", cursor: "pointer", color: app.notes ? "#fbbf24" : "#374151", fontSize: 10, padding: 0, fontWeight: 700 }}
+            title={app.notes ? "View/edit notes" : "Add notes"}
+          >
+            {app.notes ? "📝" : "＋note"}
+          </button>
         </div>
       </div>
       <div style={{ position: "relative", flexShrink: 0 }}>
@@ -1237,6 +2380,32 @@ function ApplicationRow({
           </div>
         )}
       </div>
+      </div>
+      {/* Inline notes editor */}
+      {showNotes && (
+        <div style={{ marginTop: 6, borderTop: "1px solid #1f1f38", paddingTop: 6 }}>
+          <textarea
+            autoFocus
+            rows={3}
+            value={notesText}
+            onChange={(e) => setNotesText(e.target.value)}
+            placeholder="Interview notes, contacts, follow-up reminders…"
+            style={{ width: "100%", boxSizing: "border-box", background: "#0a0a14", border: "1px solid #1f1f38", borderRadius: 6, color: "#d1d5db", fontSize: 11, padding: "5px 8px", resize: "vertical", fontFamily: "system-ui,sans-serif", outline: "none" }}
+          />
+          <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", marginTop: 4 }}>
+            <button onClick={() => setShowNotes(false)} style={{ background: "transparent", border: "none", color: "#64748b", cursor: "pointer", fontSize: 10, fontWeight: 600 }}>Cancel</button>
+            <button onClick={() => void handleSaveNotes()} disabled={savingNotes} style={{ background: "#1a1a2e", border: "1px solid #2d1b69", borderRadius: 5, color: "#a78bfa", cursor: savingNotes ? "wait" : "pointer", fontSize: 10, fontWeight: 700, padding: "3px 10px" }}>
+              {savingNotes ? "Saving…" : "Save"}
+            </button>
+          </div>
+        </div>
+      )}
+      {/* Show saved notes as collapsed preview */}
+      {!showNotes && app.notes && (
+        <div style={{ marginTop: 4, fontSize: 10, color: "#94a3b8", borderTop: "1px solid #1f1f2a", paddingTop: 4, cursor: "pointer" }} onClick={() => { setNotesText(app.notes ?? ""); setShowNotes(true); }}>
+          {app.notes.length > 80 ? app.notes.slice(0, 80) + "…" : app.notes}
+        </div>
+      )}
     </div>
   );
 }
@@ -1255,4 +2424,183 @@ function btnStyle(variant: "primary" | "ghost" | "generate" | "fill", disabled =
   if (variant === "ghost") return { ...base, background: "#1a1a2e", color: "#8b5cf6", padding: "5px 12px" };
   if (variant === "generate") return { ...base, background: "#1e1335", color: "#a78bfa", padding: "6px 12px", width: "100%", outline: "1px solid #2d1b69" };
   return { ...base, background: "#1e1b4b", color: "#a5b4fc", padding: "3px 10px" };
+}
+
+const CATEGORY_COLORS: Record<string, string> = {
+  behavioral: "#7c3aed",
+  motivation: "#0891b2",
+  technical: "#059669",
+  general: "#d97706",
+};
+
+function AnswerBankCard({
+  answer,
+  onDelete,
+  onEdit,
+}: {
+  answer: { answer_id: string; question_text: string; answer_text: string; company_name: string; question_category: string; reward_score: number | null; feedback: string };
+  onDelete: () => void;
+  onEdit: (newText: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [editText, setEditText] = useState(answer.answer_text);
+  const [saving, setSaving] = useState(false);
+
+  const handleSaveEdit = async () => {
+    if (!editText.trim()) return;
+    setSaving(true);
+    try {
+      await vaultApi.editAnswer(answer.answer_id, editText.trim());
+      onEdit(editText.trim());
+      setEditing(false);
+    } catch { /* ignore */ } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div style={{ background: "#0a0a14", border: "1px solid #1f1f38", borderRadius: 8, padding: "8px 10px" }}>
+      <div style={{ fontSize: 10, color: "#7c3aed", fontWeight: 700, marginBottom: 2, display: "flex", justifyContent: "space-between" }}>
+        <span>{answer.company_name} · {answer.question_category}</span>
+        <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+          {answer.reward_score != null && <span style={{ color: "#475569" }}>{(answer.reward_score * 100).toFixed(0)}%</span>}
+          <button onClick={() => { setEditing(!editing); setEditText(answer.answer_text); }} style={{ ...btnStyle("ghost"), fontSize: 9, padding: "1px 5px" }}>
+            {editing ? "Cancel" : "✎ Edit"}
+          </button>
+          <button onClick={async () => { await vaultApi.deleteAnswer(answer.answer_id); onDelete(); }} style={{ ...btnStyle("ghost"), fontSize: 9, padding: "1px 5px", color: "#f87171" }}>
+            ✕
+          </button>
+        </div>
+      </div>
+      <div style={{ fontSize: 10, color: "#64748b", marginBottom: 4, fontStyle: "italic" }}>{answer.question_text.slice(0, 100)}{answer.question_text.length > 100 ? "…" : ""}</div>
+      {editing ? (
+        <>
+          <textarea
+            value={editText}
+            onChange={(e) => setEditText(e.target.value)}
+            rows={4}
+            style={{ width: "100%", background: "#12121e", border: "1px solid #2d2d52", borderRadius: 6, color: "#e2e8f0", fontSize: 11, padding: "6px 8px", outline: "none", resize: "vertical", boxSizing: "border-box" }}
+          />
+          <button
+            onClick={() => void handleSaveEdit()}
+            disabled={saving}
+            style={{ ...btnStyle("generate", saving), fontSize: 9, padding: "3px 8px", marginTop: 4 }}
+          >
+            {saving ? "Saving…" : "Save Edit"}
+          </button>
+        </>
+      ) : (
+        <>
+          <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5, maxHeight: 60, overflowY: "auto" }}>{answer.answer_text.slice(0, 200)}{answer.answer_text.length > 200 ? "…" : ""}</div>
+          <button
+            onClick={() => navigator.clipboard.writeText(answer.answer_text)}
+            style={{ ...btnStyle("ghost"), fontSize: 9, padding: "2px 6px", marginTop: 4 }}
+          >
+            Copy
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
+function PrepQuestion({
+  question,
+  index,
+  expanded,
+  onToggle,
+  onSaveToBank,
+}: {
+  question: InterviewQuestion;
+  index: number;
+  expanded: boolean;
+  onToggle: () => void;
+  onSaveToBank?: () => Promise<void>;
+}) {
+  const catColor = CATEGORY_COLORS[question.category] ?? "#475569";
+  const [copied, setCopied] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const copyAnswer = () => {
+    navigator.clipboard.writeText(question.suggested_answer).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }).catch(() => {});
+  };
+
+  const saveToBank = async () => {
+    if (!onSaveToBank || saving || saved) return;
+    setSaving(true);
+    try { await onSaveToBank(); setSaved(true); } catch { /* ignore */ } finally { setSaving(false); }
+  };
+
+  return (
+    <div style={{
+      background: "#12121e",
+      border: "1px solid #1f1f38",
+      borderRadius: 10,
+      padding: "10px 12px",
+      display: "flex",
+      flexDirection: "column",
+      gap: 6,
+    }}>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer" }} onClick={onToggle}>
+        <span style={{ fontSize: 10, fontWeight: 700, color: "#475569", minWidth: 18 }}>Q{index + 1}</span>
+        <span style={{ flex: 1, fontSize: 12, color: "#e2e8f0", lineHeight: 1.5 }}>{question.question}</span>
+        <span style={{
+          fontSize: 9,
+          fontWeight: 700,
+          color: catColor,
+          background: catColor + "22",
+          border: `1px solid ${catColor}44`,
+          borderRadius: 99,
+          padding: "1px 7px",
+          textTransform: "capitalize",
+          whiteSpace: "nowrap",
+        }}>{question.category}</span>
+      </div>
+
+      {expanded && (
+        <div style={{ borderTop: "1px solid #1f1f38", paddingTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.6 }}>{question.suggested_answer}</div>
+          <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+            {onSaveToBank && (
+              <button
+                onClick={() => void saveToBank()}
+                disabled={saving || saved}
+                style={{
+                  background: saved ? "#14532d" : "none",
+                  border: `1px solid ${saved ? "#166534" : "#334155"}`,
+                  color: saved ? "#86efac" : "#64748b",
+                  borderRadius: 6,
+                  padding: "3px 10px",
+                  fontSize: 11,
+                  cursor: saving || saved ? "default" : "pointer",
+                  fontFamily: "system-ui,sans-serif",
+                }}
+              >
+                {saved ? "✓ Saved" : saving ? "Saving…" : "Save to bank"}
+              </button>
+            )}
+            <button
+              onClick={copyAnswer}
+              style={{
+                background: "none",
+                border: "1px solid #334155",
+                color: copied ? "#22c55e" : "#64748b",
+                borderRadius: 6,
+                padding: "3px 10px",
+                fontSize: 11,
+                cursor: "pointer",
+                fontFamily: "system-ui,sans-serif",
+              }}
+            >
+              {copied ? "Copied ✓" : "⎘ Copy Answer"}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }

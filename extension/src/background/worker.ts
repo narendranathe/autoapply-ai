@@ -217,6 +217,44 @@ chrome.runtime.onMessage.addListener(
         break;
       }
 
+      case "EMAIL_STATUS_DETECTED": {
+        // Gmail tracker found job-related emails — update application status for each match.
+        // Uses company name to find the most recent matching application, then PATCHes status.
+        const emailMatches = message.payload;
+        if (!emailMatches?.length) break;
+
+        chrome.storage.local.get(["clerkUserId", "apiBaseUrl"]).then((data) => {
+          const userId = data.clerkUserId as string | undefined;
+          const apiBase = (data.apiBaseUrl as string | undefined) || "https://autoapply-ai-api.fly.dev/api/v1";
+          if (!userId) return;
+
+          for (const match of emailMatches) {
+            if (!match.company) continue;
+            // Step 1: list applications for this company
+            fetch(`${apiBase}/applications?company=${encodeURIComponent(match.company)}&limit=1`, {
+              headers: { "X-Clerk-User-Id": userId },
+            }).then((r) => r.json()).then((res: { items?: Array<{ id: string; status: string }> }) => {
+              const app = res.items?.[0];
+              if (!app) return;
+              // Only upgrade status (don't downgrade e.g. interview → applied)
+              const STATUS_RANK: Record<string, number> = {
+                discovered: 0, applied: 1, tailored: 1, phone_screen: 2,
+                interview: 3, offer: 4, rejected: 4,
+              };
+              const currentRank = STATUS_RANK[app.status] ?? 0;
+              const newRank = STATUS_RANK[match.status] ?? 0;
+              if (newRank <= currentRank) return;
+              return fetch(`${apiBase}/applications/${app.id}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json", "X-Clerk-User-Id": userId },
+                body: JSON.stringify({ status: match.status }),
+              });
+            }).catch(() => {});
+          }
+        }).catch(() => {});
+        break;
+      }
+
       case "APPLICATION_SUBMITTED": {
         // Content script detected a form submission — update tracked application to "applied".
         // We look up the tracked context for this tab, find the application_id via the URL

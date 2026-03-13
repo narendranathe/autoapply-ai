@@ -49,6 +49,11 @@
       ],
       "js": ["content/floatingPanel.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://mail.google.com/*"],
+      "js": ["content/gmailContent.js"],
+      "run_at": "document_idle"
     }
   ],
   "action": {
