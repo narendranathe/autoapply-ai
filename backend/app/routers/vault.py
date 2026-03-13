@@ -18,6 +18,7 @@ Endpoints:
   GET    /api/v1/vault/answers/similar          Best past answers for a question (bandit policy)
   GET    /api/v1/vault/github/versions          List versions/ directory on GitHub
   GET    /api/v1/vault/analytics               Per-user vault analytics (answer stats, reward, companies)
+  POST   /api/v1/vault/answers/bulk-save       Save multiple answers in one request (batch)
 """
 
 import contextlib
@@ -905,6 +906,69 @@ async def save_answer(
         "question_hash": q_hash,
         "saved": True,
     }
+
+
+@router.post("/answers/bulk-save", status_code=status.HTTP_201_CREATED)
+async def bulk_save_answers(
+    payload: dict,  # { company_name, role_title, answers: [{question_text, category, answer_text}] }
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Save multiple answers in a single request.
+    Used by interview prep "Save all to bank" and batch workflows.
+
+    Body JSON: {
+        "company_name": str,
+        "role_title": str,          # optional
+        "answers": [
+            {
+                "question_text": str,
+                "question_category": str,   # default "custom"
+                "answer_text": str,
+                "was_default": bool,        # default False
+            },
+            ...
+        ]
+    }
+    Returns: { "saved": int, "answer_ids": [str, ...] }
+    """
+    company_name = str(payload.get("company_name", ""))
+    role_title = str(payload.get("role_title", ""))
+    answers_in = payload.get("answers", [])
+
+    if not company_name:
+        raise HTTPException(status_code=422, detail="company_name is required")
+    if not isinstance(answers_in, list) or len(answers_in) == 0:
+        raise HTTPException(status_code=422, detail="answers must be a non-empty list")
+    if len(answers_in) > 50:
+        raise HTTPException(status_code=422, detail="Cannot bulk-save more than 50 answers at once")
+
+    saved_ids: list[str] = []
+    for item in answers_in:
+        question_text = str(item.get("question_text", "")).strip()
+        answer_text = str(item.get("answer_text", "")).strip()
+        if not question_text or not answer_text:
+            continue  # skip blank entries silently
+
+        q_hash = hashlib.sha256(" ".join(question_text.lower().split()).encode()).hexdigest()
+        ans = ApplicationAnswer(
+            user_id=user.id,
+            question_hash=q_hash,
+            question_text=question_text,
+            question_category=str(item.get("question_category", "custom")),
+            answer_text=answer_text,
+            word_count=len(answer_text.split()),
+            was_default=bool(item.get("was_default", False)),
+            company_name=company_name,
+            role_title=role_title,
+        )
+        db.add(ans)
+        await db.flush()  # get ID before commit
+        saved_ids.append(str(ans.id))
+
+    await db.commit()
+    return {"saved": len(saved_ids), "answer_ids": saved_ids}
 
 
 # ── Professional summary endpoint ──────────────────────────────────────────

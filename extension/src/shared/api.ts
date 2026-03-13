@@ -317,6 +317,29 @@ export const vaultApi = {
     return post("/vault/answers/save", fd);
   },
 
+  /** Save multiple answers in a single request */
+  bulkSaveAnswers(params: {
+    companyName: string;
+    roleTitle?: string;
+    answers: Array<{
+      questionText: string;
+      questionCategory?: string;
+      answerText: string;
+      wasDefault?: boolean;
+    }>;
+  }): Promise<{ saved: number; answer_ids: string[] }> {
+    return post("/vault/answers/bulk-save", {
+      company_name: params.companyName,
+      role_title: params.roleTitle ?? "",
+      answers: params.answers.map((a) => ({
+        question_text: a.questionText,
+        question_category: a.questionCategory ?? "custom",
+        answer_text: a.answerText,
+        was_default: a.wasDefault ?? false,
+      })),
+    });
+  },
+
   /** Record outcome of a generated answer (RL reward signal) */
   recordFeedback(params: {
     answerId: string;

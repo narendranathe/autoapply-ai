@@ -190,6 +190,9 @@ export default function ApplyMode({ context }: Props) {
   const [savingCoverLetter, setSavingCoverLetter] = useState(false);
   const [savedCoverLetters, setSavedCoverLetters] = useState<Array<{ id: string; company_name: string; role_title: string | null; answer_text: string; created_at: string }>>([]);
   const [coverLettersSectionOpen, setCoverLettersSectionOpen] = useState(false);
+  // Interview prep bulk save
+  const [savingAllPrep, setSavingAllPrep] = useState(false);
+  const [savedAllPrep, setSavedAllPrep] = useState(false);
   // AI Writing Tools (summary + bullets)
   const [generatingSummary, setGeneratingSummary] = useState(false);
   const [generatedSummary, setGeneratedSummary] = useState<string>("");
@@ -1615,6 +1618,37 @@ export default function ApplyMode({ context }: Props) {
                     </button>
                   );
                 })}
+              </div>
+            )}
+
+            {interviewQuestions.length > 0 && (
+              <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 6 }}>
+                <button
+                  onClick={async () => {
+                    if (!context.company || savingAllPrep) return;
+                    setSavingAllPrep(true);
+                    try {
+                      await vaultApi.bulkSaveAnswers({
+                        companyName: context.company,
+                        roleTitle: context.roleTitle,
+                        answers: interviewQuestions.map((q) => ({
+                          questionText: q.question,
+                          questionCategory: q.category === "behavioral" ? "challenge" : q.category === "motivation" ? "motivation" : "custom",
+                          answerText: q.suggested_answer,
+                          wasDefault: true,
+                        })),
+                      });
+                      setSavedAllPrep(true);
+                      setTimeout(() => setSavedAllPrep(false), 3000);
+                    } catch { /* silently ignore */ } finally {
+                      setSavingAllPrep(false);
+                    }
+                  }}
+                  disabled={savingAllPrep || !context.company}
+                  style={{ ...btnStyle("ghost", savingAllPrep), fontSize: 10, padding: "4px 12px" }}
+                >
+                  {savingAllPrep ? "Saving…" : savedAllPrep ? "✓ Saved All" : "Save All to Bank"}
+                </button>
               </div>
             )}
 
