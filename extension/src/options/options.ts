@@ -1,6 +1,6 @@
 // Options page script — module scripts run after DOM is parsed, no DOMContentLoaded needed
 
-import { workHistoryApi, type WorkHistoryEntry } from "../shared/api";
+import { vaultApi, workHistoryApi, type WorkHistoryEntry } from "../shared/api";
 
 const API_DEFAULT = "https://autoapply-ai-api.fly.dev/api/v1";
 
@@ -589,6 +589,85 @@ async function importFromResume() {
   }
 }
 
+// ── RAG Document Management ─────────────────────────────────────────────────
+
+async function loadRagDocsList() {
+  const listEl = get("rag-docs-list");
+  try {
+    const res = await vaultApi.listDocuments();
+    if (res.documents.length === 0) {
+      listEl.innerHTML = `<div style="font-size:12px;color:#4b5563;">No documents uploaded yet.</div>`;
+      return;
+    }
+    listEl.innerHTML = res.documents.map((doc) => `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#0f0f1a;border:1px solid #1e1e3a;border-radius:8px;margin-bottom:6px;">
+        <div>
+          <div style="font-size:13px;color:#c4b5fd;font-weight:600;">${doc.source_filename}</div>
+          <div style="font-size:11px;color:#475569;">${doc.doc_type} · ${doc.chunk_count} chunks${doc.has_dense_embeddings ? " · dense embeddings" : " · TF-IDF"}</div>
+        </div>
+        <button class="btn" data-delete-filename="${doc.source_filename}" style="background:#1a0808;color:#f87171;border:1px solid #7f1d1d;font-size:11px;padding:4px 10px;">Delete</button>
+      </div>
+    `).join("");
+
+    // Wire delete buttons
+    listEl.querySelectorAll<HTMLButtonElement>("[data-delete-filename]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const filename = btn.getAttribute("data-delete-filename")!;
+        btn.disabled = true;
+        btn.textContent = "Deleting…";
+        try {
+          await vaultApi.deleteDocument(filename);
+          await loadRagDocsList();
+        } catch (e) {
+          btn.disabled = false;
+          btn.textContent = "Delete";
+          showStatus("rag-upload-status", `Delete failed: ${e instanceof Error ? e.message : "unknown"}`, "err");
+        }
+      });
+    });
+  } catch {
+    listEl.innerHTML = `<div style="font-size:12px;color:#4b5563;">Could not load documents (save auth first).</div>`;
+  }
+}
+
+async function uploadRagDocument() {
+  const btn = get("rag-upload-btn") as HTMLButtonElement;
+  const content = (document.getElementById("rag-doc-content") as HTMLTextAreaElement).value.trim();
+  const docType = (document.getElementById("rag-doc-type") as HTMLSelectElement).value as "resume" | "work_history" | "cover_letter_sample" | "other";
+  const filename = (document.getElementById("rag-doc-filename") as HTMLInputElement).value.trim() || `${docType}.md`;
+
+  if (!content) {
+    showStatus("rag-upload-status", "Paste your markdown content first.", "err");
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = "Chunking & uploading…";
+  try {
+    const res = await vaultApi.uploadMarkdownDoc({ content, docType, sourceFilename: filename });
+    showStatus("rag-upload-status", res.message, "ok");
+    (document.getElementById("rag-doc-content") as HTMLTextAreaElement).value = "";
+    await loadRagDocsList();
+  } catch (e) {
+    showStatus("rag-upload-status", `Upload failed: ${e instanceof Error ? e.message : "unknown"}`, "err");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "⬆ Upload to RAG Pipeline";
+  }
+}
+
+// Auto-update filename when doc type changes
+(document.getElementById("rag-doc-type") as HTMLSelectElement).addEventListener("change", (e) => {
+  const type = (e.target as HTMLSelectElement).value;
+  const defaultNames: Record<string, string> = {
+    resume: "resume.md",
+    work_history: "work_history.md",
+    cover_letter_sample: "cover_letter_samples.md",
+    other: "context.md",
+  };
+  (document.getElementById("rag-doc-filename") as HTMLInputElement).value = defaultNames[type] ?? "document.md";
+});
+
 // Module scripts are deferred — DOM is fully parsed when this runs.
 wireProviderAutoEnable();
 loadSettings();
@@ -596,6 +675,7 @@ loadWorkHistory();
 loadPromptTemplates();
 loadModelRoutes();
 wireImportFromResume();
+loadRagDocsList();
 get("save-auth").addEventListener("click", saveAuth);
 get("test-api").addEventListener("click", testApi);
 get("save-api").addEventListener("click", saveApi);
@@ -604,3 +684,4 @@ get("save-profile").addEventListener("click", saveProfile);
 get("wh-add-btn").addEventListener("click", addWorkHistoryEntry);
 get("save-prompts").addEventListener("click", savePromptTemplates);
 get("save-model-routes").addEventListener("click", saveModelRoutes);
+get("rag-upload-btn").addEventListener("click", uploadRagDocument);

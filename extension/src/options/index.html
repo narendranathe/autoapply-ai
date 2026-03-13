@@ -483,6 +483,42 @@
         <div id="mr-status" class="status"></div>
       </div>
 
+      <!-- RAG Documents -->
+      <div class="card">
+        <h2>RAG Context Documents <span style="font-size:11px;color:#64748b;font-weight:400;">(grounds AI generation with your real experience)</span></h2>
+        <p style="font-size:12px;color:#94a3b8;margin:0 0 12px;">Upload your <strong style="color:#c4b5fd;">resume.md</strong> and <strong style="color:#c4b5fd;">work_history.md</strong> to give the AI your real background. These are chunked and stored as embeddings — every cover letter and answer draft will automatically use the most relevant sections.</p>
+
+        <!-- Existing docs list -->
+        <div id="rag-docs-list" style="margin-bottom:12px;">
+          <div style="font-size:12px;color:#4b5563;">Loading uploaded documents…</div>
+        </div>
+
+        <!-- Upload form -->
+        <div style="border:1px solid #1e1e3a;border-radius:8px;padding:16px;">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+            <div>
+              <label style="font-size:11px;color:#94a3b8;display:block;margin-bottom:4px;">Document Type</label>
+              <select id="rag-doc-type" style="width:100%;padding:8px 10px;background:#0f0f1a;border:1px solid #1e1e3a;border-radius:8px;color:#f1f5f9;font-size:13px;outline:none;">
+                <option value="resume">resume.md — Resume</option>
+                <option value="work_history">work_history.md — Full Work History</option>
+                <option value="cover_letter_sample">Cover Letter Samples</option>
+                <option value="other">Other Context</option>
+              </select>
+            </div>
+            <div>
+              <label style="font-size:11px;color:#94a3b8;display:block;margin-bottom:4px;">Filename</label>
+              <input type="text" id="rag-doc-filename" value="resume.md" style="width:100%;padding:8px 10px;background:#0f0f1a;border:1px solid #1e1e3a;border-radius:8px;color:#f1f5f9;font-size:13px;outline:none;box-sizing:border-box;" />
+            </div>
+          </div>
+          <label style="font-size:11px;color:#94a3b8;display:block;margin-bottom:4px;">Markdown Content</label>
+          <textarea id="rag-doc-content" rows="10" style="width:100%;padding:10px 12px;background:#0f0f1a;border:1px solid #1e1e3a;border-radius:8px;color:#f1f5f9;font-size:12px;outline:none;resize:vertical;box-sizing:border-box;font-family:monospace;" placeholder="Paste your resume.md or work_history.md content here…&#10;&#10;## Summary&#10;Senior Data Engineer with 5+ years…&#10;&#10;## Experience&#10;### Company Name&#10;Led team of 4 engineers…"></textarea>
+          <div style="display:flex;gap:8px;margin-top:10px;align-items:center;">
+            <button class="btn btn-primary" id="rag-upload-btn">⬆ Upload to RAG Pipeline</button>
+            <div id="rag-upload-status" class="status" style="flex:1;margin:0;"></div>
+          </div>
+        </div>
+      </div>
+
       <!-- Status -->
       <div class="card">
         <h2>Status</h2>
