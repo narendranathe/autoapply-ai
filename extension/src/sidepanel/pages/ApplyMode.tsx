@@ -160,13 +160,17 @@ export default function ApplyMode({ context }: Props) {
   // Vault analytics
   const [vaultAnalytics, setVaultAnalytics] = useState<Awaited<ReturnType<typeof vaultApi.getAnalytics>> | null>(null);
   // T3: interview prep
-  const [interviewQuestions, setInterviewQuestions] = useState<InterviewQuestion[]>([]);
+  const [interviewQuestions, setInterviewQuestions] = useState<InterviewQuestion[]>(
+    () => loadDraftSession(jobUrl, "interviewQuestions", [])
+  );
   const [interviewLoading, setInterviewLoading] = useState(false);
   const [interviewError, setInterviewError] = useState<string>("");
   const [expandedPrepIdx, setExpandedPrepIdx] = useState<number | null>(null);
   const [prepCategoryFilter, setPrepCategoryFilter] = useState<"all" | "behavioral" | "motivation" | "technical" | "general">("all");
   // Trim answer to char limit
   const [trimmingAnswer, setTrimmingAnswer] = useState<string | null>(null);
+  // Copy all answers
+  const [copiedAllAnswers, setCopiedAllAnswers] = useState(false);
   // Cover letter tab
   const [coverDrafts, setCoverDrafts] = useState<string[]>(
     () => loadDraftSession(jobUrl, "coverDrafts", [])
@@ -266,7 +270,8 @@ export default function ApplyMode({ context }: Props) {
     saveDraftSession(jobUrl, "coverLetter", coverLetter);
     saveDraftSession(jobUrl, "coverDrafts", coverDrafts);
     saveDraftSession(jobUrl, "coverDraftProviders", coverDraftProviders);
-  }, [jobUrl, answerDrafts, selectedAnswers, draftProviders, editedTexts, coverLetter, coverDrafts, coverDraftProviders]);
+    saveDraftSession(jobUrl, "interviewQuestions", interviewQuestions);
+  }, [jobUrl, answerDrafts, selectedAnswers, draftProviders, editedTexts, coverLetter, coverDrafts, coverDraftProviders, interviewQuestions]);
 
   useEffect(() => { persistDrafts(); }, [persistDrafts]);
 
@@ -1403,6 +1408,28 @@ export default function ApplyMode({ context }: Props) {
                   </div>
                 );
               })
+            )}
+            {/* Copy All Answers button */}
+            {context.openQuestions.length > 0 && Object.keys(answerDrafts).length > 0 && (
+              <div style={{ marginTop: 8, display: "flex", justifyContent: "flex-end" }}>
+                <button
+                  onClick={() => {
+                    const lines = context.openQuestions.flatMap((q) => {
+                      const drafts = answerDrafts[q.questionId];
+                      const selectedIdx = selectedAnswers[q.questionId] ?? 0;
+                      const text = editedTexts[q.questionId] ?? drafts?.[selectedIdx] ?? "";
+                      if (!text) return [];
+                      return [`Q: ${q.questionText}`, `A: ${text}`, ""];
+                    });
+                    navigator.clipboard.writeText(lines.join("\n"));
+                    setCopiedAllAnswers(true);
+                    setTimeout(() => setCopiedAllAnswers(false), 2000);
+                  }}
+                  style={{ ...btnStyle("ghost"), fontSize: 10, padding: "4px 12px" }}
+                >
+                  {copiedAllAnswers ? "✓ Copied All" : "Copy All Answers"}
+                </button>
+              </div>
             )}
           </Section>
         )}
