@@ -183,6 +183,15 @@ export default function ApplyMode({ context }: Props) {
   const [savingCoverLetter, setSavingCoverLetter] = useState(false);
   const [savedCoverLetters, setSavedCoverLetters] = useState<Array<{ id: string; company_name: string; role_title: string | null; answer_text: string; created_at: string }>>([]);
   const [coverLettersSectionOpen, setCoverLettersSectionOpen] = useState(false);
+  // AI Writing Tools (summary + bullets)
+  const [generatingSummary, setGeneratingSummary] = useState(false);
+  const [generatedSummary, setGeneratedSummary] = useState<string>("");
+  const [summaryError, setSummaryError] = useState<string>("");
+  const [summaryCopied, setSummaryCopied] = useState(false);
+  const [generatingBullets, setGeneratingBullets] = useState(false);
+  const [generatedBullets, setGeneratedBullets] = useState<string[]>([]);
+  const [bulletsError, setBulletsError] = useState<string>("");
+  const [bulletsCopied, setBulletsCopied] = useState(false);
 
   const PROVIDER_RANK: Record<string, number> = { anthropic: 1, openai: 2, gemini: 3, groq: 4, perplexity: 5, kimi: 6 };
   const PROVIDER_MODELS: Record<string, string> = { anthropic: "claude-sonnet-4-6", openai: "gpt-4o", gemini: "gemini-1.5-flash", groq: "llama-3.3-70b-versatile", perplexity: "sonar", kimi: "moonshot-v1-32k" };
@@ -653,6 +662,59 @@ export default function ApplyMode({ context }: Props) {
     }
   };
 
+  const handleGenerateSummary = async () => {
+    if (!context.company || !context.roleTitle) {
+      setSummaryError("Company and role title are required. Navigate to a job posting first.");
+      return;
+    }
+    setGeneratingSummary(true);
+    setSummaryError("");
+    setGeneratedSummary("");
+    try {
+      const freshProviders = await getFreshProviders();
+      const candidateName = profile ? `${profile.firstName ?? ""} ${profile.lastName ?? ""}`.trim() : "";
+      const res = await vaultApi.generateSummary({
+        companyName: context.company,
+        roleTitle: context.roleTitle,
+        jdText: context.jdText ?? "",
+        wordLimit: 80,
+        candidateName,
+        providers: freshProviders,
+      });
+      setGeneratedSummary(res.summary);
+    } catch (err) {
+      setSummaryError(err instanceof Error ? err.message : "Summary generation failed.");
+    } finally {
+      setGeneratingSummary(false);
+    }
+  };
+
+  const handleGenerateBullets = async () => {
+    if (!context.company || !context.roleTitle) {
+      setBulletsError("Company and role title are required. Navigate to a job posting first.");
+      return;
+    }
+    setGeneratingBullets(true);
+    setBulletsError("");
+    setGeneratedBullets([]);
+    try {
+      const freshProviders = await getFreshProviders();
+      const res = await vaultApi.generateBullets({
+        companyName: context.company,
+        roleTitle: context.roleTitle,
+        jdText: context.jdText ?? "",
+        numBullets: 5,
+        targetCompany: context.company,
+        providers: freshProviders,
+      });
+      setGeneratedBullets(res.bullets);
+    } catch (err) {
+      setBulletsError(err instanceof Error ? err.message : "Bullets generation failed.");
+    } finally {
+      setGeneratingBullets(false);
+    }
+  };
+
   // Keep a ref to the latest providers so auto-generate always uses fresh values
   const providersRef = React.useRef(providers);
   providersRef.current = providers;
@@ -906,6 +968,71 @@ export default function ApplyMode({ context }: Props) {
                 ))}
               </Section>
             )}
+
+            {/* AI Writing Tools: Summary + Bullets */}
+            <Section label="AI Writing Tools">
+              <div style={{ display: "flex", gap: 6 }}>
+                <button
+                  onClick={handleGenerateSummary}
+                  disabled={generatingSummary}
+                  style={{ ...btnStyle("generate", generatingSummary), flex: 1, fontSize: 10, padding: "5px 8px" }}
+                >
+                  {generatingSummary ? "Generating…" : "✦ Generate Summary"}
+                </button>
+                <button
+                  onClick={handleGenerateBullets}
+                  disabled={generatingBullets}
+                  style={{ ...btnStyle("generate", generatingBullets), flex: 1, fontSize: 10, padding: "5px 8px" }}
+                >
+                  {generatingBullets ? "Generating…" : "✦ Generate Bullets"}
+                </button>
+              </div>
+
+              {summaryError && (
+                <div style={{ fontSize: 10, color: "#f87171", padding: "4px 8px", background: "#1a0808", borderRadius: 5, border: "1px solid #7f1d1d", marginTop: 4 }}>
+                  {summaryError}
+                </div>
+              )}
+              {generatedSummary && (
+                <div style={{ marginTop: 6, background: "#0a0a14", border: "1px solid #1f1f38", borderRadius: 8, padding: "8px 10px" }}>
+                  <div style={{ fontSize: 10, color: "#7c3aed", fontWeight: 700, marginBottom: 4, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span>Professional Summary</span>
+                    <button
+                      onClick={() => { navigator.clipboard.writeText(generatedSummary); setSummaryCopied(true); setTimeout(() => setSummaryCopied(false), 2000); }}
+                      style={{ ...btnStyle("ghost"), fontSize: 9, padding: "2px 6px" }}
+                    >
+                      {summaryCopied ? "✓ Copied" : "Copy"}
+                    </button>
+                  </div>
+                  <p style={{ margin: 0, fontSize: 11, color: "#cbd5e1", lineHeight: 1.6 }}>{generatedSummary}</p>
+                </div>
+              )}
+
+              {bulletsError && (
+                <div style={{ fontSize: 10, color: "#f87171", padding: "4px 8px", background: "#1a0808", borderRadius: 5, border: "1px solid #7f1d1d", marginTop: 4 }}>
+                  {bulletsError}
+                </div>
+              )}
+              {generatedBullets.length > 0 && (
+                <div style={{ marginTop: 6, background: "#0a0a14", border: "1px solid #1f1f38", borderRadius: 8, padding: "8px 10px" }}>
+                  <div style={{ fontSize: 10, color: "#7c3aed", fontWeight: 700, marginBottom: 6, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span>Resume Bullets</span>
+                    <button
+                      onClick={() => { navigator.clipboard.writeText(generatedBullets.map((b) => `• ${b}`).join("\n")); setBulletsCopied(true); setTimeout(() => setBulletsCopied(false), 2000); }}
+                      style={{ ...btnStyle("ghost"), fontSize: 9, padding: "2px 6px" }}
+                    >
+                      {bulletsCopied ? "✓ Copied" : "Copy All"}
+                    </button>
+                  </div>
+                  {generatedBullets.map((bullet, i) => (
+                    <div key={i} style={{ display: "flex", gap: 6, fontSize: 11, color: "#cbd5e1", lineHeight: 1.5, padding: "3px 0", borderBottom: i < generatedBullets.length - 1 ? "1px solid #1a1a2e" : "none" }}>
+                      <span style={{ color: "#7c3aed", flexShrink: 0 }}>•</span>
+                      <span>{bullet}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Section>
 
             {/* C2: Resume upload */}
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>

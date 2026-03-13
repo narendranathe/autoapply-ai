@@ -507,6 +507,52 @@ export const vaultApi = {
     }
     return post("/vault/generate/answers/trim", fd);
   },
+
+  /** Generate a 2-4 sentence professional summary tailored to a role */
+  generateSummary(params: {
+    companyName: string;
+    roleTitle: string;
+    jdText: string;
+    wordLimit?: number;
+    candidateName?: string;
+    providers?: Array<{ name: string; apiKey: string; model?: string }>;
+  }): Promise<{ summary: string; provider_used: string; word_count: number }> {
+    const fd = new FormData();
+    fd.append("company_name", params.companyName);
+    fd.append("role_title", params.roleTitle);
+    fd.append("jd_text", params.jdText);
+    if (params.wordLimit != null) fd.append("word_limit", String(params.wordLimit));
+    if (params.candidateName) fd.append("candidate_name", params.candidateName);
+    if (params.providers?.length) {
+      fd.append("providers_json", JSON.stringify(
+        params.providers.map((p) => ({ name: p.name, api_key: p.apiKey, model: p.model ?? "" }))
+      ));
+    }
+    return post("/vault/generate/summary", fd);
+  },
+
+  /** Generate XYZ-formula resume bullets for a specific role */
+  generateBullets(params: {
+    companyName: string;
+    roleTitle: string;
+    jdText: string;
+    numBullets?: number;
+    targetCompany?: string;
+    providers?: Array<{ name: string; apiKey: string; model?: string }>;
+  }): Promise<{ bullets: string[]; provider_used: string; count: number }> {
+    const fd = new FormData();
+    fd.append("company_name", params.companyName);
+    fd.append("role_title", params.roleTitle);
+    fd.append("jd_text", params.jdText);
+    if (params.numBullets != null) fd.append("num_bullets", String(params.numBullets));
+    if (params.targetCompany) fd.append("target_company_for_context", params.targetCompany);
+    if (params.providers?.length) {
+      fd.append("providers_json", JSON.stringify(
+        params.providers.map((p) => ({ name: p.name, api_key: p.apiKey, model: p.model ?? "" }))
+      ));
+    }
+    return post("/vault/generate/bullets", fd);
+  },
 };
 
 // ── Application Tracking API ────────────────────────────────────────────────
