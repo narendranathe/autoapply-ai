@@ -162,6 +162,7 @@ export default function ApplyMode({ context }: Props) {
   const [interviewLoading, setInterviewLoading] = useState(false);
   const [interviewError, setInterviewError] = useState<string>("");
   const [expandedPrepIdx, setExpandedPrepIdx] = useState<number | null>(null);
+  const [prepCategoryFilter, setPrepCategoryFilter] = useState<"all" | "behavioral" | "motivation" | "technical" | "general">("all");
   // Trim answer to char limit
   const [trimmingAnswer, setTrimmingAnswer] = useState<string | null>(null);
   // Cover letter tab
@@ -519,6 +520,7 @@ export default function ApplyMode({ context }: Props) {
     setInterviewLoading(true);
     setInterviewError("");
     setInterviewQuestions([]);
+    setPrepCategoryFilter("all");
     try {
       const providers = await getFreshProviders();
       const result = await vaultApi.interviewPrep({
@@ -1534,15 +1536,21 @@ export default function ApplyMode({ context }: Props) {
                 {(["all", "behavioral", "motivation", "technical", "general"] as const).map((cat) => {
                   const count = cat === "all" ? interviewQuestions.length : interviewQuestions.filter((q) => q.category === cat).length;
                   if (cat !== "all" && count === 0) return null;
-                  const isActive = (expandedPrepIdx === null && cat === "all") || false;
+                  const isActive = prepCategoryFilter === cat;
                   return (
                     <button
                       key={cat}
-                      onClick={() => {
-                        /* Toggle filter: future enhancement — for now just collapse all */
-                        setExpandedPrepIdx(null);
+                      onClick={() => { setPrepCategoryFilter(cat); setExpandedPrepIdx(null); }}
+                      style={{
+                        background: isActive ? (CATEGORY_COLORS[cat] ?? "#475569") + "22" : "#12121e",
+                        border: `1px solid ${isActive ? (CATEGORY_COLORS[cat] ?? "#475569") : "#1f1f38"}`,
+                        borderRadius: 99,
+                        padding: "2px 8px",
+                        fontSize: 9,
+                        fontWeight: 700,
+                        color: CATEGORY_COLORS[cat] ?? "#475569",
+                        cursor: "pointer",
                       }}
-                      style={{ background: "#12121e", border: "1px solid #1f1f38", borderRadius: 99, padding: "2px 8px", fontSize: 9, fontWeight: 700, color: CATEGORY_COLORS[cat] ?? "#475569", cursor: "pointer" }}
                     >
                       {cat === "all" ? `All (${count})` : `${cat} (${count})`}
                     </button>
@@ -1551,25 +1559,27 @@ export default function ApplyMode({ context }: Props) {
               </div>
             )}
 
-            {interviewQuestions.map((q, idx) => (
-              <PrepQuestion
-                key={idx}
-                question={q}
-                index={idx}
-                expanded={expandedPrepIdx === idx}
-                onToggle={() => setExpandedPrepIdx(expandedPrepIdx === idx ? null : idx)}
-                onSaveToBank={async () => {
-                  await vaultApi.saveAnswer({
-                    questionText: q.question,
-                    questionCategory: q.category === "behavioral" ? "challenge" : q.category === "motivation" ? "motivation" : "custom",
-                    answerText: q.suggested_answer,
-                    companyName: context.company,
-                    roleTitle: context.roleTitle,
-                    wasDefault: true,
-                  });
-                }}
-              />
-            ))}
+            {interviewQuestions
+              .filter((q) => prepCategoryFilter === "all" || q.category === prepCategoryFilter)
+              .map((q, idx) => (
+                <PrepQuestion
+                  key={idx}
+                  question={q}
+                  index={idx}
+                  expanded={expandedPrepIdx === idx}
+                  onToggle={() => setExpandedPrepIdx(expandedPrepIdx === idx ? null : idx)}
+                  onSaveToBank={async () => {
+                    await vaultApi.saveAnswer({
+                      questionText: q.question,
+                      questionCategory: q.category === "behavioral" ? "challenge" : q.category === "motivation" ? "motivation" : "custom",
+                      answerText: q.suggested_answer,
+                      companyName: context.company,
+                      roleTitle: context.roleTitle,
+                      wasDefault: true,
+                    });
+                  }}
+                />
+              ))}
           </>
         )}
 

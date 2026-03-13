@@ -668,6 +668,16 @@ export const workHistoryApi = {
     return post("/work-history", entry as unknown as Record<string, unknown>);
   },
 
+  async update(entryId: string, entry: Partial<WorkHistoryEntryIn>): Promise<{ id: string; updated: boolean }> {
+    await ensureInit();
+    const resp = await fetch(`${getApiBase()}/work-history/${entryId}`, {
+      method: "PATCH",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify(entry),
+    });
+    return resp.json();
+  },
+
   async delete(entryId: string): Promise<void> {
     await ensureInit();
     await fetch(`${getApiBase()}/work-history/${entryId}`, {

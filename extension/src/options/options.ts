@@ -288,8 +288,48 @@ function renderWorkHistoryList(entries: WorkHistoryEntry[]) {
         <div class="wh-entry-title">${e.role_title} @ ${e.company_name}</div>
         <div class="wh-entry-meta">${dateRange}${e.location ? " · " + e.location : ""}${tech}</div>
       </div>
-      <button class="wh-del-btn" title="Delete entry">✕</button>
+      <div class="wh-entry-actions">
+        <button class="wh-edit-btn" title="Edit bullets and tech">✎ Edit</button>
+        <button class="wh-del-btn" title="Delete entry">✕</button>
+      </div>
+      <div class="wh-edit-form" style="display:none; margin-top:8px; padding-top:8px; border-top:1px solid #e5e7eb;">
+        <label style="font-size:12px; font-weight:600; display:block; margin-bottom:4px;">Bullets (one per line)</label>
+        <textarea class="wh-edit-bullets" rows="4" style="width:100%; font-size:12px; border:1px solid #d1d5db; border-radius:4px; padding:6px; box-sizing:border-box;">${(e.bullets ?? []).join("\n")}</textarea>
+        <label style="font-size:12px; font-weight:600; display:block; margin:6px 0 4px;">Technologies (comma-separated)</label>
+        <input type="text" class="wh-edit-tech" value="${(e.technologies ?? []).join(", ")}" style="width:100%; font-size:12px; border:1px solid #d1d5db; border-radius:4px; padding:6px; box-sizing:border-box;" />
+        <div style="display:flex; gap:6px; margin-top:8px;">
+          <button class="wh-save-btn" style="padding:4px 12px; background:#4f46e5; color:#fff; border:none; border-radius:4px; font-size:12px; cursor:pointer;">Save</button>
+          <button class="wh-cancel-btn" style="padding:4px 12px; background:#f3f4f6; color:#374151; border:1px solid #d1d5db; border-radius:4px; font-size:12px; cursor:pointer;">Cancel</button>
+          <span class="wh-save-status" style="font-size:11px; margin-left:4px; align-self:center;"></span>
+        </div>
+      </div>
     `;
+    const editForm = div.querySelector(".wh-edit-form") as HTMLElement;
+    div.querySelector(".wh-edit-btn")!.addEventListener("click", () => {
+      editForm.style.display = editForm.style.display === "none" ? "block" : "none";
+    });
+    div.querySelector(".wh-cancel-btn")!.addEventListener("click", () => {
+      editForm.style.display = "none";
+    });
+    div.querySelector(".wh-save-btn")!.addEventListener("click", async () => {
+      const bulletsRaw = (div.querySelector(".wh-edit-bullets") as HTMLTextAreaElement).value.trim();
+      const techRaw = (div.querySelector(".wh-edit-tech") as HTMLInputElement).value.trim();
+      const status = div.querySelector(".wh-save-status") as HTMLElement;
+      status.textContent = "Saving…";
+      status.style.color = "#6b7280";
+      try {
+        await workHistoryApi.update(e.id, {
+          bullets: bulletsRaw ? bulletsRaw.split("\n").map((s) => s.trim()).filter(Boolean) : [],
+          technologies: techRaw ? techRaw.split(",").map((s) => s.trim()).filter(Boolean) : [],
+        });
+        status.textContent = "✓ Saved";
+        status.style.color = "#059669";
+        setTimeout(() => { editForm.style.display = "none"; loadWorkHistory(); }, 1000);
+      } catch {
+        status.textContent = "Failed to save";
+        status.style.color = "#dc2626";
+      }
+    });
     div.querySelector(".wh-del-btn")!.addEventListener("click", () => deleteWorkHistoryEntry(e.id, div));
     container.appendChild(div);
   }
