@@ -452,6 +452,22 @@ export const vaultApi = {
     );
   },
 
+  /** Update resume metadata (target company/role/version tag) */
+  patchResume(resumeId: string, params: { targetCompany?: string; targetRole?: string; versionTag?: string }): Promise<{
+    resume_id: string; target_company: string | null; target_role: string | null; version_tag: string | null; updated: boolean;
+  }> {
+    const p = new URLSearchParams();
+    if (params.targetCompany !== undefined) p.set("target_company", params.targetCompany);
+    if (params.targetRole !== undefined) p.set("target_role", params.targetRole);
+    if (params.versionTag !== undefined) p.set("version_tag", params.versionTag);
+    return ensureInit().then(() =>
+      fetch(`${getApiBase()}/vault/resumes/${resumeId}?${p.toString()}`, {
+        method: "PATCH",
+        headers: authHeaders(),
+      }).then((r) => r.json())
+    );
+  },
+
   /** Generate a tailored resume from an existing vault resume + JD context */
   generateTailored(params: {
     baseResumeId: string;

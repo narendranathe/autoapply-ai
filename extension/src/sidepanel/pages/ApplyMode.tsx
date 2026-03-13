@@ -146,6 +146,9 @@ export default function ApplyMode({ context }: Props) {
   // Resume content viewer
   const [viewingResumeId, setViewingResumeId] = useState<string | null>(null);
   const [resumeContent, setResumeContent] = useState<string>("");
+  // Resume rename
+  const [renamingResumeId, setRenamingResumeId] = useState<string | null>(null);
+  const [renameTag, setRenameTag] = useState("");
   // L6: resume tailoring
   const [tailoringResumeId, setTailoringResumeId] = useState<string | null>(null);
   const [tailorResults, setTailorResults] = useState<Record<string, GenerateTailoredResponse>>({});
@@ -1091,7 +1094,7 @@ export default function ApplyMode({ context }: Props) {
               {resumes.map((r) => (
                 <div key={r.resumeId}>
                   <ResumeCardComponent resume={r} onAttach={() => handleAttach(r)} />
-                  {/* View content inline */}
+                  {/* View content inline + Rename */}
                   <div style={{ display: "flex", gap: 6, marginTop: 4, marginBottom: context.jdText ? 0 : 8 }}>
                     <button
                       onClick={async () => {
@@ -1106,7 +1109,40 @@ export default function ApplyMode({ context }: Props) {
                     >
                       {viewingResumeId === r.resumeId ? "Hide" : "View"}
                     </button>
+                    <button
+                      onClick={() => {
+                        if (renamingResumeId === r.resumeId) { setRenamingResumeId(null); return; }
+                        setRenameTag(r.versionTag ?? r.filename ?? "");
+                        setRenamingResumeId(r.resumeId);
+                      }}
+                      style={{ ...btnStyle("ghost"), fontSize: 10, padding: "3px 8px" }}
+                    >
+                      {renamingResumeId === r.resumeId ? "Cancel" : "Rename"}
+                    </button>
                   </div>
+                  {renamingResumeId === r.resumeId && (
+                    <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+                      <input
+                        type="text"
+                        value={renameTag}
+                        onChange={(e) => setRenameTag(e.target.value)}
+                        placeholder="Version tag (e.g. v2, Q2-2025)"
+                        style={{ flex: 1, background: "#0a0a14", border: "1px solid #1f1f38", borderRadius: 6, color: "#e2e8f0", fontSize: 11, padding: "4px 8px", outline: "none" }}
+                      />
+                      <button
+                        onClick={async () => {
+                          try {
+                            await vaultApi.patchResume(r.resumeId, { versionTag: renameTag.trim() || undefined });
+                            setResumes((prev) => prev.map((res) => res.resumeId === r.resumeId ? { ...res, versionTag: renameTag.trim() || null } : res));
+                            setRenamingResumeId(null);
+                          } catch { /* silently ignore */ }
+                        }}
+                        style={{ ...btnStyle("primary"), fontSize: 10, padding: "4px 10px" }}
+                      >
+                        Save
+                      </button>
+                    </div>
+                  )}
                   {viewingResumeId === r.resumeId && (
                     <div style={{ marginBottom: 6, background: "#0a0a14", border: "1px solid #1f1f38", borderRadius: 8, padding: "8px 10px", maxHeight: 300, overflowY: "auto" }}>
                       <pre style={{ margin: 0, fontSize: 10, color: "#94a3b8", whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "system-ui,sans-serif", lineHeight: 1.5 }}>

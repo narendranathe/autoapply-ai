@@ -264,6 +264,50 @@ async def delete_resume(
     await db.commit()
 
 
+# ── Update resume metadata ─────────────────────────────────────────────────
+
+
+@router.patch("/resumes/{resume_id}")
+async def update_resume_metadata(
+    resume_id: uuid.UUID,
+    target_company: str | None = None,
+    target_role: str | None = None,
+    version_tag: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """
+    Update editable metadata on a stored resume:
+      - target_company (re-classify which company this resume is for)
+      - target_role    (re-classify which role)
+      - version_tag    (rename/relabel the version)
+    Only provided fields are updated; omit a field to leave it unchanged.
+    """
+    result = await db.execute(
+        select(Resume).where(Resume.id == resume_id, Resume.user_id == user.id)
+    )
+    resume = result.scalar_one_or_none()
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found")
+
+    if target_company is not None:
+        resume.target_company = target_company or None
+    if target_role is not None:
+        resume.target_role = target_role or None
+    if version_tag is not None:
+        resume.version_tag = version_tag or None
+
+    await db.commit()
+    await db.refresh(resume)
+    return {
+        "resume_id": str(resume.id),
+        "target_company": resume.target_company,
+        "target_role": resume.target_role,
+        "version_tag": resume.version_tag,
+        "updated": True,
+    }
+
+
 # ── Retrieve ───────────────────────────────────────────────────────────────
 
 
