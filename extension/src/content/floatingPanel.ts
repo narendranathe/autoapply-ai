@@ -44,6 +44,8 @@ interface QuestionState {
   draftProviders: string[];
   selectedDraft: number;
   loading: boolean;
+  loadingProvider: string;  // which provider is being tried (shown in spinner)
+  loadingStartMs: number;   // timestamp when loading started (for elapsed time)
   error: string | null;
 }
 
@@ -513,6 +515,8 @@ class FloatingPanel {
       draftProviders: [],
       selectedDraft: 0,
       loading: false,
+      loadingProvider: "",
+      loadingStartMs: 0,
       error: null,
     }));
     this.render();
@@ -662,8 +666,16 @@ class FloatingPanel {
     const state = this.questionStates[stateIndex];
     if (!state) return;
     state.loading = true;
+    state.loadingProvider = this.providers.length > 0 ? (this.providers[0]?.name ?? "") : "";
+    state.loadingStartMs = Date.now();
     state.error = null;
     this.render();
+
+    // Live elapsed-time ticker — re-renders every second so user sees activity
+    const tickerInterval = setInterval(() => {
+      if (state.loading) this.render();
+    }, 1000);
+
     try {
       const fd = new FormData();
       fd.append("question_text", state.question.questionText);
@@ -682,6 +694,7 @@ class FloatingPanel {
           const rest = this.providers.filter((p) => p.name !== preferredProviderName);
           if (preferred.length > 0) orderedProviders = [...preferred, ...rest];
         }
+        state.loadingProvider = orderedProviders[0]?.name ?? "";
         fd.append("providers_json", JSON.stringify(orderedProviders));
       }
       if (state.question.maxLength && state.question.maxLength > 0) {
@@ -704,7 +717,9 @@ class FloatingPanel {
     } catch (e) {
       state.error = e instanceof Error ? e.message : "Generation failed";
     } finally {
+      clearInterval(tickerInterval);
       state.loading = false;
+      state.loadingProvider = "";
       this.render();
     }
   }
@@ -770,7 +785,7 @@ class FloatingPanel {
     const existingIds = new Set(this.questionStates.map((s) => s.question.questionId));
     for (const q of newQuestions) {
       if (!existingIds.has(q.questionId)) {
-        this.questionStates.push({ question: q, drafts: [], draftProviders: [], selectedDraft: 0, loading: false, error: null });
+        this.questionStates.push({ question: q, drafts: [], draftProviders: [], selectedDraft: 0, loading: false, loadingProvider: "", loadingStartMs: 0, error: null });
       }
     }
     // Remove only questions whose textarea has actually left the DOM
@@ -1462,6 +1477,24 @@ class FloatingPanel {
       }
       .loading-text::before { animation-delay: 0s; color: #7c3aed; }
       .loading-text::after  { animation-delay: 0.28s; color: #4f46e5; }
+      .provider-badge {
+        font-size: 9px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        padding: 1px 6px;
+        border-radius: 99px;
+        background: rgba(124,58,237,0.2);
+        border: 1px solid rgba(124,58,237,0.4);
+        color: #a78bfa;
+        margin-left: 2px;
+      }
+      .elapsed-time {
+        font-size: 9px;
+        color: #475569;
+        margin-left: 2px;
+        font-variant-numeric: tabular-nums;
+      }
       .loading-spinner-wrap {
         display: flex;
         align-items: center;
@@ -1600,7 +1633,14 @@ class FloatingPanel {
                        <button class="regen-btn" title="Regenerate" data-q-idx="${qi}" id="__aap_regen_${qi}__">&#8635;</button>
                      </div>`
                   : state.loading
-                  ? `<div class="loading-text">Generating…</div>`
+                  ? (() => {
+                      const elapsedSec = state.loadingStartMs ? Math.floor((Date.now() - state.loadingStartMs) / 1000) : 0;
+                      const providerBadge = state.loadingProvider
+                        ? `<span class="provider-badge">${state.loadingProvider}</span>`
+                        : "";
+                      const elapsed = elapsedSec > 0 ? `<span class="elapsed-time">${elapsedSec}s</span>` : "";
+                      return `<div class="loading-text">Generating… ${providerBadge}${elapsed}</div>`;
+                    })()
                   : `<button class="generate-btn" data-q-idx="${qi}" ${state.loading ? "disabled" : ""}>&#10022; Generate Answer</button>`;
 
                 const errorHtml = state.error
