@@ -655,6 +655,22 @@ export const applicationsApi = {
   getStats(): Promise<{ total: number; by_status: Record<string, number>; unique_companies: number }> {
     return get("/applications/stats");
   },
+
+  /** Download all applications as CSV — triggers browser download */
+  async exportCsv(): Promise<void> {
+    await ensureInit();
+    const resp = await fetch(`${getApiBase()}/applications/export.csv`, {
+      headers: authHeaders(),
+    });
+    if (!resp.ok) throw new Error("Export failed");
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "applications.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  },
 };
 
 // ── Work History types ──────────────────────────────────────────────────────

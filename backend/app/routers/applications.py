@@ -6,12 +6,16 @@ GET  /api/v1/applications/{id}     → Get single application
 PATCH /api/v1/applications/{id}    → Update application status
 GET  /api/v1/applications/stats    → Application statistics
 GET  /api/v1/applications/similar  → Find similar previous applications
+GET  /api/v1/applications/export.csv → Export all applications as CSV
 """
 
+import csv
 import hashlib
+import io
 import uuid
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -247,3 +251,45 @@ async def update_application_notes(
     await db.refresh(app)
 
     return {"id": str(app.id), "notes": app.notes}
+
+
+@router.get("/export.csv")
+async def export_applications_csv(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Export all applications as a CSV file.
+    Returns a streaming CSV with columns:
+      company, role, status, platform, job_url, applied_date, notes
+    """
+    stmt = (
+        select(Application)
+        .where(Application.user_id == user.id)
+        .order_by(Application.created_at.desc())
+    )
+    result = await db.execute(stmt)
+    apps = result.scalars().all()
+
+    output = io.StringIO()
+    writer = csv.writer(output, quoting=csv.QUOTE_ALL)
+    writer.writerow(["Company", "Role", "Status", "Platform", "Job URL", "Applied Date", "Notes"])
+    for a in apps:
+        writer.writerow(
+            [
+                a.company_name,
+                a.role_title,
+                a.status,
+                a.platform or "",
+                a.job_url or "",
+                a.created_at.strftime("%Y-%m-%d") if a.created_at else "",
+                (a.notes or "").replace("\n", " "),
+            ]
+        )
+
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=applications.csv"},
+    )

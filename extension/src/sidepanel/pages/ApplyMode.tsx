@@ -1501,7 +1501,7 @@ export default function ApplyMode({ context }: Props) {
               </Section>
             )}
 
-            {/* Search + Filter bar */}
+            {/* Export + Search + Filter bar */}
             <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
               <input
                 type="text"
@@ -1540,6 +1540,13 @@ export default function ApplyMode({ context }: Props) {
                 <option value="offer">Offer</option>
                 <option value="rejected">Rejected</option>
               </select>
+              <button
+                onClick={() => applicationsApi.exportCsv().catch(() => {})}
+                style={{ ...btnStyle("ghost"), fontSize: 10, padding: "5px 8px", whiteSpace: "nowrap" }}
+                title="Export all applications as CSV"
+              >
+                ⬇ CSV
+              </button>
             </div>
 
             <Section label="All Applications">
