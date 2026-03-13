@@ -50,6 +50,12 @@ class TestLLMPathDetection:
     def test_import_from_resume_is_llm_path(self):
         assert "/api/v1/work-history/import-from-resume" in _LLM_PATHS
 
+    def test_cover_letter_is_llm_path(self):
+        assert "/api/v1/vault/generate/cover-letter" in _LLM_PATHS
+
+    def test_trim_answers_is_llm_path(self):
+        assert "/api/v1/vault/generate/answers/trim" in _LLM_PATHS
+
     def test_health_is_not_llm_path(self):
         assert "/health" not in _LLM_PATHS
 

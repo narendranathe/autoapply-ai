@@ -27,6 +27,8 @@ _LLM_PATHS = {
     "/api/v1/vault/generate",
     "/api/v1/vault/generate/summary",
     "/api/v1/vault/generate/bullets",
+    "/api/v1/vault/generate/cover-letter",
+    "/api/v1/vault/generate/answers/trim",
     "/api/v1/vault/interview-prep",
     "/api/v1/work-history/import-from-resume",
 }
