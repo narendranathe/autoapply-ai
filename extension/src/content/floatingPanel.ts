@@ -444,6 +444,8 @@ class FloatingPanel {
   private isOpen: boolean = false;
   private apiBase: string = "https://autoapply-ai-api.fly.dev/api/v1";
   private clerkUserId: string | null = null;
+  private clerkToken: string | null = null;
+  private clerkTokenExp: number = 0;
   private providers: Array<{ name: string; api_key: string; model: string }> = [];
   private profile: Profile = {
     firstName: "", lastName: "", email: "", phone: "",
@@ -463,6 +465,17 @@ class FloatingPanel {
   private categoryModelRoutes: Record<string, string> = {};
   private trackedAppId: string | null = null;
 
+  /** Build auth headers: prefer JWT Bearer, fall back to X-Clerk-User-Id. */
+  private authHeaders(extraHeaders?: Record<string, string>): Record<string, string> {
+    const tokenValid = this.clerkToken && (this.clerkTokenExp === 0 || Date.now() / 1000 < this.clerkTokenExp - 30);
+    const auth: Record<string, string> = tokenValid
+      ? { Authorization: `Bearer ${this.clerkToken}` }
+      : this.clerkUserId
+      ? { "X-Clerk-User-Id": this.clerkUserId }
+      : {};
+    return { ...auth, ...extraHeaders };
+  }
+
   constructor() {
     this.host = document.createElement("div");
     this.host.id = "__autoapply_host__";
@@ -478,9 +491,11 @@ class FloatingPanel {
   }
 
   async init(): Promise<void> {
-    const data = await chrome.storage.local.get(["apiBaseUrl", "clerkUserId", "profile", "providerConfigs", "promptTemplates", "categoryModelRoutes"]);
+    const data = await chrome.storage.local.get(["apiBaseUrl", "clerkUserId", "clerkToken", "clerkTokenExp", "profile", "providerConfigs", "promptTemplates", "categoryModelRoutes"]);
     if (data.apiBaseUrl) this.apiBase = data.apiBaseUrl as string;
     if (data.clerkUserId) this.clerkUserId = data.clerkUserId as string;
+    if (data.clerkToken) this.clerkToken = data.clerkToken as string;
+    if (data.clerkTokenExp) this.clerkTokenExp = data.clerkTokenExp as number;
     if (data.profile) this.profile = data.profile as Profile;
     if (data.promptTemplates) this.promptTemplates = data.promptTemplates as Record<string, string>;
     if (data.categoryModelRoutes) this.categoryModelRoutes = data.categoryModelRoutes as Record<string, string>;
@@ -495,7 +510,7 @@ class FloatingPanel {
     // Fetch full work history text for LLM context
     try {
       const whResp = await fetch(`${this.apiBase}/work-history/text`, {
-        headers: this.clerkUserId ? { "X-Clerk-User-Id": this.clerkUserId } : {},
+        headers: this.authHeaders(),
       });
       if (whResp.ok) {
         const whJson = await whResp.json() as { text?: string };
@@ -544,7 +559,7 @@ class FloatingPanel {
     try {
       const resp = await fetch(`${this.apiBase}/applications/track`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-Clerk-User-Id": this.clerkUserId },
+        headers: this.authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           company_name: this.company,
           role_title: this.roleTitle,
@@ -568,7 +583,7 @@ class FloatingPanel {
       // Mark as "applied" — fire-and-forget, non-blocking
       fetch(`${this.apiBase}/applications/${this.trackedAppId}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json", "X-Clerk-User-Id": this.clerkUserId },
+        headers: this.authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ status: "applied" }),
       }).catch(() => {});
     };
@@ -645,7 +660,7 @@ class FloatingPanel {
       if (this.jdText) fd.append("jd_text", this.jdText);
       const resp = await fetch(`${this.apiBase}/vault/retrieve`, {
         method: "POST",
-        headers: { "X-Clerk-User-Id": this.clerkUserId },
+        headers: this.authHeaders(),
         body: fd,
       });
       if (resp.ok) {
@@ -702,11 +717,9 @@ class FloatingPanel {
       }
       const catInstructions = this.promptTemplates[state.question.category] || this.promptTemplates["custom"];
       if (catInstructions) fd.append("category_instructions", catInstructions);
-      const headers: Record<string, string> = {};
-      if (this.clerkUserId) headers["X-Clerk-User-Id"] = this.clerkUserId;
       const resp = await fetch(`${this.apiBase}/vault/generate/answers`, {
         method: "POST",
-        headers,
+        headers: this.authHeaders(),
         body: fd,
       });
       if (!resp.ok) throw new Error(`API error ${resp.status}`);
@@ -740,7 +753,7 @@ class FloatingPanel {
         fd.append("role_title", this.roleTitle);
         await fetch(`${this.apiBase}/vault/answers/save`, {
           method: "POST",
-          headers: { "X-Clerk-User-Id": this.clerkUserId },
+          headers: this.authHeaders(),
           body: fd,
         });
       } catch {
