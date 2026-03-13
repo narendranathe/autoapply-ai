@@ -209,6 +209,15 @@ export default function ApplyMode({ context }: Props) {
   const [generatedBullets, setGeneratedBullets] = useState<string[]>([]);
   const [bulletsError, setBulletsError] = useState<string>("");
   const [bulletsCopied, setBulletsCopied] = useState(false);
+  // RAG document management
+  const [ragDocContent, setRagDocContent] = useState<string>("");
+  const [ragDocType, setRagDocType] = useState<"resume" | "work_history">("resume");
+  const [ragDocFilename, setRagDocFilename] = useState<string>("resume.md");
+  const [uploadingRagDoc, setUploadingRagDoc] = useState(false);
+  const [ragUploadResult, setRagUploadResult] = useState<string>("");
+  const [ragUploadError, setRagUploadError] = useState<string>("");
+  const [ragDocList, setRagDocList] = useState<Array<{ source_filename: string; doc_type: string; chunk_count: number; has_dense_embeddings: boolean; created_at: string }>>([]);
+  const [ragDocsLoaded, setRagDocsLoaded] = useState(false);
 
   const PROVIDER_RANK: Record<string, number> = { anthropic: 1, openai: 2, gemini: 3, groq: 4, perplexity: 5, kimi: 6 };
   const PROVIDER_MODELS: Record<string, string> = { anthropic: "claude-sonnet-4-6", openai: "gpt-4o", gemini: "gemini-1.5-flash", groq: "llama-3.3-70b-versatile", perplexity: "sonar", kimi: "moonshot-v1-32k" };
@@ -736,6 +745,49 @@ export default function ApplyMode({ context }: Props) {
     }
   };
 
+  const loadRagDocs = async () => {
+    try {
+      const res = await vaultApi.listDocuments();
+      setRagDocList(res.documents);
+      setRagDocsLoaded(true);
+    } catch {
+      setRagDocsLoaded(true);
+    }
+  };
+
+  const handleUploadRagDoc = async () => {
+    if (!ragDocContent.trim()) {
+      setRagUploadError("Paste your markdown content first.");
+      return;
+    }
+    setUploadingRagDoc(true);
+    setRagUploadError("");
+    setRagUploadResult("");
+    try {
+      const res = await vaultApi.uploadMarkdownDoc({
+        content: ragDocContent,
+        docType: ragDocType,
+        sourceFilename: ragDocFilename || `${ragDocType}.md`,
+      });
+      setRagUploadResult(`✓ ${res.message}`);
+      setRagDocContent("");
+      await loadRagDocs();
+    } catch (err) {
+      setRagUploadError(err instanceof Error ? err.message : "Upload failed.");
+    } finally {
+      setUploadingRagDoc(false);
+    }
+  };
+
+  const handleDeleteRagDoc = async (filename: string) => {
+    try {
+      await vaultApi.deleteDocument(filename);
+      setRagDocList((prev) => prev.filter((d) => d.source_filename !== filename));
+    } catch {
+      /* ignore */
+    }
+  };
+
   // Keep a ref to the latest providers so auto-generate always uses fresh values
   const providersRef = React.useRef(providers);
   providersRef.current = providers;
@@ -1051,6 +1103,85 @@ export default function ApplyMode({ context }: Props) {
                       <span>{bullet}</span>
                     </div>
                   ))}
+                </div>
+              )}
+            </Section>
+
+            {/* RAG Document Upload */}
+            <Section label="RAG Context Docs">
+              <div style={{ fontSize: 10, color: "#94a3b8", marginBottom: 6, lineHeight: 1.5 }}>
+                Paste your <strong style={{ color: "#c4b5fd" }}>resume.md</strong> or <strong style={{ color: "#c4b5fd" }}>work history</strong> — used to ground cover letters &amp; answers with your real experience.
+              </div>
+
+              {/* Existing docs */}
+              {!ragDocsLoaded && (
+                <button onClick={loadRagDocs} style={{ ...btnStyle("ghost"), fontSize: 9, padding: "3px 8px", marginBottom: 6 }}>
+                  Load uploaded docs
+                </button>
+              )}
+              {ragDocsLoaded && ragDocList.length > 0 && (
+                <div style={{ marginBottom: 8 }}>
+                  {ragDocList.map((doc) => (
+                    <div key={doc.source_filename} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 8px", background: "#0f0f23", border: "1px solid #1f1f38", borderRadius: 6, marginBottom: 3 }}>
+                      <div>
+                        <div style={{ fontSize: 10, color: "#c4b5fd", fontWeight: 700 }}>{doc.source_filename}</div>
+                        <div style={{ fontSize: 9, color: "#475569" }}>{doc.chunk_count} chunks · {doc.doc_type}{doc.has_dense_embeddings ? " · dense" : ""}</div>
+                      </div>
+                      <button
+                        onClick={() => handleDeleteRagDoc(doc.source_filename)}
+                        style={{ ...btnStyle("ghost"), fontSize: 9, padding: "2px 6px", color: "#f87171" }}
+                        title="Delete"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Upload form */}
+              <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
+                <select
+                  value={ragDocType}
+                  onChange={(e) => {
+                    const t = e.target.value as "resume" | "work_history";
+                    setRagDocType(t);
+                    setRagDocFilename(t === "resume" ? "resume.md" : "work_history.md");
+                  }}
+                  style={{ fontSize: 10, background: "#0a0a14", border: "1px solid #1f1f38", color: "#c4b5fd", borderRadius: 5, padding: "3px 6px", flex: 1 }}
+                >
+                  <option value="resume">resume.md</option>
+                  <option value="work_history">work_history.md</option>
+                </select>
+                <input
+                  value={ragDocFilename}
+                  onChange={(e) => setRagDocFilename(e.target.value)}
+                  style={{ fontSize: 10, background: "#0a0a14", border: "1px solid #1f1f38", color: "#94a3b8", borderRadius: 5, padding: "3px 6px", flex: 1 }}
+                  placeholder="filename.md"
+                />
+              </div>
+              <textarea
+                value={ragDocContent}
+                onChange={(e) => setRagDocContent(e.target.value)}
+                placeholder={"Paste your resume.md or work_history.md content here…"}
+                rows={4}
+                style={{ width: "100%", fontSize: 10, background: "#0a0a14", border: "1px solid #1f1f38", color: "#94a3b8", borderRadius: 6, padding: "6px 8px", resize: "vertical", boxSizing: "border-box", lineHeight: 1.5 }}
+              />
+              <button
+                onClick={handleUploadRagDoc}
+                disabled={uploadingRagDoc || !ragDocContent.trim()}
+                style={{ ...btnStyle("generate", uploadingRagDoc || !ragDocContent.trim()), marginTop: 4, width: "100%", fontSize: 10 }}
+              >
+                {uploadingRagDoc ? "Chunking & uploading…" : "⬆ Upload to RAG Pipeline"}
+              </button>
+              {ragUploadError && (
+                <div style={{ fontSize: 10, color: "#f87171", padding: "4px 8px", background: "#1a0808", borderRadius: 5, border: "1px solid #7f1d1d", marginTop: 4 }}>
+                  {ragUploadError}
+                </div>
+              )}
+              {ragUploadResult && (
+                <div style={{ fontSize: 10, color: "#6ee7b7", padding: "4px 8px", background: "#071a12", borderRadius: 5, border: "1px solid #064e3b", marginTop: 4 }}>
+                  {ragUploadResult}
                 </div>
               )}
             </Section>
