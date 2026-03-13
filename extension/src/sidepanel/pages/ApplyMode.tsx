@@ -1311,6 +1311,10 @@ export default function ApplyMode({ context }: Props) {
                     app={app}
                     updating={updatingStatus === app.id}
                     onStatusChange={(s) => handleStatusUpdate(app.id, s)}
+                    onNotesChange={async (notes) => {
+                      await applicationsApi.updateNotes(app.id, notes);
+                      setAllApplications((prev) => prev.map((a) => a.id === app.id ? { ...a, notes } : a));
+                    }}
                   />
                 ));
               })()}
@@ -1589,16 +1593,28 @@ function ApplicationRow({
   app,
   updating,
   onStatusChange,
+  onNotesChange,
 }: {
   app: TrackedApplication;
   updating: boolean;
   onStatusChange: (s: string) => void;
+  onNotesChange?: (notes: string | null) => Promise<void>;
 }) {
   const [showMenu, setShowMenu] = React.useState(false);
+  const [showNotes, setShowNotes] = React.useState(false);
+  const [notesText, setNotesText] = React.useState(app.notes ?? "");
+  const [savingNotes, setSavingNotes] = React.useState(false);
   const colors = STATUS_COLORS[app.status] ?? STATUS_COLORS.discovered;
 
+  const handleSaveNotes = async () => {
+    if (!onNotesChange) return;
+    setSavingNotes(true);
+    try { await onNotesChange(notesText.trim() || null); } catch { /* ignore */ } finally { setSavingNotes(false); setShowNotes(false); }
+  };
+
   return (
-    <div style={{ background: "#12121e", border: "1px solid #1f1f38", borderRadius: 8, padding: "8px 10px", display: "flex", gap: 8, alignItems: "flex-start" }}>
+    <div style={{ background: "#12121e", border: "1px solid #1f1f38", borderRadius: 8, padding: "8px 10px" }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 12, color: "#e2e8f0", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {app.company_name}
@@ -1619,6 +1635,14 @@ function ApplicationRow({
               onClick={(e) => { e.stopPropagation(); chrome.tabs.create({ url: app.job_url! }); e.preventDefault(); }}
             >↗</a>
           )}
+          {/* Notes toggle */}
+          <button
+            onClick={() => { setNotesText(app.notes ?? ""); setShowNotes((v) => !v); }}
+            style={{ background: "transparent", border: "none", cursor: "pointer", color: app.notes ? "#fbbf24" : "#374151", fontSize: 10, padding: 0, fontWeight: 700 }}
+            title={app.notes ? "View/edit notes" : "Add notes"}
+          >
+            {app.notes ? "📝" : "＋note"}
+          </button>
         </div>
       </div>
       <div style={{ position: "relative", flexShrink: 0 }}>
@@ -1677,6 +1701,32 @@ function ApplicationRow({
           </div>
         )}
       </div>
+      </div>
+      {/* Inline notes editor */}
+      {showNotes && (
+        <div style={{ marginTop: 6, borderTop: "1px solid #1f1f38", paddingTop: 6 }}>
+          <textarea
+            autoFocus
+            rows={3}
+            value={notesText}
+            onChange={(e) => setNotesText(e.target.value)}
+            placeholder="Interview notes, contacts, follow-up reminders…"
+            style={{ width: "100%", boxSizing: "border-box", background: "#0a0a14", border: "1px solid #1f1f38", borderRadius: 6, color: "#d1d5db", fontSize: 11, padding: "5px 8px", resize: "vertical", fontFamily: "system-ui,sans-serif", outline: "none" }}
+          />
+          <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", marginTop: 4 }}>
+            <button onClick={() => setShowNotes(false)} style={{ background: "transparent", border: "none", color: "#64748b", cursor: "pointer", fontSize: 10, fontWeight: 600 }}>Cancel</button>
+            <button onClick={() => void handleSaveNotes()} disabled={savingNotes} style={{ background: "#1a1a2e", border: "1px solid #2d1b69", borderRadius: 5, color: "#a78bfa", cursor: savingNotes ? "wait" : "pointer", fontSize: 10, fontWeight: 700, padding: "3px 10px" }}>
+              {savingNotes ? "Saving…" : "Save"}
+            </button>
+          </div>
+        </div>
+      )}
+      {/* Show saved notes as collapsed preview */}
+      {!showNotes && app.notes && (
+        <div style={{ marginTop: 4, fontSize: 10, color: "#94a3b8", borderTop: "1px solid #1f1f2a", paddingTop: 4, cursor: "pointer" }} onClick={() => { setNotesText(app.notes ?? ""); setShowNotes(true); }}>
+          {app.notes.length > 80 ? app.notes.slice(0, 80) + "…" : app.notes}
+        </div>
+      )}
     </div>
   );
 }

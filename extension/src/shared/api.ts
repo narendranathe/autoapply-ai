@@ -482,6 +482,7 @@ export interface TrackedApplication {
   similarity_score: number | null;
   changes_summary: string | null;
   rewrite_strategy: string | null;
+  notes: string | null;
 }
 
 export const applicationsApi = {
@@ -511,6 +512,11 @@ export const applicationsApi = {
   /** Update status of an application */
   updateStatus(applicationId: string, status: string): Promise<{ id: string; status: string }> {
     return patchJson(`/applications/${applicationId}`, { status });
+  },
+
+  /** Update (or clear) notes on an application */
+  updateNotes(applicationId: string, notes: string | null): Promise<{ id: string; notes: string | null }> {
+    return patchJson(`/applications/${applicationId}/notes`, { notes });
   },
 
   /** Get application statistics */

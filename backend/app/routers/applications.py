@@ -21,6 +21,7 @@ from app.models.application import Application
 from app.models.user import User
 from app.schemas.application import (
     ApplicationListResponse,
+    ApplicationNotesUpdate,
     ApplicationResponse,
     ApplicationStatusUpdate,
 )
@@ -221,3 +222,28 @@ async def update_application_status(
         "status": application.status,
         "message": f"Status updated to '{application.status}'",
     }
+
+
+@router.patch("/{application_id}/notes")
+async def update_application_notes(
+    application_id: uuid.UUID,
+    body: ApplicationNotesUpdate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Update (or clear) the notes field on an application."""
+    result = await db.execute(
+        select(Application).where(
+            Application.id == application_id,
+            Application.user_id == user.id,
+        )
+    )
+    app = result.scalar_one_or_none()
+    if not app:
+        raise HTTPException(404, "Application not found")
+
+    app.notes = body.notes
+    await db.commit()
+    await db.refresh(app)
+
+    return {"id": str(app.id), "notes": app.notes}
