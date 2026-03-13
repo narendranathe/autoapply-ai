@@ -49,6 +49,8 @@ from app.services.resume_generator import (
     generate_answer_drafts_parallel,
     generate_cover_letter,
     generate_full_latex_resume,
+    generate_professional_summary,
+    generate_role_bullets,
 )
 from app.services.resume_parser import ResumeParser
 from app.services.retrieval_agent import ResumeWithScore, RetrievalAgent
@@ -901,6 +903,120 @@ async def save_answer(
         "word_count": word_count,
         "question_hash": q_hash,
         "saved": True,
+    }
+
+
+# ── Professional summary endpoint ──────────────────────────────────────────
+
+
+@router.post("/generate/summary")
+async def generate_summary_endpoint(
+    company_name: str = Form(...),
+    role_title: str = Form(""),
+    jd_text: str = Form(""),
+    word_limit: int = Form(80),
+    candidate_name: str = Form(""),
+    providers_json: str = Form(""),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """
+    Generate a 2-4 sentence professional summary tailored to a role.
+    Returns {summary, provider_used, word_count}.
+    """
+    providers_list: list[dict] = []
+    with contextlib.suppress(Exception):
+        if providers_json.strip():
+            providers_list = _json.loads(providers_json)
+
+    from app.models.work_history import WorkHistoryEntry as WHModel
+
+    wh_rows = (
+        (
+            await db.execute(
+                select(WHModel).where(WHModel.user_id == user.id).order_by(WHModel.sort_order)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    work_history_text = "\n\n".join(
+        f"{r.role_title} at {r.company_name} ({r.start_date} – {r.end_date or 'present'})\n"
+        + "\n".join(f"• {b}" for b in (r.bullets or []))
+        for r in wh_rows
+    )
+
+    summary, provider_used = await generate_professional_summary(
+        company_name=company_name,
+        role_title=role_title,
+        jd_text=jd_text,
+        work_history_text=work_history_text,
+        providers=providers_list,
+        candidate_name=candidate_name,
+        word_limit=min(max(40, word_limit), 200),
+    )
+
+    return {
+        "summary": summary,
+        "provider_used": provider_used,
+        "word_count": len(summary.split()),
+    }
+
+
+# ── Tailored bullets endpoint ────────────────────────────────────────────────
+
+
+@router.post("/generate/bullets")
+async def generate_bullets_endpoint(
+    company_name: str = Form(...),
+    role_title: str = Form(""),
+    jd_text: str = Form(""),
+    num_bullets: int = Form(5),
+    target_company_for_context: str = Form(""),
+    providers_json: str = Form(""),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """
+    Generate ATS-optimized bullet points for a specific role, grounded in work history.
+    Returns {bullets, provider_used, count}.
+    """
+    providers_list: list[dict] = []
+    with contextlib.suppress(Exception):
+        if providers_json.strip():
+            providers_list = _json.loads(providers_json)
+
+    from app.models.work_history import WorkHistoryEntry as WHModel
+
+    wh_rows = (
+        (
+            await db.execute(
+                select(WHModel).where(WHModel.user_id == user.id).order_by(WHModel.sort_order)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    work_history_text = "\n\n".join(
+        f"{r.role_title} at {r.company_name} ({r.start_date} – {r.end_date or 'present'})\n"
+        + "\n".join(f"• {b}" for b in (r.bullets or []))
+        for r in wh_rows
+    )
+
+    bullets, provider_used = await generate_role_bullets(
+        company_name=company_name,
+        role_title=role_title,
+        jd_text=jd_text,
+        work_history_text=work_history_text,
+        providers=providers_list,
+        num_bullets=min(max(1, num_bullets), 10),
+        target_company_for_context=target_company_for_context,
+    )
+
+    return {
+        "bullets": bullets,
+        "provider_used": provider_used,
+        "count": len(bullets),
     }
 
 

@@ -1426,3 +1426,181 @@ async def generate_cover_letter(
         return (fallback[:1], ["fallback"])
 
     return (drafts, draft_providers)
+
+
+# ── Professional Summary Generation ─────────────────────────────────────────
+
+
+async def generate_professional_summary(
+    company_name: str,
+    role_title: str,
+    jd_text: str,
+    work_history_text: str,
+    providers: list[dict],
+    candidate_name: str = "",
+    word_limit: int = 80,
+) -> tuple[str, str]:
+    """
+    Generate a 2-4 sentence professional summary tailored to a specific role.
+
+    Returns (summary_text, provider_used).
+    Falls back to a rule-based summary if LLMs are unavailable.
+    """
+    system_prompt = (
+        "You are a professional resume writer. Generate concise, powerful professional summaries "
+        "that position candidates for specific roles. Be specific, not generic."
+    )
+    user_prompt = f"""Write a professional summary for a resume targeting this role.
+
+POSITION: {role_title}
+COMPANY: {company_name}
+CANDIDATE: {candidate_name or "the candidate"}
+TARGET WORD COUNT: {word_limit} words (2-4 sentences)
+
+JOB DESCRIPTION:
+{jd_text[:2000]}
+
+CANDIDATE BACKGROUND:
+{work_history_text[:2500]}
+
+Write ONE professional summary (no headers, no quotes). Be specific about skills and impact.
+Lead with years of experience or key expertise. End with value proposition for this role."""
+
+    sorted_providers = sorted(providers, key=lambda p: _PROVIDER_RANK.get(p.get("name", ""), 50))
+    for p in sorted_providers:
+        name = p.get("name", "")
+        api_key = p.get("api_key", "")
+        model = p.get("model", "")
+        try:
+            if name == "anthropic" and api_key:
+                raw = await _call_anthropic(system_prompt, user_prompt, api_key)
+            elif name == "openai" and api_key:
+                raw = await _call_openai(system_prompt, user_prompt, api_key)
+            elif name == "gemini" and api_key:
+                raw = await _call_gemini(
+                    system_prompt, user_prompt, api_key, model or "gemini-1.5-flash"
+                )
+            elif name == "groq" and api_key:
+                raw = await _call_groq(
+                    system_prompt, user_prompt, api_key, model or "llama-3.3-70b-versatile"
+                )
+            elif name == "kimi" and api_key:
+                raw = await _call_kimi(system_prompt, user_prompt, api_key)
+            else:
+                continue
+            text = raw.strip()
+            if text and len(text) > 50:
+                return (text[: word_limit * 7], name)  # ~7 chars/word safety cap
+        except Exception as exc:
+            logger.warning(f"Summary: provider '{name}' failed — {exc}")
+
+    # Rule-based fallback
+    years = ""
+    if work_history_text:
+        import re as _re
+
+        yr_match = _re.search(r"(\d+)\s*(?:\+\s*)?years?", work_history_text, _re.IGNORECASE)
+        if yr_match:
+            years = f"{yr_match.group(1)}+ years of experience"
+    fallback = (
+        f"{'Experienced' if not years else years.capitalize()} professional "
+        f"seeking {role_title} at {company_name}. "
+        "Proven track record of delivering impactful results and driving technical excellence."
+    )
+    return (fallback, "fallback")
+
+
+# ── Tailored Bullet Points Generation ───────────────────────────────────────
+
+
+async def generate_role_bullets(
+    company_name: str,
+    role_title: str,
+    jd_text: str,
+    work_history_text: str,
+    providers: list[dict],
+    num_bullets: int = 5,
+    target_company_for_context: str = "",
+) -> tuple[list[str], str]:
+    """
+    Generate tailored resume bullet points for a role, grounded in work history.
+
+    Returns (bullets_list, provider_used).
+    Each bullet starts with a strong action verb.
+    Falls back to extracting existing bullets from work history if LLMs fail.
+    """
+    system_prompt = (
+        "You are a professional resume writer specializing in ATS-optimized bullet points. "
+        "Write achievement-focused bullets using the XYZ formula: "
+        "Accomplished [X] as measured by [Y] by doing [Z]. "
+        "Start each bullet with a strong past-tense action verb."
+    )
+    user_prompt = f"""Generate {num_bullets} tailored resume bullet points.
+
+TARGET ROLE: {role_title}
+COMPANY: {company_name}{f' (targeting {target_company_for_context})' if target_company_for_context else ''}
+
+JOB DESCRIPTION (keywords to match):
+{jd_text[:2000]}
+
+CANDIDATE'S ACTUAL WORK HISTORY (base bullets on these real facts):
+{work_history_text[:3000]}
+
+Rules:
+1. Each bullet must start with a strong action verb (Led, Built, Reduced, Increased, etc.)
+2. Include metrics where possible (%, $, time, scale)
+3. Use keywords from the JD naturally
+4. Keep each bullet under 25 words
+5. Do NOT invent facts not in the work history
+
+Return EXACTLY {num_bullets} bullets, one per line, each starting with "• "."""
+
+    sorted_providers = sorted(providers, key=lambda p: _PROVIDER_RANK.get(p.get("name", ""), 50))
+    for p in sorted_providers:
+        name = p.get("name", "")
+        api_key = p.get("api_key", "")
+        model = p.get("model", "")
+        try:
+            if name == "anthropic" and api_key:
+                raw = await _call_anthropic(system_prompt, user_prompt, api_key)
+            elif name == "openai" and api_key:
+                raw = await _call_openai(system_prompt, user_prompt, api_key)
+            elif name == "gemini" and api_key:
+                raw = await _call_gemini(
+                    system_prompt, user_prompt, api_key, model or "gemini-1.5-flash"
+                )
+            elif name == "groq" and api_key:
+                raw = await _call_groq(
+                    system_prompt, user_prompt, api_key, model or "llama-3.3-70b-versatile"
+                )
+            elif name == "kimi" and api_key:
+                raw = await _call_kimi(system_prompt, user_prompt, api_key)
+            else:
+                continue
+            import re as _re
+
+            lines = [
+                line.lstrip("•- ").strip()
+                for line in raw.strip().splitlines()
+                if line.strip() and len(line.strip()) > 10
+            ]
+            # Normalize: ensure bullet prefix
+            bullets = [f"• {b}" if not b.startswith("•") else b for b in lines[:num_bullets]]
+            if bullets:
+                return (bullets, name)
+        except Exception as exc:
+            logger.warning(f"Bullets: provider '{name}' failed — {exc}")
+
+    # Fallback: extract existing bullets from work history
+    import re as _re
+
+    existing = _re.findall(r"[•\-\*]\s*(.+)", work_history_text)
+    fallback_bullets = (
+        [f"• {b.strip()}" for b in existing[:num_bullets]]
+        if existing
+        else [
+            f"• Delivered high-impact work as {role_title} contributing to team success.",
+            f"• Collaborated cross-functionally to drive results at {company_name}.",
+        ]
+    )
+    return (fallback_bullets[:num_bullets], "fallback")
