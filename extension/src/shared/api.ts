@@ -376,6 +376,26 @@ export const vaultApi = {
     return post("/vault/upload", fd);
   },
 
+  /** Get a single resume with full content */
+  getResume(resumeId: string): Promise<{
+    resume_id: string;
+    filename: string;
+    version_tag: string | null;
+    target_company: string | null;
+    target_role: string | null;
+    ats_score: number | null;
+    bullet_count: number;
+    is_base_template: boolean;
+    is_generated: boolean;
+    github_path: string | null;
+    latex_content: string | null;
+    markdown_content: string | null;
+    raw_text: string | null;
+    created_at: string;
+  }> {
+    return get(`/vault/resumes/${resumeId}`);
+  },
+
   /** Delete a resume from the vault */
   deleteResume(resumeId: string): Promise<void> {
     return ensureInit().then(() =>

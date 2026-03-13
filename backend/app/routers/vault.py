@@ -203,6 +203,41 @@ async def list_resumes(
     }
 
 
+# ── Get single resume ──────────────────────────────────────────────────────
+
+
+@router.get("/resumes/{resume_id}")
+async def get_resume(
+    resume_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Get a single resume including its full text/latex content."""
+    result = await db.execute(
+        select(Resume).where(Resume.id == resume_id, Resume.user_id == user.id)
+    )
+    r = result.scalar_one_or_none()
+    if not r:
+        raise HTTPException(status_code=404, detail="Resume not found")
+
+    return {
+        "resume_id": str(r.id),
+        "filename": r.filename,
+        "version_tag": r.version_tag,
+        "target_company": r.target_company,
+        "target_role": r.target_role,
+        "ats_score": r.ats_score,
+        "bullet_count": r.bullet_count,
+        "is_base_template": r.is_base_template,
+        "is_generated": r.is_generated,
+        "github_path": r.github_path,
+        "latex_content": r.latex_content,
+        "markdown_content": r.markdown_content,
+        "raw_text": r.raw_text,
+        "created_at": r.created_at.isoformat(),
+    }
+
+
 # ── Delete ─────────────────────────────────────────────────────────────────
 
 

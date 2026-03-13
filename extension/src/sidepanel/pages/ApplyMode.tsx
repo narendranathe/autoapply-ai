@@ -143,6 +143,9 @@ export default function ApplyMode({ context }: Props) {
   // C5/C6: application tracking
   const [trackedAppId, setTrackedAppId] = useState<string | null>(null);
   const [pastApplications, setPastApplications] = useState<TrackedApplication[]>([]);
+  // Resume content viewer
+  const [viewingResumeId, setViewingResumeId] = useState<string | null>(null);
+  const [resumeContent, setResumeContent] = useState<string>("");
   // L6: resume tailoring
   const [tailoringResumeId, setTailoringResumeId] = useState<string | null>(null);
   const [tailorResults, setTailorResults] = useState<Record<string, GenerateTailoredResponse>>({});
@@ -943,6 +946,29 @@ export default function ApplyMode({ context }: Props) {
               {resumes.map((r) => (
                 <div key={r.resumeId}>
                   <ResumeCardComponent resume={r} onAttach={() => handleAttach(r)} />
+                  {/* View content inline */}
+                  <div style={{ display: "flex", gap: 6, marginTop: 4, marginBottom: context.jdText ? 0 : 8 }}>
+                    <button
+                      onClick={async () => {
+                        if (viewingResumeId === r.resumeId) { setViewingResumeId(null); return; }
+                        const res = await vaultApi.getResume(r.resumeId).catch(() => null);
+                        if (res) {
+                          setResumeContent(res.markdown_content || res.raw_text || res.latex_content || "No content available.");
+                          setViewingResumeId(r.resumeId);
+                        }
+                      }}
+                      style={{ ...btnStyle("ghost"), fontSize: 10, padding: "3px 8px" }}
+                    >
+                      {viewingResumeId === r.resumeId ? "Hide" : "View"}
+                    </button>
+                  </div>
+                  {viewingResumeId === r.resumeId && (
+                    <div style={{ marginBottom: 6, background: "#0a0a14", border: "1px solid #1f1f38", borderRadius: 8, padding: "8px 10px", maxHeight: 300, overflowY: "auto" }}>
+                      <pre style={{ margin: 0, fontSize: 10, color: "#94a3b8", whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "system-ui,sans-serif", lineHeight: 1.5 }}>
+                        {resumeContent}
+                      </pre>
+                    </div>
+                  )}
                   {/* L6: Tailor for this job button */}
                   {context.jdText && (
                     <div style={{ marginTop: 4, marginBottom: 8 }}>
