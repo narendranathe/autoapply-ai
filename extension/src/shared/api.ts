@@ -553,6 +553,20 @@ export const vaultApi = {
     }
     return post("/vault/generate/bullets", fd);
   },
+
+  /** Get per-user vault analytics: answer stats, reward scores, top companies */
+  getAnalytics(): Promise<{
+    answers: {
+      total: number;
+      avg_reward_score: number | null;
+      feedback_distribution: Record<string, number>;
+      by_category: Record<string, { count: number; avg_reward: number | null; acceptance_rate: number | null }>;
+    };
+    resumes: { total: number; unique_companies: number };
+    top_companies_by_answers: Array<{ company: string; answer_count: number }>;
+  }> {
+    return get("/vault/analytics");
+  },
 };
 
 // ── Application Tracking API ────────────────────────────────────────────────

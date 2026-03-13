@@ -157,6 +157,8 @@ export default function ApplyMode({ context }: Props) {
   const [updatingStatus, setUpdatingStatus] = useState<string | null>(null);
   const [historySearch, setHistorySearch] = useState("");
   const [historyStatusFilter, setHistoryStatusFilter] = useState<string>("all");
+  // Vault analytics
+  const [vaultAnalytics, setVaultAnalytics] = useState<Awaited<ReturnType<typeof vaultApi.getAnalytics>> | null>(null);
   // T3: interview prep
   const [interviewQuestions, setInterviewQuestions] = useState<InterviewQuestion[]>([]);
   const [interviewLoading, setInterviewLoading] = useState(false);
@@ -306,9 +308,11 @@ export default function ApplyMode({ context }: Props) {
     Promise.all([
       applicationsApi.list(),
       applicationsApi.getStats(),
-    ]).then(([listRes, statsRes]) => {
+      vaultApi.getAnalytics().catch(() => null),
+    ]).then(([listRes, statsRes, analyticsRes]) => {
       setAllApplications(listRes.items);
       setAppStats(statsRes);
+      if (analyticsRes) setVaultAnalytics(analyticsRes);
     }).catch(() => {}).finally(() => setHistoryLoading(false));
   }, [tab]);
 
@@ -1420,6 +1424,34 @@ export default function ApplyMode({ context }: Props) {
                   </div>
                 ))}
               </div>
+            )}
+
+            {/* Vault analytics mini-dashboard */}
+            {vaultAnalytics && (
+              <Section label="Answer Vault Stats">
+                <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
+                  {[
+                    { label: "Answers Saved", value: vaultAnalytics.answers.total },
+                    { label: "Resumes", value: vaultAnalytics.resumes.total },
+                    { label: "Avg Reward", value: vaultAnalytics.answers.avg_reward_score != null ? vaultAnalytics.answers.avg_reward_score.toFixed(2) : "—" },
+                    { label: "Accept Rate", value: (() => { const used = vaultAnalytics.answers.feedback_distribution["used_as_is"] ?? 0; const total = vaultAnalytics.answers.total; return total > 0 ? `${Math.round(used / total * 100)}%` : "—"; })() },
+                  ].map(({ label, value }) => (
+                    <div key={label} style={{ flex: 1, textAlign: "center", background: "#0a0a14", border: "1px solid #1f1f38", borderRadius: 8, padding: "5px 2px" }}>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: "#a78bfa" }}>{value}</div>
+                      <div style={{ fontSize: 8, color: "#475569", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>{label}</div>
+                    </div>
+                  ))}
+                </div>
+                {vaultAnalytics.top_companies_by_answers.length > 0 && (
+                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                    {vaultAnalytics.top_companies_by_answers.slice(0, 5).map(({ company, answer_count }) => (
+                      <span key={company} style={{ background: "#12121e", border: "1px solid #1f1f38", borderRadius: 99, fontSize: 9, padding: "2px 7px", color: "#7c3aed" }}>
+                        {company} <span style={{ color: "#475569" }}>({answer_count})</span>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </Section>
             )}
 
             {/* Search + Filter bar */}
