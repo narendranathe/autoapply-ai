@@ -177,6 +177,9 @@ export default function ApplyMode({ context }: Props) {
   const [coverTone, setCoverTone] = useState<"professional" | "enthusiastic" | "concise">("professional");
   const [coverWordLimit, setCoverWordLimit] = useState<300 | 400 | 500>(400);
   const [coverCopied, setCoverCopied] = useState(false);
+  const [savingCoverLetter, setSavingCoverLetter] = useState(false);
+  const [savedCoverLetters, setSavedCoverLetters] = useState<Array<{ id: string; company_name: string; role_title: string | null; answer_text: string; created_at: string }>>([]);
+  const [coverLettersSectionOpen, setCoverLettersSectionOpen] = useState(false);
 
   const PROVIDER_RANK: Record<string, number> = { anthropic: 1, openai: 2, gemini: 3, groq: 4, perplexity: 5, kimi: 6 };
   const PROVIDER_MODELS: Record<string, string> = { anthropic: "claude-sonnet-4-6", openai: "gpt-4o", gemini: "gemini-1.5-flash", groq: "llama-3.3-70b-versatile", perplexity: "sonar", kimi: "moonshot-v1-32k" };
@@ -463,6 +466,23 @@ export default function ApplyMode({ context }: Props) {
       setCoverError(err instanceof Error ? err.message : "Generation failed");
     } finally {
       setCoverLoading(false);
+    }
+  };
+
+  const handleSaveCoverLetter = async () => {
+    if (!coverLetter.trim() || !context.company) return;
+    setSavingCoverLetter(true);
+    try {
+      await vaultApi.saveAnswer({
+        questionText: `Cover letter for ${context.roleTitle || "position"} at ${context.company}`,
+        questionCategory: "cover_letter",
+        answerText: coverLetter.trim(),
+        companyName: context.company,
+        roleTitle: context.roleTitle,
+        llmProviderUsed: coverDraftProviders[coverSelectedDraft],
+      });
+    } catch { /* ignore */ } finally {
+      setSavingCoverLetter(false);
     }
   };
 
@@ -1439,21 +1459,30 @@ export default function ApplyMode({ context }: Props) {
                   <span style={{ fontSize: 10, color: "#475569" }}>
                     {coverLetter.split(/\s+/).filter(Boolean).length} words
                   </span>
-                  <button
-                    onClick={handleCopyLetter}
-                    style={{
-                      background: coverCopied ? "#166534" : "#1e1e3a",
-                      color: coverCopied ? "#86efac" : "#c4b5fd",
-                      border: `1px solid ${coverCopied ? "#166534" : "#3730a3"}`,
-                      borderRadius: 6,
-                      padding: "3px 10px",
-                      fontSize: 10,
-                      fontWeight: 600,
-                      cursor: "pointer",
-                    }}
-                  >
-                    {coverCopied ? "✓ Copied" : "Copy"}
-                  </button>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button
+                      onClick={() => void handleSaveCoverLetter()}
+                      disabled={savingCoverLetter}
+                      style={{ background: "#12121e", color: "#a78bfa", border: "1px solid #2d1b69", borderRadius: 6, padding: "3px 10px", fontSize: 10, fontWeight: 600, cursor: savingCoverLetter ? "wait" : "pointer", opacity: savingCoverLetter ? 0.6 : 1 }}
+                    >
+                      {savingCoverLetter ? "Saving…" : "Save"}
+                    </button>
+                    <button
+                      onClick={handleCopyLetter}
+                      style={{
+                        background: coverCopied ? "#166534" : "#1e1e3a",
+                        color: coverCopied ? "#86efac" : "#c4b5fd",
+                        border: `1px solid ${coverCopied ? "#166534" : "#3730a3"}`,
+                        borderRadius: 6,
+                        padding: "3px 10px",
+                        fontSize: 10,
+                        fontWeight: 600,
+                        cursor: "pointer",
+                      }}
+                    >
+                      {coverCopied ? "✓ Copied" : "Copy"}
+                    </button>
+                  </div>
                 </div>
                 <textarea
                   value={coverLetter}
@@ -1475,6 +1504,48 @@ export default function ApplyMode({ context }: Props) {
                 />
               </div>
             )}
+
+            {/* Past saved cover letters for this company */}
+            <div style={{ marginTop: 8 }}>
+              <button
+                onClick={async () => {
+                  if (!coverLettersSectionOpen) {
+                    try {
+                      const res = await vaultApi.listCoverLetters(context.company, 10);
+                      setSavedCoverLetters(res.items);
+                    } catch { /* ignore */ }
+                  }
+                  setCoverLettersSectionOpen((v) => !v);
+                }}
+                style={{ background: "transparent", border: "none", color: "#475569", cursor: "pointer", fontSize: 10, fontWeight: 700, padding: 0 }}
+              >
+                {coverLettersSectionOpen ? "▲ Hide past letters" : "▼ Past saved letters"}
+              </button>
+              {coverLettersSectionOpen && (
+                <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 6 }}>
+                  {savedCoverLetters.length === 0 && (
+                    <div style={{ fontSize: 11, color: "#374151" }}>No saved cover letters yet.</div>
+                  )}
+                  {savedCoverLetters.map((cl) => (
+                    <div key={cl.id} style={{ background: "#12121e", border: "1px solid #1f1f38", borderRadius: 8, padding: "8px 10px" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                        <span style={{ fontSize: 11, color: "#c4b5fd", fontWeight: 600 }}>{cl.company_name}{cl.role_title ? ` — ${cl.role_title}` : ""}</span>
+                        <span style={{ fontSize: 9, color: "#374151" }}>{new Date(cl.created_at).toLocaleDateString()}</span>
+                      </div>
+                      <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 6, lineHeight: 1.5 }}>
+                        {cl.answer_text.slice(0, 120)}…
+                      </div>
+                      <button
+                        onClick={() => { setCoverLetter(cl.answer_text); setCoverLettersSectionOpen(false); }}
+                        style={{ background: "#1a1a2e", border: "1px solid #2d1b69", borderRadius: 5, color: "#a78bfa", cursor: "pointer", fontSize: 10, fontWeight: 700, padding: "3px 10px" }}
+                      >
+                        Load
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </>
         )}
 

@@ -869,6 +869,51 @@ async def save_answer(
     }
 
 
+# ── Saved cover letters ─────────────────────────────────────────────────────
+
+
+@router.get("/cover-letters")
+async def list_cover_letters(
+    company: str | None = None,
+    limit: int = 20,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """
+    List saved cover letters (ApplicationAnswers with category = cover_letter).
+    Optionally filter by company_name.
+    """
+    stmt = (
+        select(ApplicationAnswer)
+        .where(
+            ApplicationAnswer.user_id == user.id,
+            ApplicationAnswer.question_category == "cover_letter",
+        )
+        .order_by(ApplicationAnswer.created_at.desc())
+        .limit(min(limit, 50))
+    )
+    if company:
+        stmt = stmt.where(ApplicationAnswer.company_name.ilike(f"%{company}%"))
+
+    rows = (await db.execute(stmt)).scalars().all()
+    return {
+        "items": [
+            {
+                "id": str(r.id),
+                "company_name": r.company_name,
+                "role_title": r.role_title,
+                "answer_text": r.answer_text,
+                "word_count": r.word_count,
+                "reward_score": r.reward_score,
+                "llm_provider_used": r.llm_provider_used,
+                "created_at": r.created_at.isoformat(),
+            }
+            for r in rows
+        ],
+        "total": len(rows),
+    }
+
+
 # ── Answer feedback (RL reward signal) ────────────────────────────────────
 
 

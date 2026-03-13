@@ -451,6 +451,26 @@ export const vaultApi = {
     return post("/vault/generate/cover-letter", fd);
   },
 
+  /** List saved cover letters, optionally filtered by company */
+  listCoverLetters(company?: string, limit?: number): Promise<{
+    items: Array<{
+      id: string;
+      company_name: string;
+      role_title: string | null;
+      answer_text: string;
+      word_count: number;
+      reward_score: number | null;
+      llm_provider_used: string | null;
+      created_at: string;
+    }>;
+    total: number;
+  }> {
+    const params: Record<string, string> = {};
+    if (company) params.company = company;
+    if (limit) params.limit = String(limit);
+    return get("/vault/cover-letters", params);
+  },
+
   /** Shorten an answer draft to fit within a character limit */
   trimAnswer(params: {
     answerText: string;
