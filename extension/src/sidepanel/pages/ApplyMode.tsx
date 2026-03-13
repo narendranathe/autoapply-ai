@@ -1,8 +1,28 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { ATSScoreResult, PageContext, ResumeCard } from "../../shared/types";
 import { applicationsApi, vaultApi, workHistoryApi, type GenerateTailoredResponse, type InterviewQuestion, type RetrieveResponse, type SimilarAnswer, type TrackedApplication } from "../../shared/api";
 import ATSScoreBar from "../components/ATSScoreBar";
 import ResumeCardComponent from "../components/ResumeCard";
+
+// ── Draft persistence helpers (sessionStorage, keyed by job URL) ────────────
+
+function draftKey(jobUrl: string | undefined, suffix: string): string {
+  const base = jobUrl ? btoa(jobUrl).slice(0, 32) : "nojob";
+  return `aap_drafts_${base}_${suffix}`;
+}
+
+function loadDraftSession<T>(jobUrl: string | undefined, suffix: string, fallback: T): T {
+  try {
+    const raw = sessionStorage.getItem(draftKey(jobUrl, suffix));
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch { return fallback; }
+}
+
+function saveDraftSession(jobUrl: string | undefined, suffix: string, value: unknown): void {
+  try {
+    sessionStorage.setItem(draftKey(jobUrl, suffix), JSON.stringify(value));
+  } catch { /* storage full — ignore */ }
+}
 
 interface Props { context: PageContext }
 
@@ -84,26 +104,35 @@ function getProfileValue(fieldType: string, profile: UserProfile | null): string
 }
 
 export default function ApplyMode({ context }: Props) {
+  const jobUrl = context.jobUrl;
   const [tab, setTab] = useState<Tab>("resumes");
   const [resumes, setResumes] = useState<ResumeCard[]>([]);
   const [ats, setAts] = useState<ATSScoreResult | null>(null);
   const [loading, setLoading] = useState(false);
-  const [answerDrafts, setAnswerDrafts] = useState<Record<string, string[]>>({});
-  const [selectedAnswers, setSelectedAnswers] = useState<Record<string, number>>({});
+  const [answerDrafts, setAnswerDrafts] = useState<Record<string, string[]>>(
+    () => loadDraftSession(jobUrl, "answerDrafts", {})
+  );
+  const [selectedAnswers, setSelectedAnswers] = useState<Record<string, number>>(
+    () => loadDraftSession(jobUrl, "selectedAnswers", {})
+  );
   const [savingAnswer, setSavingAnswer] = useState<string | null>(null);
   const [generatingAnswer, setGeneratingAnswer] = useState<string | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [workHistoryText, setWorkHistoryText] = useState<string>("");
   const [providers, setProviders] = useState<Array<{ name: string; apiKey: string; model?: string }>>([]);
   const [providersLoaded, setProvidersLoaded] = useState(false);
-  const [draftProviders, setDraftProviders] = useState<Record<string, string[]>>({});
+  const [draftProviders, setDraftProviders] = useState<Record<string, string[]>>(
+    () => loadDraftSession(jobUrl, "draftProviders", {})
+  );
   // answerId is set after saveAnswer — needed to record feedback
   const [savedAnswerIds, setSavedAnswerIds] = useState<Record<string, string>>({});
   const [generationErrors, setGenerationErrors] = useState<Record<string, string>>({});
   // "From Memory" similar answers per question
   const [memoryAnswers, setMemoryAnswers] = useState<Record<string, SimilarAnswer[]>>({});
   // C3: edited answer text — tracks live edits to LLM drafts before saving
-  const [editedTexts, setEditedTexts] = useState<Record<string, string>>({});
+  const [editedTexts, setEditedTexts] = useState<Record<string, string>>(
+    () => loadDraftSession(jobUrl, "editedTexts", {})
+  );
   // C2: resume upload state
   const [uploadError, setUploadError] = useState<string>("");
   const [uploadSuccess, setUploadSuccess] = useState<string>("");
@@ -131,10 +160,16 @@ export default function ApplyMode({ context }: Props) {
   const [interviewError, setInterviewError] = useState<string>("");
   const [expandedPrepIdx, setExpandedPrepIdx] = useState<number | null>(null);
   // Cover letter tab
-  const [coverDrafts, setCoverDrafts] = useState<string[]>([]);
-  const [coverDraftProviders, setCoverDraftProviders] = useState<string[]>([]);
+  const [coverDrafts, setCoverDrafts] = useState<string[]>(
+    () => loadDraftSession(jobUrl, "coverDrafts", [])
+  );
+  const [coverDraftProviders, setCoverDraftProviders] = useState<string[]>(
+    () => loadDraftSession(jobUrl, "coverDraftProviders", [])
+  );
   const [coverSelectedDraft, setCoverSelectedDraft] = useState(0);
-  const [coverLetter, setCoverLetter] = useState<string>("");
+  const [coverLetter, setCoverLetter] = useState<string>(
+    () => loadDraftSession(jobUrl, "coverLetter", "")
+  );
   const [coverLoading, setCoverLoading] = useState(false);
   const [coverError, setCoverError] = useState<string>("");
   const [coverTone, setCoverTone] = useState<"professional" | "enthusiastic" | "concise">("professional");
@@ -201,6 +236,19 @@ export default function ApplyMode({ context }: Props) {
       .catch(console.error)
       .finally(() => setLoading(false));
   }, [context.company]);
+
+  // Draft persistence — save to sessionStorage whenever drafts change
+  const persistDrafts = useCallback(() => {
+    saveDraftSession(jobUrl, "answerDrafts", answerDrafts);
+    saveDraftSession(jobUrl, "selectedAnswers", selectedAnswers);
+    saveDraftSession(jobUrl, "draftProviders", draftProviders);
+    saveDraftSession(jobUrl, "editedTexts", editedTexts);
+    saveDraftSession(jobUrl, "coverLetter", coverLetter);
+    saveDraftSession(jobUrl, "coverDrafts", coverDrafts);
+    saveDraftSession(jobUrl, "coverDraftProviders", coverDraftProviders);
+  }, [jobUrl, answerDrafts, selectedAnswers, draftProviders, editedTexts, coverLetter, coverDrafts, coverDraftProviders]);
+
+  useEffect(() => { persistDrafts(); }, [persistDrafts]);
 
   // C5: Auto-track this application visit (upsert — idempotent)
   useEffect(() => {
