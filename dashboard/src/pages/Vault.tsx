@@ -232,6 +232,7 @@ function ResumeDrawer({
         </span>
         <button
           onClick={onClose}
+          aria-label="Close resume preview"
           style={{
             background: "none",
             border: "none",

@@ -278,6 +278,7 @@ function ProvidersTab() {
                     style={btnGhost({ color: EMBER, borderColor: `${EMBER}44` })}
                     onClick={() => deleteMutation.mutate(name)}
                     disabled={deleteMutation.isPending}
+                    aria-label={`Delete ${name} provider`}
                   >
                     <Trash2 size={13} />
                   </button>

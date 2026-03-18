@@ -58,9 +58,15 @@ export function Sidebar() {
                 textDecoration: "none",
                 transition: "color 0.15s, background 0.15s",
               })}
+              aria-label={label}
             >
-              <Icon size={16} />
-              <span>{label}</span>
+              {({ isActive }) => (
+                <>
+                  <Icon size={16} aria-hidden="true" />
+                  <span>{label}</span>
+                  {isActive && <span className="sr-only">(current page)</span>}
+                </>
+              )}
             </NavLink>
           ))}
         </nav>

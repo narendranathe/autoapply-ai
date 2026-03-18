@@ -24,3 +24,8 @@ body {
 }
 
 #root { display: flex; min-height: 100svh; }
+
+@keyframes mercuryShimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}

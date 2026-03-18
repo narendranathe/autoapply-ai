@@ -168,6 +168,7 @@ function RowDrawer({
           </div>
           <button
             onClick={onClose}
+            aria-label="Close drawer"
             style={{
               background: "none",
               border: "none",
@@ -682,6 +683,7 @@ function TableView({ apps }: { apps: ApplicationRecord[] }) {
             </select>
             <button
               onClick={() => setSelectedIds(new Set())}
+              aria-label="Clear selection"
               style={{
                 background: "none",
                 border: "none",

@@ -5,11 +5,13 @@ import { AuthProvider } from "./providers/AuthProvider";
 import { ProtectedRoute } from "./components/ProtectedRoute";
 import { Sidebar } from "./components/Sidebar";
 import { MobileBanner } from "./components/MobileBanner";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import Mirror from "./pages/Mirror";
 import Applications from "./pages/Applications";
 import Vault from "./pages/Vault";
 import Reflection from "./pages/Reflection";
 import Settings from "./pages/Settings";
+import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000 } },
@@ -29,6 +31,7 @@ function Layout() {
           <Route path="/vault" element={<Vault />} />
           <Route path="/reflection" element={<Reflection />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="*" element={<NotFound />} />
         </Routes>
       </main>
     </div>
@@ -37,14 +40,16 @@ function Layout() {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <QueryClientProvider client={queryClient}>
-        <BrowserRouter>
-          <ProtectedRoute>
-            <Layout />
-          </ProtectedRoute>
-        </BrowserRouter>
-      </QueryClientProvider>
-    </AuthProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        <QueryClientProvider client={queryClient}>
+          <BrowserRouter>
+            <ProtectedRoute>
+              <Layout />
+            </ProtectedRoute>
+          </BrowserRouter>
+        </QueryClientProvider>
+      </AuthProvider>
+    </ErrorBoundary>
   );
 }
