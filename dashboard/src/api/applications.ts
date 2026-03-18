@@ -65,3 +65,11 @@ export async function patchApplicationStatus(
   const { data } = await client.patch<ApplicationRecord>(`/applications/${id}`, { status });
   return data;
 }
+
+export async function fetchSimilarApplications(
+  client: AxiosInstance,
+  id: string,
+): Promise<ApplicationRecord[]> {
+  const { data } = await client.get<ApplicationRecord[]>(`/applications/${id}/similar`);
+  return data;
+}
