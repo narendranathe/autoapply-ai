@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from app.models.application import Application
+    from app.models.user_provider_config import UserProviderConfig
 
 
 from sqlalchemy import Boolean, String, Text
@@ -33,3 +34,6 @@ class User(Base, TimestampMixin):
 
     # Relationships
     applications: Mapped[list["Application"]] = relationship(back_populates="user")
+    provider_configs: Mapped[list["UserProviderConfig"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )

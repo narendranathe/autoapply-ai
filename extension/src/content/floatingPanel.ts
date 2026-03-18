@@ -92,18 +92,19 @@ const FIELD_PATTERNS: Array<{ type: FieldType; patterns: RegExp[] }> = [
 ];
 
 const QUESTION_CATEGORY_PATTERNS: Array<{ category: QuestionCategory; patterns: RegExp[] }> = [
-  { category: "why_company",    patterns: [/why.+(want|interested|join|work|here|company)/i, /what draws you/i] },
-  { category: "why_hire",       patterns: [/why (should|hire|choose|best candidate)/i, /what makes you (unique|stand out)/i] },
-  { category: "about_yourself", patterns: [/tell us about yourself/i, /introduce yourself/i, /walk us through/i, /background/i] },
-  { category: "strength",       patterns: [/strength/i, /excel at/i, /best at/i] },
-  { category: "weakness",       patterns: [/weakness/i, /area.+improvement/i, /struggle with/i] },
-  { category: "challenge",      patterns: [/challenge/i, /difficult situation/i, /obstacle/i, /failure/i, /overcame/i] },
-  { category: "leadership",     patterns: [/led|lead/i, /leadership/i, /managed a team/i, /team lead/i] },
-  { category: "conflict",       patterns: [/conflict/i, /disagreement/i, /difficult coworker/i, /colleague/i] },
-  { category: "motivation",     patterns: [/motivat/i, /passion/i, /what drives/i] },
-  { category: "five_years",     patterns: [/5 years|five years/i, /career goal/i, /long.term/i, /see yourself/i] },
-  { category: "impact",         patterns: [/proud of/i, /biggest accomplishment/i, /greatest achievement/i] },
-  { category: "fit",            patterns: [/align.+value/i, /culture/i, /what do you know about us/i, /research.+company/i] },
+  { category: "cover_letter",   patterns: [/cover.?letter/i, /letter of interest/i, /motivation letter/i] },
+  { category: "why_company",    patterns: [/why.+(want|interested|join|work|here|company)/i, /what draws you/i, /why do you want to work/i] },
+  { category: "why_hire",       patterns: [/why (should|hire|choose|best candidate)/i, /what makes you (unique|stand out)/i, /why are you the right/i] },
+  { category: "about_yourself", patterns: [/tell us about yourself/i, /introduce yourself/i, /walk us through/i, /about yourself/i] },
+  { category: "strength",       patterns: [/strength/i, /excel at/i, /best at/i, /what are you good at/i] },
+  { category: "weakness",       patterns: [/weakness/i, /area.+improvement/i, /struggle with/i, /grow.+professionally/i] },
+  { category: "challenge",      patterns: [/challenge/i, /difficult situation/i, /obstacle/i, /failure/i, /overcame/i, /tough problem/i] },
+  { category: "leadership",     patterns: [/led|lead/i, /leadership/i, /managed a team/i, /team lead/i, /mentor/i] },
+  { category: "conflict",       patterns: [/conflict/i, /disagreement/i, /difficult coworker/i, /colleague/i, /difficult person/i] },
+  { category: "motivation",     patterns: [/motivat/i, /passion/i, /what drives/i, /inspires you/i] },
+  { category: "five_years",     patterns: [/5 years|five years/i, /career goal/i, /long.term/i, /see yourself/i, /where do you see/i] },
+  { category: "impact",         patterns: [/proud of/i, /biggest accomplishment/i, /greatest achievement/i, /most proud/i] },
+  { category: "fit",            patterns: [/align.+value/i, /culture/i, /what do you know about us/i, /research.+company/i, /our mission/i] },
   { category: "sponsorship",    patterns: [/sponsor/i, /visa/i, /work authorization/i] },
 ];
 

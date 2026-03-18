@@ -3,6 +3,8 @@ import type { ATSScoreResult, PageContext, ResumeCard } from "../../shared/types
 import { applicationsApi, vaultApi, workHistoryApi, type GenerateTailoredResponse, type InterviewQuestion, type RetrieveResponse, type SimilarAnswer, type TrackedApplication } from "../../shared/api";
 import ATSScoreBar from "../components/ATSScoreBar";
 import ResumeCardComponent from "../components/ResumeCard";
+import { useTabNavigation } from "../hooks/useTabNavigation";
+import type { Tab } from "../hooks/useTabNavigation";
 
 // ── Draft persistence helpers (sessionStorage, keyed by job URL) ────────────
 
@@ -25,8 +27,6 @@ function saveDraftSession(jobUrl: string | undefined, suffix: string, value: unk
 }
 
 interface Props { context: PageContext }
-
-type Tab = "resumes" | "fields" | "questions" | "history" | "prep" | "cover";
 
 function scoreColor(s: number): string {
   if (s >= 80) return "#10b981";
@@ -105,7 +105,7 @@ function getProfileValue(fieldType: string, profile: UserProfile | null): string
 
 export default function ApplyMode({ context }: Props) {
   const jobUrl = context.jobUrl;
-  const [tab, setTab] = useState<Tab>("resumes");
+  const { tab, setTab } = useTabNavigation();
   const [resumes, setResumes] = useState<ResumeCard[]>([]);
   const [ats, setAts] = useState<ATSScoreResult | null>(null);
   const [loading, setLoading] = useState(false);
