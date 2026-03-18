@@ -112,15 +112,9 @@ router = APIRouter()
 # router.include_router(interview_router)
 
 # ---------------------------------------------------------------------------
-# Migration bridge — while this package is being built out, the flat vault.py
-# has been renamed to vault_flat.py so that app/main.py keeps working unchanged.
-#
-# Migration steps:
-#   1. git mv backend/app/routers/vault.py backend/app/routers/vault_flat.py
-#   2. Create this vault/ package (done — you are here).
-#   3. Implement sub-modules one at a time; move routes out of vault_flat.py.
-#   4. When all routes are migrated, remove vault_flat.py and this comment block.
+# Migration bridge — vault_flat.py holds all current routes while sub-modules
+# are built out. Once all sub-modules are wired in, remove vault_flat.py.
 # ---------------------------------------------------------------------------
-# TODO(#12): remove the bridge import below once all sub-modules are wired in.
-# from app.routers.vault_flat import router as _flat_router
-# router.include_router(_flat_router)
+from app.routers.vault_flat import router as _flat_router  # noqa: E402
+
+router.include_router(_flat_router)
