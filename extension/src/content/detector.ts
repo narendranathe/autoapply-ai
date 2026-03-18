@@ -38,6 +38,22 @@ function getFieldLabel(el: HTMLElement): string {
     parent = parent.parentElement;
   }
 
+  // Check field wrapper with class-based label
+  const wrapper = el.closest("[class*='field'], [class*='Field'], [class*='form-group'], [class*='form-item'], [class*='FormItem'], [class*='FormField']");
+  if (wrapper) {
+    const wrapperLabel = wrapper.querySelector("label, legend, [class*='label'], [class*='Label']");
+    if (wrapperLabel && wrapperLabel !== el) {
+      const text = wrapperLabel.textContent?.trim() || "";
+      if (text) return text;
+    }
+  }
+  // Check previous sibling for label text
+  const prev = el.previousElementSibling;
+  if (prev && ["SPAN", "DIV", "LABEL", "P"].includes(prev.tagName)) {
+    const text = prev.textContent?.trim() || "";
+    if (text && text.length < 80) return text;
+  }
+
   return el.getAttribute("name") || "";
 }
 
@@ -63,14 +79,14 @@ function classifyField(el: HTMLInputElement | HTMLTextAreaElement | HTMLSelectEl
 function detectFields(): DetectedField[] {
   const inputs = Array.from(
     document.querySelectorAll<HTMLInputElement | HTMLSelectElement>(
-      "input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=checkbox]):not([type=radio]), select"
+      "input:not([type=hidden]):not([type=submit]):not([type=button]), select"
     )
   );
   const fields: DetectedField[] = [];
 
   for (const el of inputs) {
     const fieldType = classifyField(el as HTMLInputElement);
-    if (fieldType === "unknown") continue;
+    if (fieldType === "unknown" && !getFieldLabel(el as HTMLElement)) continue;
 
     fields.push({
       fieldId: el.id || el.name || `field_${fields.length}`,
@@ -425,7 +441,9 @@ export function detectJobPageHeuristic(): boolean {
     'textarea',
   ].filter(selector => document.querySelector(selector) !== null).length;
 
-  return hasJobTitle && formSignals >= 2;
+  const hasApplyButton = Array.from(document.querySelectorAll("button, [type=submit]"))
+    .some(b => /\b(apply|submit)\b/i.test(b.textContent || ""));
+  return (hasJobTitle && formSignals >= 1) || (hasJobTitle && hasApplyButton);
 }
 
 function buildAndSendContext() {
@@ -472,8 +490,8 @@ function buildAndSendContext() {
 
   chrome.runtime.sendMessage<Message>({ type: "PAGE_CONTEXT_UPDATE", payload: context });
 
-  // Notify background that a job page was heuristically detected
-  if (heuristicDetected) {
+  // Notify background that a job page was heuristically or generically detected → opens sidepanel
+  if (heuristicDetected || (mode === "apply" && detectPlatform(url) === "generic")) {
     chrome.runtime.sendMessage<Message>({ type: "JOB_PAGE_DETECTED", context }).catch(() => {});
   }
 

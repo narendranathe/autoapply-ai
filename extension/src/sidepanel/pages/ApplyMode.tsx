@@ -1141,7 +1141,7 @@ export default function ApplyMode({ context }: Props) {
             )}
             <Section label="Detected Form Fields">
               {context.detectedFields.length === 0 ? (
-                <EmptyState message="No fillable fields detected." hint="Fields appear once you navigate to the application form." />
+                <EmptyState message="No fillable fields detected." hint="Navigate directly to the application form page. If fields still don't appear, try clicking a text field on the form to trigger detection." />
               ) : (
                 context.detectedFields.map((f) => {
                   const profileVal = getProfileValue(f.fieldType, profile);
@@ -1208,7 +1208,7 @@ export default function ApplyMode({ context }: Props) {
               </div>
             )}
             {context.openQuestions.length === 0 ? (
-              <EmptyState message="No open questions detected." hint="Questions appear on forms with text areas." />
+              <EmptyState message="No open questions detected." hint="Questions appear when text areas are found on the application form. Try scrolling to or clicking on a text field on the page." />
             ) : (
               context.openQuestions.map((q) => {
                 const drafts = answerDrafts[q.questionId];
@@ -1827,8 +1827,8 @@ export default function ApplyMode({ context }: Props) {
               </select>
               <button
                 onClick={handleGenerateCoverLetter}
-                disabled={coverLoading || !context.company}
-                style={{ ...btnStyle("generate", coverLoading || !context.company), flex: 1, minWidth: 100 }}
+                disabled={coverLoading}
+                style={{ ...btnStyle("generate", coverLoading), flex: 1, minWidth: 100 }}
               >
                 {coverLoading ? "Generating…" : "⚡ Generate"}
               </button>
