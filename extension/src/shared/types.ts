@@ -98,7 +98,7 @@ export type Message =
   | { type: "CONTEXT_RESPONSE"; payload: PageContext | null }
   | { type: "APPLICATION_SUBMITTED"; payload: { url: string } }
   | { type: "EMAIL_STATUS_DETECTED"; payload: Array<{ subject: string; sender: string; status: string; company: string; confidence: number }> }
-  | { type: "JOB_PAGE_DETECTED" };
+  | { type: "JOB_PAGE_DETECTED"; context: PageContext };
 
 // Offline sync queue entry
 export interface OfflineEdit {

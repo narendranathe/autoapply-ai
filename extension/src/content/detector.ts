@@ -412,27 +412,20 @@ function extractCompanyAndRole(url: string, docTitle: string): { company: string
 
 // ── Job page heuristics (fallback for unknown ATS / custom career domains) ──
 
-function hasApplyFormSignal(): boolean {
-  const FIELD_LABELS = ["name", "email", "resume", "cover", "phone", "linkedin"];
-  const inputs = Array.from(document.querySelectorAll("input, textarea"));
-  // File input = resume upload — strong signal
-  if (inputs.some((el) => (el as HTMLInputElement).type === "file")) return true;
-  const labels = Array.from(document.querySelectorAll("label")).map(
-    (l) => l.textContent?.toLowerCase() ?? ""
-  );
-  return labels.some((l) => FIELD_LABELS.some((kw) => l.includes(kw)));
-}
+export function detectJobPageHeuristic(): boolean {
+  const jobKeywords = /\b(job|position|role|career|engineer|developer|manager|analyst|opening|vacancy)\b/i;
+  const headings = Array.from(document.querySelectorAll('h1, h2, h3, title'));
+  const hasJobTitle = headings.some(el => jobKeywords.test(el.textContent || ''));
 
-function hasJobTitleSignal(): boolean {
-  const ROLE_KEYWORDS = [
-    "engineer", "manager", "designer", "analyst", "developer",
-    "coordinator", "director", "specialist", "associate", "intern",
-  ];
-  const headings = Array.from(document.querySelectorAll("h1, h2")).map(
-    (el) => el.textContent?.toLowerCase() ?? ""
-  );
-  if (headings.some((h) => ROLE_KEYWORDS.some((kw) => h.includes(kw)))) return true;
-  return /(apply|application|job|career)/i.test(document.title);
+  const formSignals = [
+    'input[type="text"][name*="name" i], input[autocomplete*="name" i]',
+    'input[type="email"], input[autocomplete="email"]',
+    'input[type="tel"], input[autocomplete="tel"]',
+    'input[type="file"][accept*=".pdf" i], input[type="file"][accept*=".doc" i]',
+    'textarea',
+  ].filter(selector => document.querySelector(selector) !== null).length;
+
+  return hasJobTitle && formSignals >= 2;
 }
 
 function buildAndSendContext() {
@@ -451,9 +444,10 @@ function buildAndSendContext() {
   }
 
   // Heuristic fallback for unknown ATS / custom career domains
-  if (!mode && hasApplyFormSignal() && hasJobTitleSignal()) {
-    chrome.runtime.sendMessage<Message>({ type: "JOB_PAGE_DETECTED" }).catch(() => {});
+  let heuristicDetected = false;
+  if (!mode && detectJobPageHeuristic()) {
     mode = "apply";
+    heuristicDetected = true;
   }
 
   if (!mode) return;
@@ -477,6 +471,11 @@ function buildAndSendContext() {
   };
 
   chrome.runtime.sendMessage<Message>({ type: "PAGE_CONTEXT_UPDATE", payload: context });
+
+  // Notify background that a job page was heuristically detected
+  if (heuristicDetected) {
+    chrome.runtime.sendMessage<Message>({ type: "JOB_PAGE_DETECTED", context }).catch(() => {});
+  }
 
   // In scout mode, also send the scraped job cards so JobScout shows all results
   if (mode === "scout") {

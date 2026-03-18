@@ -179,13 +179,6 @@ chrome.tabs.onActivated.addListener(async ({ tabId }) => {
   }
 });
 
-// Re-open sidepanel when user switches back to a tab that already has job context
-chrome.tabs.onActivated.addListener(({ tabId }) => {
-  if (tabContexts.has(tabId)) {
-    chrome.sidePanel.open({ tabId }).catch(() => {});
-  }
-});
-
 // ── Message relay ──────────────────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener(
@@ -201,9 +194,13 @@ chrome.runtime.onMessage.addListener(
       }
 
       case "JOB_PAGE_DETECTED": {
-        // Heuristic fired in content script for unknown ATS domain → open sidepanel
+        // Heuristic fired in content script for unknown ATS domain → store context + open sidepanel
         const tabId = sender.tab?.id;
         if (tabId) {
+          // Store heuristically-detected context if not already known (URL didn't match patterns)
+          if (!tabContexts.has(tabId) && message.context) {
+            tabContexts.set(tabId, message.context);
+          }
           chrome.sidePanel.open({ tabId }).catch(() => {});
         }
         break;
