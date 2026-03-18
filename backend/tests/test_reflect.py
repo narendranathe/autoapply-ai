@@ -15,18 +15,19 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncGenerator
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies import get_current_user, get_db
+from app.dependencies import get_current_user, get_db, get_llm_gateway
 from app.main import create_app
 from app.models.application import Application
 from app.models.audit_log import AuditLog
 from app.models.user import User
+from app.services.llm_gateway import LLMGateway
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -38,10 +39,13 @@ async def authed_client(
     db_session: AsyncSession, test_user: User
 ) -> AsyncGenerator[AsyncClient, None]:
     """
-    HTTP client with both get_db and get_current_user overridden.
+    HTTP client with get_db, get_current_user, and get_llm_gateway overridden.
     Required for routes that call get_current_user (i.e., all authenticated routes).
     """
     app = create_app()
+
+    fake_gateway = MagicMock(spec=LLMGateway)
+    fake_gateway.generate = AsyncMock(return_value=(_LONG_RESPONSE, "anthropic"))
 
     async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
         yield db_session
@@ -51,6 +55,7 @@ async def authed_client(
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_current_user] = override_get_current_user
+    app.dependency_overrides[get_llm_gateway] = lambda: fake_gateway
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         yield c
@@ -118,18 +123,14 @@ async def test_reflect_profile_streams_sse_tokens(authed_client: AsyncClient):
     POST /api/v1/reflect with context_type=profile returns 200 text/event-stream
     and streams data: lines containing LLM content.
     """
-    with patch(
-        "app.routers.reflect._gateway.generate",
-        new=AsyncMock(return_value=(_LONG_RESPONSE, "anthropic")),
-    ):
-        async with authed_client.stream(
-            "POST",
-            "/api/v1/reflect",
-            json={"context_type": "profile"},
-        ) as response:
-            assert response.status_code == 200
-            assert "text/event-stream" in response.headers["content-type"]
-            body = await response.aread()
+    async with authed_client.stream(
+        "POST",
+        "/api/v1/reflect",
+        json={"context_type": "profile"},
+    ) as response:
+        assert response.status_code == 200
+        assert "text/event-stream" in response.headers["content-type"]
+        body = await response.aread()
 
     sse_data = _sse_lines(body.decode())
     assert len(sse_data) > 0, "Expected at least one SSE data line"
@@ -162,17 +163,13 @@ async def test_reflect_done_event_at_end(authed_client: AsyncClient):
     """
     The last SSE data frame in a successful stream must be ``data: [DONE]``.
     """
-    with patch(
-        "app.routers.reflect._gateway.generate",
-        new=AsyncMock(return_value=(_LONG_RESPONSE, "anthropic")),
-    ):
-        async with authed_client.stream(
-            "POST",
-            "/api/v1/reflect",
-            json={"context_type": "profile"},
-        ) as response:
-            assert response.status_code == 200
-            body = await response.aread()
+    async with authed_client.stream(
+        "POST",
+        "/api/v1/reflect",
+        json={"context_type": "profile"},
+    ) as response:
+        assert response.status_code == 200
+        body = await response.aread()
 
     data_lines = [
         line[6:]  # strip "data: " prefix
@@ -205,27 +202,45 @@ async def test_reflect_requires_auth(unauthed_client: AsyncClient):
 
 
 async def test_reflect_application_context_builds_prompt_with_company(
-    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    test_user: User,
     test_application: Application,
 ):
     """
     POST /api/v1/reflect with context_type=application and a valid application_id
     calls the LLM gateway with a prompt containing the company name and role title.
     """
+    app = create_app()
+
     captured_prompts: list[tuple[str, str]] = []
 
     async def fake_generate(system_prompt: str, user_prompt: str, **kwargs) -> tuple[str, str]:
         captured_prompts.append((system_prompt, user_prompt))
         return (_LONG_RESPONSE, "anthropic")
 
-    with patch("app.routers.reflect._gateway.generate", new=AsyncMock(side_effect=fake_generate)):
-        async with authed_client.stream(
+    fake_gateway = MagicMock(spec=LLMGateway)
+    fake_gateway.generate = AsyncMock(side_effect=fake_generate)
+
+    async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
+        yield db_session
+
+    async def override_get_current_user() -> User:
+        return test_user
+
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_current_user] = override_get_current_user
+    app.dependency_overrides[get_llm_gateway] = lambda: fake_gateway
+
+    async with (
+        AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client,
+        client.stream(
             "POST",
             "/api/v1/reflect",
             json={"context_type": "application", "application_id": str(test_application.id)},
-        ) as response:
-            assert response.status_code == 200
-            await response.aread()
+        ) as response,
+    ):
+        assert response.status_code == 200
+        await response.aread()
 
     assert len(captured_prompts) == 1
     _, user_prompt = captured_prompts[0]
@@ -266,22 +281,36 @@ async def test_reflect_unknown_application_id_returns_404(authed_client: AsyncCl
 # ---------------------------------------------------------------------------
 
 
-async def test_reflect_llm_failure_emits_error_sse_frame(authed_client: AsyncClient):
+async def test_reflect_llm_failure_emits_error_sse_frame(db_session: AsyncSession, test_user: User):
     """
     When the LLM gateway raises an exception, the endpoint emits an event:error
     SSE frame and returns 200 (the stream opened successfully; error is in-band).
     """
-    with patch(
-        "app.routers.reflect._gateway.generate",
-        new=AsyncMock(side_effect=Exception("LLM timeout")),
-    ):
-        async with authed_client.stream(
+    app = create_app()
+
+    fake_gateway = MagicMock(spec=LLMGateway)
+    fake_gateway.generate = AsyncMock(side_effect=Exception("LLM timeout"))
+
+    async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
+        yield db_session
+
+    async def override_get_current_user() -> User:
+        return test_user
+
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_current_user] = override_get_current_user
+    app.dependency_overrides[get_llm_gateway] = lambda: fake_gateway
+
+    async with (
+        AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client,
+        client.stream(
             "POST",
             "/api/v1/reflect",
             json={"context_type": "profile"},
-        ) as response:
-            assert response.status_code == 200
-            body = await response.aread()
+        ) as response,
+    ):
+        assert response.status_code == 200
+        body = await response.aread()
 
     lines = _sse_lines(body.decode())
     assert any("event: error" in line for line in lines) or any(
@@ -300,17 +329,13 @@ async def test_reflect_creates_audit_log_entry(
     test_user: User,
 ):
     """A successful reflect call must create an AuditLog row with action=reflect_stream."""
-    with patch(
-        "app.routers.reflect._gateway.generate",
-        new=AsyncMock(return_value=(_LONG_RESPONSE, "anthropic")),
-    ):
-        async with authed_client.stream(
-            "POST",
-            "/api/v1/reflect",
-            json={"context_type": "profile"},
-        ) as response:
-            assert response.status_code == 200
-            await response.aread()
+    async with authed_client.stream(
+        "POST",
+        "/api/v1/reflect",
+        json={"context_type": "profile"},
+    ) as response:
+        assert response.status_code == 200
+        await response.aread()
 
     # Flush so the AuditLog written in the generator's finally block is visible
     await db_session.flush()

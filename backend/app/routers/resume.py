@@ -13,10 +13,10 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_db
-from app.models.audit_log import AuditLog
 from app.services.llm_service import RewriteStrategy
 from app.services.resume_parser import ResumeParser
 from app.services.tailoring_pipeline import TailoringPipeline
+from app.utils.audit import write_audit_log
 from app.utils.hashing import hash_jd, hash_pii
 
 router = APIRouter()
@@ -77,7 +77,8 @@ async def parse_resume(
     duration_ms = int((time.perf_counter() - start_time) * 1000)
 
     # Audit log
-    log = AuditLog(
+    await write_audit_log(
+        db,
         user_hash=hash_pii(request.headers.get("X-User-ID", "anonymous")),
         request_id=request_id,
         action="resume.parse",
@@ -92,7 +93,6 @@ async def parse_resume(
         success=True,
         duration_ms=duration_ms,
     )
-    db.add(log)
 
     return {
         "bullet_count": ast.bullet_count,
@@ -161,7 +161,8 @@ async def tailor_resume_endpoint(
     duration_ms = int((time.perf_counter() - start_time) * 1000)
 
     # Audit log
-    log = AuditLog(
+    await write_audit_log(
+        db,
         user_hash=hash_pii(request.headers.get("X-User-ID", "anonymous")),
         request_id=request_id,
         action="resume.tailor",
@@ -180,7 +181,6 @@ async def tailor_resume_endpoint(
         success=result.rewrite_accepted,
         duration_ms=duration_ms,
     )
-    db.add(log)
 
     return {
         "bullets": result.bullets,

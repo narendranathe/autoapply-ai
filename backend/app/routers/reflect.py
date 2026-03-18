@@ -24,17 +24,16 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies import get_current_user, get_db
+from app.dependencies import get_current_user, get_db, get_llm_gateway
 from app.models.application import Application
-from app.models.audit_log import AuditLog
 from app.models.user import User
 from app.models.user_provider_config import UserProviderConfig
 from app.schemas.reflect import ReflectRequest
 from app.services.llm_gateway import LLMGateway
+from app.utils.audit import write_audit_log
 from app.utils.encryption import decrypt_value
 
 router = APIRouter()
-_gateway = LLMGateway()
 
 _SYSTEM_PROMPT = (
     "You are a career coach and recruiter with 15 years of experience. "
@@ -50,6 +49,7 @@ async def stream_reflection(
     body: ReflectRequest = Body(...),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
+    gateway: LLMGateway = Depends(get_llm_gateway),
 ) -> StreamingResponse:
     """
     Stream a structured career reflection as Server-Sent Events.
@@ -113,7 +113,7 @@ async def stream_reflection(
         success = True
         error_msg: str | None = None
         try:
-            content, _ = await _gateway.generate(
+            content, _ = await gateway.generate(
                 system_prompt=_SYSTEM_PROMPT,
                 user_prompt=user_prompt,
                 provider=provider,
@@ -135,7 +135,8 @@ async def stream_reflection(
             error_msg = str(exc)
         finally:
             duration_ms = int(time.monotonic() * 1000) - start_ms
-            log = AuditLog(
+            await write_audit_log(
+                db,
                 user_hash=str(user.id),
                 request_id=request_id,
                 action="reflect_stream",
@@ -143,8 +144,6 @@ async def stream_reflection(
                 error_message=error_msg,
                 duration_ms=duration_ms,
             )
-            db.add(log)
-            await db.flush()
 
     return StreamingResponse(
         generate(),
