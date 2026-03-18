@@ -2,7 +2,7 @@ import { NavLink } from "react-router-dom";
 import { useUser } from "@clerk/clerk-react";
 import {
   Sparkles,
-  LayoutKanban,
+  Briefcase,
   FileText,
   BrainCircuit,
   Settings,
@@ -10,7 +10,7 @@ import {
 
 const NAV = [
   { to: "/", icon: Sparkles, label: "Mirror" },
-  { to: "/applications", icon: LayoutKanban, label: "Applications" },
+  { to: "/applications", icon: Briefcase, label: "Applications" },
   { to: "/vault", icon: FileText, label: "Vault" },
   { to: "/reflection", icon: BrainCircuit, label: "Reflection" },
   { to: "/settings", icon: Settings, label: "Settings" },

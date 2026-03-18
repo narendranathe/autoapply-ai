@@ -9,7 +9,7 @@ if (!PUBLISHABLE_KEY) {
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   return (
-    <ClerkProvider publishableKey={PUBLISHABLE_KEY} afterSignInUrl="/" afterSignUpUrl="/">
+    <ClerkProvider publishableKey={PUBLISHABLE_KEY}>
       {children}
     </ClerkProvider>
   );
