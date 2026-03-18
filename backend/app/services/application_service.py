@@ -140,7 +140,16 @@ class ApplicationService:
 
         Valid transitions: draft → tailored → applied → rejected/interview → offer
         """
-        valid_statuses = {"draft", "tailored", "applied", "rejected", "interview", "offer"}
+        valid_statuses = {
+            "discovered",
+            "draft",
+            "tailored",
+            "applied",
+            "rejected",
+            "phone_screen",
+            "interview",
+            "offer",
+        }
         if new_status not in valid_statuses:
             raise ValueError(f"Invalid status: {new_status}. Must be one of {valid_statuses}")
 
@@ -230,3 +239,38 @@ class ApplicationService:
             "unique_companies": unique_companies,
             "by_status": status_counts,
         }
+
+    async def find_by_company_name_fuzzy(
+        self,
+        db: AsyncSession,
+        user_id: uuid.UUID,
+        company_name: str,
+    ) -> Application | None:
+        """
+        Find the most recent application matching a company name (case-insensitive, partial match).
+
+        Used by the parse-email endpoint to link a parsed email back to a tracked application.
+        Returns the most recently created application whose company_name contains the query,
+        or None if no match is found.
+
+        Args:
+            db:           Async database session.
+            user_id:      ID of the current user (scopes the query).
+            company_name: Company name to search for (partial, case-insensitive).
+
+        Returns:
+            Most recent matching Application, or None.
+        """
+        if not company_name or not company_name.strip():
+            return None
+
+        result = await db.execute(
+            select(Application)
+            .where(
+                Application.user_id == user_id,
+                Application.company_name.ilike(f"%{company_name.strip()}%"),
+            )
+            .order_by(desc(Application.created_at))
+            .limit(1)
+        )
+        return result.scalar_one_or_none()

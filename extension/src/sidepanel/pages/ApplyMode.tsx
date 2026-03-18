@@ -3,6 +3,8 @@ import type { ATSScoreResult, PageContext, ResumeCard } from "../../shared/types
 import { applicationsApi, vaultApi, workHistoryApi, type GenerateTailoredResponse, type InterviewQuestion, type RetrieveResponse, type SimilarAnswer, type TrackedApplication } from "../../shared/api";
 import ATSScoreBar from "../components/ATSScoreBar";
 import ResumeCardComponent from "../components/ResumeCard";
+import { useTabNavigation } from "../hooks/useTabNavigation";
+import type { Tab } from "../hooks/useTabNavigation";
 
 // ── Draft persistence helpers (sessionStorage, keyed by job URL) ────────────
 

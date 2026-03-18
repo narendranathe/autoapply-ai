@@ -31,7 +31,7 @@ class ApplicationStatusUpdate(BaseModel):
     """Schema for updating application status."""
 
     status: str = Field(
-        ..., pattern=r"^(discovered|draft|tailored|applied|rejected|interview|offer)$"
+        ..., pattern=r"^(discovered|draft|tailored|applied|rejected|phone_screen|interview|offer)$"
     )
 
 

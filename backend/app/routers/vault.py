@@ -5,6 +5,7 @@ Endpoints:
   POST   /api/v1/vault/upload                   Upload resume file → parse → embed → store
   GET    /api/v1/vault/resumes                  List all user resumes (paginated)
   DELETE /api/v1/vault/resumes/{id}             Delete a resume
+  POST   /api/v1/vault/retrieve/batch            Batch semantic retrieval (up to 50 jobs, parallel)
   POST   /api/v1/vault/retrieve                 Semantic retrieval by company + optional JD
   POST   /api/v1/vault/ats-score                Score a stored resume against a JD
   POST   /api/v1/vault/generate                 Generate full LaTeX resume
@@ -38,6 +39,11 @@ from app.models.document_chunk import DocumentChunk
 from app.models.resume import ApplicationAnswer, Resume
 from app.models.user import User
 from app.models.work_history import WorkHistoryEntry
+from app.schemas.vault_batch import (
+    BatchRetrieveRequest,
+    BatchRetrieveResponse,
+    BatchRetrieveResult,
+)
 from app.services.ats_service import ATSResult, score_resume
 from app.services.embedding_service import build_tfidf_vector
 from app.services.github_service import GitHubService
@@ -317,6 +323,82 @@ async def update_resume_metadata(
 # ── Retrieve ───────────────────────────────────────────────────────────────
 
 
+async def _single_retrieve(
+    db: AsyncSession,
+    user: "User",
+    company: str,
+    role: str,
+    jd_snippet: str,
+) -> BatchRetrieveResult:
+    """
+    Core retrieve logic for a single job card.
+    Called by both the single /retrieve endpoint helper and batch_retrieve.
+    Uses get_positioning_advice when jd_snippet is non-empty, otherwise falls back
+    to retrieve_by_company (history-only).
+    """
+    if jd_snippet:
+        advice = await _retrieval_agent.get_positioning_advice(db, user.id, jd_snippet, company)
+        ats_score = advice.ats_result.overall_score if advice.ats_result else None
+        history_count = len(advice.company_history)
+        best_resume_id = str(advice.best_resume.resume_id) if advice.best_resume else None
+    else:
+        history = await _retrieval_agent.retrieve_by_company(db, user.id, company)
+        ats_score = history[0].ats_score if history else None
+        history_count = len(history)
+        best_resume_id = str(history[0].resume_id) if history else None
+
+    return BatchRetrieveResult(
+        company=company,
+        role=role,
+        ats_score=ats_score,
+        history_count=history_count,
+        best_resume_id=best_resume_id,
+    )
+
+
+@router.post("/retrieve/batch")
+async def batch_retrieve(
+    request: BatchRetrieveRequest,
+    db: AsyncSession = Depends(get_db),
+    user: "User" = Depends(get_current_user),
+) -> BatchRetrieveResponse:
+    """
+    Batch semantic retrieval — Issue #16.
+
+    Accepts up to 50 job cards and returns one BatchRetrieveResult per card.
+    All retrievals run in parallel via asyncio.gather(), reducing N serial
+    network calls (Job Scout's O(N) pattern) to a single round-trip.
+
+    Results are returned in the same order as the input jobs list.
+    """
+    if not request.jobs:
+        return BatchRetrieveResponse(results=[])
+
+    tasks = [
+        _single_retrieve(db, user, job.company, job.role, job.jd_snippet) for job in request.jobs
+    ]
+    raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    results: list[BatchRetrieveResult] = []
+    for i, item in enumerate(raw_results):
+        if isinstance(item, BaseException):
+            # Surface partial failures as a null result rather than aborting the whole batch
+            logger.warning(f"batch_retrieve: job[{i}] ({request.jobs[i].company!r}) failed: {item}")
+            results.append(
+                BatchRetrieveResult(
+                    company=request.jobs[i].company,
+                    role=request.jobs[i].role,
+                    ats_score=None,
+                    history_count=0,
+                    best_resume_id=None,
+                )
+            )
+        else:
+            results.append(item)
+
+    return BatchRetrieveResponse(results=results)
+
+
 @router.post("/retrieve")
 async def retrieve_resumes(
     company_name: str = Form(...),
@@ -437,6 +519,18 @@ async def generate_resume(
         if raw:
             ats_result = score_resume(jd_text, raw)
 
+    # Retrieve RAG context from uploaded documents
+    rag_query = f"{role_title} {company_name} {jd_text[:500]}"
+    rag_ctx = await get_rag_context_for_query(
+        db=db,
+        user_id=user.id,
+        query=rag_query,
+        doc_types=["resume", "work_history"],
+        top_k=6,
+        max_context_tokens=1500,
+        label="CANDIDATE BACKGROUND (from uploaded resume/work history)",
+    )
+
     profile = PersonalProfile(
         name=name,
         phone=phone,
@@ -459,6 +553,7 @@ async def generate_resume(
         provider=llm_provider,
         api_key=llm_api_key or user.encrypted_llm_api_key or "",
         ollama_model=ollama_model,
+        rag_context=rag_ctx,
     )
 
     # Store generated resume in vault

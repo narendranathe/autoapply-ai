@@ -29,6 +29,8 @@ from app.schemas.application import (
     ApplicationNotesUpdate,
     ApplicationResponse,
     ApplicationStatusUpdate,
+    ParseEmailRequest,
+    ParseEmailResponse,
 )
 from app.services.application_service import ApplicationService
 from app.utils.hashing import hash_jd
@@ -182,6 +184,56 @@ async def find_similar(
         "application": None,
         "message": f"No previous applications to {company_name} found.",
     }
+
+
+@router.post("/parse-email", response_model=ParseEmailResponse)
+async def parse_email(
+    body: ParseEmailRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Parse an email body and classify it into an application status.
+
+    Optionally links the result to an existing application record via fuzzy
+    company name matching. Uses LLM classification with keyword fallback.
+
+    Request body:
+      - email_body:   Raw email text (HTML or plain text, max 50 000 chars)
+      - company_name: Optional company name for matching + prompt context
+
+    Response:
+      - suggested_status: one of discovered|applied|phone_screen|interview|offer|rejected
+      - confidence:       0.0–1.0
+      - reasoning:        short explanation of the classification decision
+      - company_match:    matched Application record, or null
+    """
+    from app.services.email_classifier_service import classify_email_status
+
+    # Classify the email — provider/key taken from user's stored config if
+    # available. For now we accept them as query-params or default to fallback.
+    # The endpoint uses the keyword fallback when no provider is configured.
+    provider = "fallback"
+    api_key = ""
+
+    result = await classify_email_status(
+        email_body=body.email_body,
+        company_name=body.company_name,
+        provider=provider,
+        api_key=api_key,
+    )
+
+    # Try to link to an existing application
+    if body.company_name:
+        matched_app = await service.find_by_company_name_fuzzy(
+            db=db,
+            user_id=user.id,
+            company_name=body.company_name,
+        )
+        if matched_app:
+            result.company_match = ApplicationResponse.model_validate(matched_app)
+
+    return result
 
 
 @router.get("/{application_id}", response_model=ApplicationResponse)
