@@ -410,6 +410,31 @@ function extractCompanyAndRole(url: string, docTitle: string): { company: string
   return { company, roleTitle };
 }
 
+// ── Job page heuristics (fallback for unknown ATS / custom career domains) ──
+
+function hasApplyFormSignal(): boolean {
+  const FIELD_LABELS = ["name", "email", "resume", "cover", "phone", "linkedin"];
+  const inputs = Array.from(document.querySelectorAll("input, textarea"));
+  // File input = resume upload — strong signal
+  if (inputs.some((el) => (el as HTMLInputElement).type === "file")) return true;
+  const labels = Array.from(document.querySelectorAll("label")).map(
+    (l) => l.textContent?.toLowerCase() ?? ""
+  );
+  return labels.some((l) => FIELD_LABELS.some((kw) => l.includes(kw)));
+}
+
+function hasJobTitleSignal(): boolean {
+  const ROLE_KEYWORDS = [
+    "engineer", "manager", "designer", "analyst", "developer",
+    "coordinator", "director", "specialist", "associate", "intern",
+  ];
+  const headings = Array.from(document.querySelectorAll("h1, h2")).map(
+    (el) => el.textContent?.toLowerCase() ?? ""
+  );
+  if (headings.some((h) => ROLE_KEYWORDS.some((kw) => h.includes(kw)))) return true;
+  return /(apply|application|job|career)/i.test(document.title);
+}
+
 function buildAndSendContext() {
   const url = window.location.href;
   const title = document.title;
@@ -422,6 +447,12 @@ function buildAndSendContext() {
     /greenhouse\.io|lever\.co|workday\.com|myworkday\.com|taleo\.net|smartrecruiters\.com|careers\.|\/careers\/|\/jobs\//.test(url) ||
     detectApplyButton()
   ) {
+    mode = "apply";
+  }
+
+  // Heuristic fallback for unknown ATS / custom career domains
+  if (!mode && hasApplyFormSignal() && hasJobTitleSignal()) {
+    chrome.runtime.sendMessage<Message>({ type: "JOB_PAGE_DETECTED" }).catch(() => {});
     mode = "apply";
   }
 

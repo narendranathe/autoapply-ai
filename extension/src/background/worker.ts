@@ -33,6 +33,12 @@ const CAREER_URL_PATTERNS = [
   /jobvite\.com/,
   /ashbyhq\.com/,
   /jobs\.ashbyhq\.com/,
+  /bamboohr\.com/,
+  /ziprecruiter\.com\/jobs/,
+  /dice\.com\/jobs/,
+  /wellfound\.com\/jobs/,
+  /otta\.com/,
+  /gh_jid=/,
   /careers\.[a-z]+\.[a-z]+/,
   /[a-z]+\.com\/careers\//,
   /[a-z]+\.com\/jobs\//,
@@ -165,6 +171,21 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   tabContexts.delete(tabId);
 });
 
+chrome.tabs.onActivated.addListener(async ({ tabId }) => {
+  const ctx = tabContexts.get(tabId);
+  if (ctx) {
+    chrome.sidePanel.open({ tabId }).catch(() => {});
+    chrome.tabs.sendMessage(tabId, { type: "JOB_PAGE_DETECTED", context: ctx }).catch(() => {});
+  }
+});
+
+// Re-open sidepanel when user switches back to a tab that already has job context
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+  if (tabContexts.has(tabId)) {
+    chrome.sidePanel.open({ tabId }).catch(() => {});
+  }
+});
+
 // ── Message relay ──────────────────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener(
@@ -172,6 +193,15 @@ chrome.runtime.onMessage.addListener(
     switch (message.type) {
       case "OPEN_SIDEPANEL": {
         // Badge click in content script → open sidepanel for that tab
+        const tabId = sender.tab?.id;
+        if (tabId) {
+          chrome.sidePanel.open({ tabId }).catch(() => {});
+        }
+        break;
+      }
+
+      case "JOB_PAGE_DETECTED": {
+        // Heuristic fired in content script for unknown ATS domain → open sidepanel
         const tabId = sender.tab?.id;
         if (tabId) {
           chrome.sidePanel.open({ tabId }).catch(() => {});
