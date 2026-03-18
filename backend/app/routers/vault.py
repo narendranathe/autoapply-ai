@@ -78,6 +78,55 @@ _resume_parser = ResumeParser()
 _github_service = GitHubService()
 
 
+async def _resolve_providers(
+    providers_json: str,
+    db: "AsyncSession",
+    user: "User",
+) -> list[dict]:
+    """
+    Resolve the provider list for a generation endpoint.
+
+    Priority:
+    1. providers_json from request body (client-configured, backward-compat)
+    2. Server-side UserProviderConfig rows (if providers_json is empty)
+    3. Empty list → keyword fallback handled downstream
+
+    This implements issue #25: server-side provider authority.
+    """
+    from sqlalchemy import select
+
+    from app.models.user_provider_config import UserProviderConfig
+    from app.utils.encryption import decrypt_value
+
+    if providers_json.strip():
+        try:
+            return _json.loads(providers_json)  # type: ignore[return-value]
+        except Exception:
+            logger.warning("Invalid providers_json — falling back to server-side config")
+
+    # Read from server-side storage
+    result = await db.execute(
+        select(UserProviderConfig)
+        .where(
+            UserProviderConfig.user_id == user.id,
+            UserProviderConfig.is_enabled.is_(True),
+        )
+        .order_by(UserProviderConfig.provider_name)
+    )
+    rows = result.scalars().all()
+    providers = []
+    for row in rows:
+        try:
+            api_key = decrypt_value(row.encrypted_api_key) if row.encrypted_api_key else ""
+        except Exception:
+            api_key = ""
+        if api_key:
+            providers.append(
+                {"name": row.provider_name, "api_key": api_key, "model": row.model_override or ""}
+            )
+    return providers
+
+
 # ── Upload ─────────────────────────────────────────────────────────────────
 
 
@@ -813,12 +862,8 @@ async def generate_answers(
     past_texts = [a.answer_text for a in best_past if (a.reward_score or 0) >= 0.6]
 
     # Cascade mode: try providers in priority order, use first that works for all 3 drafts
-    providers_list: list[dict] = []
-    if providers_json.strip():
-        try:
-            providers_list = _json.loads(providers_json)
-        except Exception:
-            logger.warning("Invalid providers_json — falling back to single provider")
+    # #25: prefer server-side config when client sends empty providers_json
+    providers_list: list[dict] = await _resolve_providers(providers_json, db, user)
 
     # Resolve candidate name for cover letter greeting
     candidate_name = ""
