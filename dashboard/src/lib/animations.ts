@@ -1,4 +1,4 @@
-import type { Variants } from "framer-motion";
+import type { Variants, Transition } from "framer-motion";
 
 export const mercuryRipple: Variants = {
   rest: { scale: 1, opacity: 1 },
@@ -15,9 +15,15 @@ export const streamToken: Variants = {
   visible: { opacity: 1, transition: { duration: 0.08 } },
 };
 
+const skeletonTransition: Transition = {
+  duration: 1.6,
+  repeat: Infinity,
+  ease: "easeInOut",
+};
+
 export const skeletonPulse = {
   animate: {
     opacity: [0.15, 0.3, 0.15],
-    transition: { duration: 1.6, repeat: Infinity, ease: "easeInOut" },
+    transition: skeletonTransition,
   },
 };
