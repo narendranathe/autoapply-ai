@@ -46,3 +46,6 @@ coverage.xml
 
 # Claude Code local settings (may contain tokens/secrets)
 .claude/
+dashboard/dist
+dashboard/.env.local
+dashboard/node_modules
