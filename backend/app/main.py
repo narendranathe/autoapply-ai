@@ -18,6 +18,7 @@ from app.routers import (
     applications,
     auth,
     health,
+    reflect,
     resume,
     user_provider_config,
     users,
@@ -85,5 +86,6 @@ def create_app() -> FastAPI:
     app.include_router(users.router, prefix="/api/v1/users", tags=["Users"])
     app.include_router(user_provider_config.router, prefix="/api/v1/users", tags=["Users"])
     app.include_router(work_history.router, prefix="/api/v1/work-history", tags=["Work History"])
+    app.include_router(reflect.router, prefix="/api/v1", tags=["Reflect"])
 
     return app
