@@ -437,6 +437,18 @@ async def generate_resume(
         if raw:
             ats_result = score_resume(jd_text, raw)
 
+    # Retrieve RAG context from uploaded documents
+    rag_query = f"{role_title} {company_name} {jd_text[:500]}"
+    rag_ctx = await get_rag_context_for_query(
+        db=db,
+        user_id=user.id,
+        query=rag_query,
+        doc_types=["resume", "work_history"],
+        top_k=6,
+        max_context_tokens=1500,
+        label="CANDIDATE BACKGROUND (from uploaded resume/work history)",
+    )
+
     profile = PersonalProfile(
         name=name,
         phone=phone,
@@ -459,6 +471,7 @@ async def generate_resume(
         provider=llm_provider,
         api_key=llm_api_key or user.encrypted_llm_api_key or "",
         ollama_model=ollama_model,
+        rag_context=rag_ctx,
     )
 
     # Store generated resume in vault
