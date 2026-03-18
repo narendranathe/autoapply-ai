@@ -734,3 +734,97 @@ The `enabled` boolean on `ProviderConfig` was a design flaw. Having an API key =
 - `used_as_is` → 1.0 | `edited` → 0.8 | `regenerated` → 0.2 | `skipped` → 0.0
 
 High-reward past answers (≥ 0.8) are injected as style examples into future LLM prompts for the same company/role context. This creates a lightweight personalization loop without any model fine-tuning infrastructure.
+
+---
+
+## Intelligent Detection + Vector Answer Memory (Roadmap — PRD #46)
+
+### Overview
+
+The next major capability upgrade introduces five interconnected systems that work together to make every form fill dramatically faster. The design principle: **the extension should know what to fill before you even see the field**.
+
+### 1. Tri-Observer Field Detection Engine
+
+Replaces the single `MutationObserver` with three combined DOM observers:
+
+| Observer | Trigger | Purpose |
+|---|---|---|
+| `MutationObserver` | Node add/remove | Catch new inputs on SPA step transitions |
+| `ResizeObserver` | Form section height change | Detect multi-step form navigation |
+| `IntersectionObserver` | Form section scrolls into view | Catch paginated/accordion forms |
+
+Debounce reduced 800ms → 300ms. Shadow DOM piercing added — when custom elements appear, their `shadowRoot` is scanned for inputs. Cross-origin-safe iframe re-scan fires when iframe `src` changes.
+
+### 2. Vector-Powered Answer Memory
+
+When a question textarea is detected, the extension immediately queries `/vault/answers/similar` using semantic vector search (pgvector → Pinecone migration via `VECTOR_BACKEND` env var). Top-2 past answers ranked by:
+
+```
+score = usage_count × 0.6 + reward_score × 0.4
+```
+
+These surface as **"Previously used"** cards above the Generate button — no click required. If the user edits the text, it auto-saves after a 2-second debounce. The answer memory compounds over time: the more applications you fill, the less you generate from scratch.
+
+### 3. ATS-Score Auto-Fill from Previous Applications
+
+When ATS retrieval scores a job at ≥ 75% similarity to a previous application:
+1. The previously used resume is recommended
+2. ALL form field values from that previous application are pre-populated via a new `ApplicationFieldSnapshot` model
+3. A dismissable banner shows: *"Pre-filled from [CompanyName] application — 8 fields applied"*
+
+This does **not** replace the manual resume selection flow — it supplements it. The user can dismiss and start fresh at any time.
+
+### 4. Resume Vault Folder Sync
+
+A `~/resume_vault/` local folder is the source of truth for all resumes. The options page adds a **"Sync Resume Vault"** button that opens a directory picker and uploads any new `.pdf`, `.docx`, or `.tex` files to the backend in a single batched `POST /vault/folder-sync` call. Synced file names are stored in `chrome.storage.local` to diff on next sync. If the last sync was >24h ago, a badge appears on the extension options icon.
+
+### 5. Smart Cover Letter Auto-Surfacing
+
+On every job application page load, the floating panel:
+1. Checks `/vault/answers?category=cover_letter&company={company}` for an existing cover letter
+2. If found → pre-loads it into the Cover tab with a **"Previously used"** label
+3. If not found AND company is known → auto-generates in the background (opt-in via `coverAutoGenEnabled` storage flag)
+4. Generated letters are cached in `sessionStorage` keyed by `company+role` to prevent re-generation on re-renders
+
+### Module Map
+
+```
+Extension:
+├── TriObserverEngine        floatingPanel.ts — replaces observeMutations()          M
+├── QuestionAnswerPreloader  floatingPanel.ts — calls /similar on question appear     M
+├── ATSAutoFillBanner        floatingPanel.ts — calls /retrieve then /field-snapshot  M
+├── CoverLetterAutoLoader    floatingPanel.ts + useCoverLetter.ts                     S
+└── ResyncTrigger            options.ts — directory picker → /vault/folder-sync       M
+
+Backend:
+├── ApplicationFieldSnapshot model + migration                                        S
+├── POST/GET /applications/{id}/field-snapshot                                        S
+├── VectorBackend abstraction (pgvector | Pinecone)                                   L
+├── Enhanced /vault/answers/similar (ranking by combined score)                       M
+└── POST /vault/folder-sync (batched multipart upload)                                M
+```
+
+### Design Rules for Cover Letters
+
+Cover letters are generated with these fixed rules (enforced in `/vault/generate/answers` with `category=cover_letter`):
+- **Tone**: Professional (default) | Enthusiastic | Concise — user-selectable
+- **Length**: ~300 / ~400 / ~500 words — user-selectable
+- **Grounded in**: JD text + work history text + candidate profile name
+- **Company-specific**: company name and role title injected into prompt
+- **Saved**: every generated letter → `/vault/answers/save` with `category=cover_letter`
+- **Re-used**: next visit to same company → letter auto-surfaces (rule 1 above)
+- **Never overwrites**: existing saved letters for same company are shown as alternatives
+
+### GitHub Issues
+
+| Issue | Feature | Status |
+|---|---|---|
+| [#46](https://github.com/narendranathe/autoapply-ai/issues/46) | PRD: Full feature specification | Open |
+| #47 | TRACER: Tri-Observer Engine | Open |
+| #48 | ApplicationFieldSnapshot model | Open |
+| #49 | VectorBackend abstraction | Open |
+| #50 | QuestionAnswerPreloader | Open |
+| #51 | ATS Auto-Fill Banner | Open |
+| #52 | Smart Cover Letter Auto-Surfacing | Open |
+| #53 | Resume Vault Folder Sync | Open |
+| #54 | End-to-end hardening + tests | Open |
