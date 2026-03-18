@@ -5,6 +5,10 @@ import ATSScoreBar from "../components/ATSScoreBar";
 import ResumeCardComponent from "../components/ResumeCard";
 import { useTabNavigation, type Tab } from "../hooks/useTabNavigation";
 import { useProviders, getFreshProviders, type UserProfile } from "../hooks/useProviders";
+import { useApplicationTracking } from "../hooks/useApplicationTracking";
+import { useApplicationHistory } from "../hooks/useApplicationHistory";
+import { useInterviewPrep } from "../hooks/useInterviewPrep";
+import { useCoverLetter } from "../hooks/useCoverLetter";
 
 // ── Draft persistence helpers (sessionStorage, keyed by job URL) ────────────
 
@@ -119,9 +123,16 @@ export default function ApplyMode({ context }: Props) {
   const [uploadSuccess, setUploadSuccess] = useState<string>("");
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  // C5/C6: application tracking
-  const [trackedAppId, setTrackedAppId] = useState<string | null>(null);
-  const [pastApplications, setPastApplications] = useState<TrackedApplication[]>([]);
+  // C5/C6: application tracking — hook
+  const {
+    trackedAppId,
+    pastApplications,
+    markingApplied,
+    appliedMarked,
+    updatingStatus,
+    handleMarkApplied,
+    handleStatusUpdate: _handleStatusUpdate,
+  } = useApplicationTracking(context);
   // Resume content viewer
   const [viewingResumeId, setViewingResumeId] = useState<string | null>(null);
   const [resumeContent, setResumeContent] = useState<string>("");
@@ -132,54 +143,74 @@ export default function ApplyMode({ context }: Props) {
   const [tailoringResumeId, setTailoringResumeId] = useState<string | null>(null);
   const [tailorResults, setTailorResults] = useState<Record<string, GenerateTailoredResponse>>({});
   const [tailorErrors, setTailorErrors] = useState<Record<string, string>>({});
-  // T1: application history (all apps)
-  const [allApplications, setAllApplications] = useState<TrackedApplication[]>([]);
-  const [historyLoading, setHistoryLoading] = useState(false);
-  const [appStats, setAppStats] = useState<{ total: number; by_status: Record<string, number>; unique_companies: number } | null>(null);
-  const [appFunnel, setAppFunnel] = useState<Awaited<ReturnType<typeof applicationsApi.getFunnel>> | null>(null);
-  const [updatingStatus, setUpdatingStatus] = useState<string | null>(null);
-  const [historySearch, setHistorySearch] = useState("");
-  const [historyStatusFilter, setHistoryStatusFilter] = useState<string>("all");
-  // Vault analytics
-  const [vaultAnalytics, setVaultAnalytics] = useState<Awaited<ReturnType<typeof vaultApi.getAnalytics>> | null>(null);
-  // Answer bank search
-  const [answerBankSearch, setAnswerBankSearch] = useState("");
-  const [answerBankResults, setAnswerBankResults] = useState<Array<{ answer_id: string; question_text: string; answer_text: string; company_name: string; question_category: string; reward_score: number | null; feedback: string }>>([]);
-  const [answerBankSearching, setAnswerBankSearching] = useState(false);
-  // T3: interview prep
-  const [interviewQuestions, setInterviewQuestions] = useState<InterviewQuestion[]>(
-    () => loadDraftSession(jobUrl, "interviewQuestions", [])
-  );
-  const [interviewLoading, setInterviewLoading] = useState(false);
-  const [interviewError, setInterviewError] = useState<string>("");
-  const [expandedPrepIdx, setExpandedPrepIdx] = useState<number | null>(null);
-  const [prepCategoryFilter, setPrepCategoryFilter] = useState<"all" | "behavioral" | "motivation" | "technical" | "general">("all");
+  // T1: application history — hook
+  const {
+    allApplications,
+    setAllApplications,
+    historyLoading,
+    appStats,
+    appFunnel,
+    vaultAnalytics,
+    historySearch,
+    setHistorySearch,
+    historyStatusFilter,
+    setHistoryStatusFilter,
+    answerBankSearch,
+    setAnswerBankSearch,
+    answerBankResults,
+    setAnswerBankResults,
+    answerBankSearching,
+    setAnswerBankSearching,
+  } = useApplicationHistory(tab);
+
+  // T3: interview prep — hook
+  const {
+    interviewQuestions,
+    setInterviewQuestions,
+    interviewLoading,
+    interviewError,
+    expandedPrepIdx,
+    setExpandedPrepIdx,
+    prepCategoryFilter,
+    setPrepCategoryFilter,
+    savingAllPrep,
+    setSavingAllPrep,
+    savedAllPrep,
+    setSavedAllPrep,
+    handleInterviewPrep,
+  } = useInterviewPrep(context);
+
+  // Cover letter — hook
+  const {
+    coverDrafts,
+    setCoverDrafts,
+    coverDraftProviders,
+    setCoverDraftProviders,
+    coverSelectedDraft,
+    setCoverSelectedDraft,
+    coverLetter,
+    setCoverLetter,
+    coverLoading,
+    coverError,
+    coverTone,
+    setCoverTone,
+    coverWordLimit,
+    setCoverWordLimit,
+    coverCopied,
+    savingCoverLetter,
+    savedCoverLetters,
+    setSavedCoverLetters,
+    coverLettersSectionOpen,
+    setCoverLettersSectionOpen,
+    handleGenerateCoverLetter,
+    handleSaveCoverLetter,
+    handleCopyLetter,
+  } = useCoverLetter(context);
+
   // Trim answer to char limit
   const [trimmingAnswer, setTrimmingAnswer] = useState<string | null>(null);
   // Copy all answers
   const [copiedAllAnswers, setCopiedAllAnswers] = useState(false);
-  // Cover letter tab
-  const [coverDrafts, setCoverDrafts] = useState<string[]>(
-    () => loadDraftSession(jobUrl, "coverDrafts", [])
-  );
-  const [coverDraftProviders, setCoverDraftProviders] = useState<string[]>(
-    () => loadDraftSession(jobUrl, "coverDraftProviders", [])
-  );
-  const [coverSelectedDraft, setCoverSelectedDraft] = useState(0);
-  const [coverLetter, setCoverLetter] = useState<string>(
-    () => loadDraftSession(jobUrl, "coverLetter", "")
-  );
-  const [coverLoading, setCoverLoading] = useState(false);
-  const [coverError, setCoverError] = useState<string>("");
-  const [coverTone, setCoverTone] = useState<"professional" | "enthusiastic" | "concise">("professional");
-  const [coverWordLimit, setCoverWordLimit] = useState<300 | 400 | 500>(400);
-  const [coverCopied, setCoverCopied] = useState(false);
-  const [savingCoverLetter, setSavingCoverLetter] = useState(false);
-  const [savedCoverLetters, setSavedCoverLetters] = useState<Array<{ id: string; company_name: string; role_title: string | null; answer_text: string; created_at: string }>>([]);
-  const [coverLettersSectionOpen, setCoverLettersSectionOpen] = useState(false);
-  // Interview prep bulk save
-  const [savingAllPrep, setSavingAllPrep] = useState(false);
-  const [savedAllPrep, setSavedAllPrep] = useState(false);
   // AI Writing Tools (summary + bullets)
   const [generatingSummary, setGeneratingSummary] = useState(false);
   const [generatedSummary, setGeneratedSummary] = useState<string>("");
@@ -208,6 +239,12 @@ export default function ApplyMode({ context }: Props) {
       .catch(() => {}); // silently fail — backend may be unreachable
   }, []);
 
+  // Auto-load RAG docs on mount — user should not need to click every session
+  useEffect(() => {
+    loadRagDocs();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     if (!context.company) return;
     setLoading(true);
@@ -234,54 +271,6 @@ export default function ApplyMode({ context }: Props) {
   }, [jobUrl, answerDrafts, selectedAnswers, draftProviders, editedTexts, coverLetter, coverDrafts, coverDraftProviders, interviewQuestions]);
 
   useEffect(() => { persistDrafts(); }, [persistDrafts]);
-
-  // C5: Auto-track this application visit (upsert — idempotent)
-  useEffect(() => {
-    if (!context.company) return;
-    applicationsApi
-      .track({
-        companyName: context.company,
-        roleTitle: context.roleTitle,
-        jobUrl: context.jobUrl,
-        platform: context.platform,
-      })
-      .then((res) => {
-        setTrackedAppId(res.application_id);
-      })
-      .catch(() => {}); // non-blocking — tracking failure must never disrupt the UX
-  }, [context.company, context.jobUrl]);
-
-  // C6: Fetch past applications for this company to show the "already applied" indicator
-  useEffect(() => {
-    if (!context.company) return;
-    applicationsApi
-      .list(context.company)
-      .then((res) => {
-        // Exclude the current visit record; show previous applied/interview/offer records
-        const meaningful = res.items.filter(
-          (a) => ["applied", "tailored", "interview", "offer", "rejected"].includes(a.status)
-        );
-        setPastApplications(meaningful);
-      })
-      .catch(() => {});
-  }, [context.company]);
-
-  // T1: Fetch all applications when History tab is activated
-  useEffect(() => {
-    if (tab !== "history") return;
-    setHistoryLoading(true);
-    Promise.all([
-      applicationsApi.list(),
-      applicationsApi.getStats(),
-      applicationsApi.getFunnel().catch(() => null),
-      vaultApi.getAnalytics().catch(() => null),
-    ]).then(([listRes, statsRes, funnelRes, analyticsRes]) => {
-      setAllApplications(listRes.items);
-      setAppStats(statsRes);
-      if (funnelRes) setAppFunnel(funnelRes);
-      if (analyticsRes) setVaultAnalytics(analyticsRes);
-    }).catch(() => {}).finally(() => setHistoryLoading(false));
-  }, [tab]);
 
   // Fetch "From Memory" similar answers whenever questions change
   useEffect(() => {
@@ -382,130 +371,10 @@ export default function ApplyMode({ context }: Props) {
     }
   };
 
-  // T1: Update application status from History tab
+  // T1: Update application status from History tab — also updates local list
   const handleStatusUpdate = async (appId: string, newStatus: string) => {
-    setUpdatingStatus(appId);
-    try {
-      await applicationsApi.updateStatus(appId, newStatus);
-      setAllApplications((prev) => prev.map((a) => a.id === appId ? { ...a, status: newStatus } : a));
-    } catch {
-      // silently fail — status badge will show stale value
-    } finally {
-      setUpdatingStatus(null);
-    }
-  };
-
-  // Quick "Mark as Applied" from context bar
-  const [markingApplied, setMarkingApplied] = useState(false);
-  const [appliedMarked, setAppliedMarked] = useState(false);
-  const handleMarkApplied = async () => {
-    if (!context.company) return;
-    setMarkingApplied(true);
-    try {
-      const result = await applicationsApi.track({
-        companyName: context.company,
-        roleTitle: context.roleTitle,
-        jobUrl: context.jobUrl,
-        platform: context.platform,
-      });
-      await applicationsApi.updateStatus(result.application_id, "applied");
-      setAppliedMarked(true);
-      setTrackedAppId(result.application_id);
-      setTimeout(() => setAppliedMarked(false), 3000);
-    } catch {
-      // ignore
-    } finally {
-      setMarkingApplied(false);
-    }
-  };
-
-  const handleGenerateCoverLetter = async () => {
-    if (!context.company) return;
-    setCoverLoading(true);
-    setCoverError("");
-    setCoverLetter("");
-    try {
-      const providers = await getFreshProviders();
-      // Get candidate name from stored profile
-      const profileData = await new Promise<{ firstName?: string; lastName?: string }>((resolve) => {
-        chrome.storage.local.get("profile", (d) => resolve(d.profile ?? {}));
-      });
-      const candidateName = [profileData.firstName, profileData.lastName].filter(Boolean).join(" ");
-      const result = await vaultApi.generateCoverLetter({
-        companyName: context.company,
-        roleTitle: context.roleTitle,
-        jdText: context.jdText ?? "",
-        tone: coverTone,
-        wordLimit: coverWordLimit,
-        candidateName,
-        providers,
-      });
-      const drafts = result.drafts ?? [];
-      const draftProviders = result.draft_providers ?? [];
-      setCoverDrafts(drafts);
-      setCoverDraftProviders(draftProviders);
-      setCoverSelectedDraft(0);
-      setCoverLetter(drafts[0] ?? "");
-    } catch (err) {
-      setCoverError(err instanceof Error ? err.message : "Generation failed");
-    } finally {
-      setCoverLoading(false);
-    }
-  };
-
-  const handleSaveCoverLetter = async () => {
-    if (!coverLetter.trim() || !context.company) return;
-    setSavingCoverLetter(true);
-    try {
-      await vaultApi.saveAnswer({
-        questionText: `Cover letter for ${context.roleTitle || "position"} at ${context.company}`,
-        questionCategory: "cover_letter",
-        answerText: coverLetter.trim(),
-        companyName: context.company,
-        roleTitle: context.roleTitle,
-        llmProviderUsed: coverDraftProviders[coverSelectedDraft],
-      });
-    } catch { /* ignore */ } finally {
-      setSavingCoverLetter(false);
-    }
-  };
-
-  const handleCopyLetter = async () => {
-    if (!coverLetter) return;
-    try {
-      await navigator.clipboard.writeText(coverLetter);
-    } catch {
-      const ta = document.createElement("textarea");
-      ta.value = coverLetter;
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand("copy");
-      ta.remove();
-    }
-    setCoverCopied(true);
-    setTimeout(() => setCoverCopied(false), 2000);
-  };
-
-  const handleInterviewPrep = async () => {
-    if (!context.company) return;
-    setInterviewLoading(true);
-    setInterviewError("");
-    setInterviewQuestions([]);
-    setPrepCategoryFilter("all");
-    try {
-      const providers = await getFreshProviders();
-      const result = await vaultApi.interviewPrep({
-        companyName: context.company,
-        roleTitle: context.roleTitle,
-        jdText: context.jdText ?? "",
-        providers,
-      });
-      setInterviewQuestions(result.questions);
-    } catch (e) {
-      setInterviewError(e instanceof Error ? e.message : "Failed to generate interview prep");
-    } finally {
-      setInterviewLoading(false);
-    }
+    await _handleStatusUpdate(appId, newStatus);
+    setAllApplications((prev) => prev.map((a) => a.id === appId ? { ...a, status: newStatus } : a));
   };
 
   const handleFillAll = () => {

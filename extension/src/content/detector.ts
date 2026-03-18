@@ -316,8 +316,8 @@ function extractCompanyAndRole(url: string, docTitle: string): { company: string
 
   // ── Platform-specific selectors ──────────────────────────────────────────
 
-  // Greenhouse: h1.app-title + nearby org
-  if (/greenhouse\.io/.test(url)) {
+  // Greenhouse: hosted on greenhouse.io OR custom domain with ?gh_jid= param
+  if (/greenhouse\.io/.test(url) || /[?&]gh_jid=/.test(url)) {
     const role = document.querySelector<HTMLElement>("h1.app-title, h1[data-qa='job-title'], .app__role-title")?.textContent?.trim();
     const org = document.querySelector<HTMLElement>(".company-name, .org-name, [data-qa='company-name']")?.textContent?.trim();
     if (role) roleTitle = role;
