@@ -589,6 +589,116 @@ async function importFromResume() {
   }
 }
 
+// ── GitHub Integration ───────────────────────────────────────────────────────
+
+let _githubRemovePending = false;
+
+async function loadGitHubConfig() {
+  const { clerkUserId, apiBaseUrl } = await chrome.storage.local.get(["clerkUserId", "apiBaseUrl"]);
+  if (!clerkUserId) {
+    showStatus("github-status", "Save your User ID in Authentication first.", "info");
+    return;
+  }
+  const apiBase = (apiBaseUrl as string | undefined) || API_DEFAULT;
+  try {
+    const resp = await fetch(`${apiBase}/auth/me`, {
+      headers: { "X-Clerk-User-Id": clerkUserId as string },
+    });
+    if (!resp.ok) return;
+    const data = await resp.json() as { has_github_token?: boolean; github_username?: string; resume_repo_name?: string };
+    if (data.has_github_token) {
+      getInput("github-username").value = data.github_username ?? "";
+      getInput("github-repo").value = data.resume_repo_name ?? "resume-vault";
+      showStatus("github-status", `Token configured for ${data.github_username ?? ""} / ${data.resume_repo_name ?? ""}`, "info");
+      (get("github-remove-btn") as HTMLButtonElement).disabled = false;
+    }
+  } catch {
+    console.warn("[GitHub] Failed to load config from /auth/me");
+  }
+}
+
+async function saveGitHubConfig() {
+  const username = getInput("github-username").value.trim();
+  const pat = getInput("github-pat").value.trim();
+  const repo = getInput("github-repo").value.trim() || "resume-vault";
+
+  if (!username) { showStatus("github-status", "GitHub username is required.", "err"); return; }
+  if (!pat) { showStatus("github-status", "Personal Access Token is required.", "err"); return; }
+  if (pat.length < 10) { showStatus("github-status", "Token appears too short — paste the full PAT.", "err"); return; }
+
+  const { clerkUserId, apiBaseUrl } = await chrome.storage.local.get(["clerkUserId", "apiBaseUrl"]);
+  if (!clerkUserId) { showStatus("github-status", "Save your User ID in Authentication first.", "info"); return; }
+  const apiBase = (apiBaseUrl as string | undefined) || API_DEFAULT;
+
+  const btn = get("github-save-btn") as HTMLButtonElement;
+  btn.disabled = true;
+  btn.textContent = "Saving…";
+  try {
+    const resp = await fetch(`${apiBase}/users/github-token`, {
+      method: "PUT",
+      headers: { "X-Clerk-User-Id": clerkUserId as string, "Content-Type": "application/json" },
+      body: JSON.stringify({ github_token: pat, github_username: username, resume_repo_name: repo }),
+    });
+    if (resp.ok) {
+      const data = await resp.json() as { github_username?: string; resume_repo_name?: string };
+      showStatus("github-status", `Saved. Token configured for ${data.github_username ?? username} / ${data.resume_repo_name ?? repo}`, "ok");
+      (get("github-remove-btn") as HTMLButtonElement).disabled = false;
+    } else if (resp.status === 401) {
+      showStatus("github-status", "Not authenticated. Save your User ID first.", "err");
+    } else if (resp.status === 422) {
+      const err = await resp.json() as { detail?: unknown };
+      showStatus("github-status", `Invalid input: ${JSON.stringify(err.detail)}`, "err");
+    } else {
+      showStatus("github-status", `Server error (${resp.status}). Try again later.`, "err");
+    }
+  } catch {
+    showStatus("github-status", "Cannot reach backend. Check the Backend API URL.", "err");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Save GitHub Config";
+  }
+}
+
+async function removeGitHubToken() {
+  const btn = get("github-remove-btn") as HTMLButtonElement;
+  if (!_githubRemovePending) {
+    _githubRemovePending = true;
+    btn.textContent = "Confirm Remove";
+    showStatus("github-status", "Remove token? Click Remove again to confirm.", "info");
+    return;
+  }
+
+  _githubRemovePending = false;
+  btn.textContent = "Remove";
+  const { clerkUserId, apiBaseUrl } = await chrome.storage.local.get(["clerkUserId", "apiBaseUrl"]);
+  if (!clerkUserId) { showStatus("github-status", "Save your User ID in Authentication first.", "info"); return; }
+  const apiBase = (apiBaseUrl as string | undefined) || API_DEFAULT;
+
+  btn.disabled = true;
+  try {
+    const resp = await fetch(`${apiBase}/users/github-token`, {
+      method: "DELETE",
+      headers: { "X-Clerk-User-Id": clerkUserId as string },
+    });
+    if (resp.ok) {
+      getInput("github-username").value = "";
+      getInput("github-pat").value = "";
+      getInput("github-repo").value = "resume-vault";
+      showStatus("github-status", "GitHub token removed.", "ok");
+      btn.disabled = true;
+    } else if (resp.status === 401) {
+      showStatus("github-status", "Not authenticated. Save your User ID first.", "err");
+      btn.disabled = false;
+    } else {
+      showStatus("github-status", `Server error (${resp.status}). Try again later.`, "err");
+      btn.disabled = false;
+    }
+  } catch {
+    showStatus("github-status", "Cannot reach backend. Check the Backend API URL.", "err");
+    btn.disabled = false;
+  }
+}
+
 // ── RAG Document Management ─────────────────────────────────────────────────
 
 async function loadRagDocsList() {
@@ -672,6 +782,7 @@ async function uploadRagDocument() {
 wireProviderAutoEnable();
 loadSettings();
 loadWorkHistory();
+loadGitHubConfig();
 loadPromptTemplates();
 loadModelRoutes();
 wireImportFromResume();
@@ -685,3 +796,5 @@ get("wh-add-btn").addEventListener("click", addWorkHistoryEntry);
 get("save-prompts").addEventListener("click", savePromptTemplates);
 get("save-model-routes").addEventListener("click", saveModelRoutes);
 get("rag-upload-btn").addEventListener("click", uploadRagDocument);
+get("github-save-btn").addEventListener("click", saveGitHubConfig);
+get("github-remove-btn").addEventListener("click", removeGitHubToken);

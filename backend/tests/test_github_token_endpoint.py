@@ -1,5 +1,7 @@
 """TDD tests for PUT /api/v1/users/github-token endpoint — Issue #12."""
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
 from httpx import AsyncClient
 
@@ -157,3 +159,188 @@ async def test_put_github_token_unauthenticated_returns_401(client: AsyncClient)
         # No X-Clerk-User-Id header and no test_user in DB
     )
     assert response.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Tests for Feature #14: auto-commit .tex to GitHub after POST /vault/generate
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_generate_resume_commits_to_github(client: AsyncClient, test_user):
+    """When user has a GitHub token, generate endpoint commits .tex and returns github_path."""
+    fake_commit_result = {
+        "versions_path": "versions/Test_Acme_DE.tex",
+        "versions_sha": "abc123sha",
+        "app_dir": "applications/Test_Acme_DE_2026-03-18",
+        "git_tag": "Test_Acme_DE",
+        "tag_sha": "def456",
+    }
+    # Ensure user has a GitHub token
+    await client.put(
+        "/api/v1/users/github-token",
+        json={
+            "github_token": "ghp_fake_token_12345678",
+            "github_username": "testuser",
+            "resume_repo_name": "resume-vault",
+        },
+        headers={"X-Clerk-User-Id": test_user.clerk_id},
+    )
+
+    with (
+        patch(
+            "app.routers.vault._github_service.commit_named_resume",
+            new=AsyncMock(return_value=fake_commit_result),
+        ),
+        patch(
+            "app.routers.vault.generate_full_latex_resume",
+            new=AsyncMock(
+                return_value=type(
+                    "G",
+                    (),
+                    {
+                        "version_tag": "Test_Acme_DE",
+                        "recruiter_filename": "Test.pdf",
+                        "latex_content": r"\documentclass{article}\begin{document}Test resume\end{document}",
+                        "markdown_preview": "# Test",
+                        "ats_score_estimate": 80.0,
+                        "skills_gap": [],
+                        "changes_summary": "Generated",
+                        "llm_provider_used": "anthropic",
+                        "generation_warnings": [],
+                    },
+                )()
+            ),
+        ),
+    ):
+        resp = await client.post(
+            "/api/v1/vault/generate",
+            data={
+                "company_name": "Acme",
+                "role_title": "Data Engineer",
+                "jd_text": "We need a data engineer with Python skills",
+                "name": "Test User",
+                "phone": "555-0000",
+                "email": "test@test.com",
+                "linkedin_url": "https://linkedin.com/in/test",
+                "linkedin_label": "test",
+                "work_history_text": "Senior DE at Acme 2020-2024",
+            },
+            headers={"X-Clerk-User-Id": test_user.clerk_id},
+        )
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["github_path"] == "versions/Test_Acme_DE.tex"
+    assert "github.com/testuser/resume-vault/blob/main/versions/Test_Acme_DE.tex" in (
+        data["github_url"] or ""
+    )
+
+
+@pytest.mark.asyncio
+async def test_generate_resume_no_github_token_returns_null(client: AsyncClient, test_user):
+    """When user has no GitHub token, generate succeeds with github_path: null."""
+    with patch(
+        "app.routers.vault.generate_full_latex_resume",
+        new=AsyncMock(
+            return_value=type(
+                "G",
+                (),
+                {
+                    "version_tag": "Test_Corp_SWE",
+                    "recruiter_filename": "Test.pdf",
+                    "latex_content": r"\documentclass{article}\begin{document}Resume content\end{document}",
+                    "markdown_preview": "# Test",
+                    "ats_score_estimate": 75.0,
+                    "skills_gap": [],
+                    "changes_summary": "Generated",
+                    "llm_provider_used": "keyword",
+                    "generation_warnings": [],
+                },
+            )()
+        ),
+    ):
+        resp = await client.post(
+            "/api/v1/vault/generate",
+            data={
+                "company_name": "Corp",
+                "role_title": "SWE",
+                "jd_text": "Software engineer needed",
+                "name": "Test User",
+                "phone": "555-0000",
+                "email": "test@test.com",
+                "linkedin_url": "https://linkedin.com/in/test",
+                "linkedin_label": "test",
+                "work_history_text": "SWE at Corp 2021-2024",
+            },
+            headers={"X-Clerk-User-Id": test_user.clerk_id},
+        )
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["github_path"] is None
+    assert data["github_url"] is None
+
+
+@pytest.mark.asyncio
+async def test_generate_resume_github_failure_does_not_block(client: AsyncClient, test_user):
+    """When GitHub API throws, generate still returns 200 with github_path: null."""
+    # Give user a token first
+    await client.put(
+        "/api/v1/users/github-token",
+        json={
+            "github_token": "ghp_fake_token_12345678",
+            "github_username": "testuser",
+            "resume_repo_name": "resume-vault",
+        },
+        headers={"X-Clerk-User-Id": test_user.clerk_id},
+    )
+
+    with (
+        patch(
+            "app.routers.vault._github_service.commit_named_resume",
+            new=AsyncMock(side_effect=RuntimeError("GitHub API rate limit exceeded")),
+        ),
+        patch(
+            "app.routers.vault.generate_full_latex_resume",
+            new=AsyncMock(
+                return_value=type(
+                    "G",
+                    (),
+                    {
+                        "version_tag": "Test_GitHub_Fail",
+                        "recruiter_filename": "Test.pdf",
+                        "latex_content": r"\documentclass{article}\begin{document}Failure test\end{document}",
+                        "markdown_preview": "# Test",
+                        "ats_score_estimate": 70.0,
+                        "skills_gap": [],
+                        "changes_summary": "Generated",
+                        "llm_provider_used": "keyword",
+                        "generation_warnings": [],
+                    },
+                )()
+            ),
+        ),
+    ):
+        resp = await client.post(
+            "/api/v1/vault/generate",
+            data={
+                "company_name": "GitHubFail",
+                "role_title": "Engineer",
+                "jd_text": "Engineer role at failing GitHub company",
+                "name": "Test User",
+                "phone": "555-0000",
+                "email": "test@test.com",
+                "linkedin_url": "https://linkedin.com/in/test",
+                "linkedin_label": "test",
+                "work_history_text": "Engineer at GitHubFail 2022-2024",
+            },
+            headers={"X-Clerk-User-Id": test_user.clerk_id},
+        )
+
+    # Generation must succeed even though GitHub failed
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["github_path"] is None
+    assert data["github_url"] is None
+    assert "resume_id" in data

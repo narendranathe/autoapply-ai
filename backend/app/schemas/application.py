@@ -49,3 +49,19 @@ class ApplicationListResponse(BaseModel):
     page: int
     per_page: int
     has_next: bool
+
+
+class ParseEmailRequest(BaseModel):
+    """Request body for POST /applications/parse-email."""
+
+    email_body: str = Field(..., min_length=1, max_length=50000)
+    company_name: str | None = Field(None, max_length=200)
+
+
+class ParseEmailResponse(BaseModel):
+    """Response from POST /applications/parse-email."""
+
+    suggested_status: str
+    confidence: float
+    reasoning: str
+    company_match: "ApplicationResponse | None" = None

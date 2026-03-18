@@ -24,6 +24,7 @@ Endpoints:
   DELETE /api/v1/vault/answers/{id}            Delete a saved answer from the bank
 """
 
+import asyncio
 import contextlib
 import hashlib
 import json as _json
@@ -580,6 +581,41 @@ async def generate_resume(
 
     logger.info(f"Generated resume {generated.version_tag} for {company_name} / {role_title}")
 
+    # Auto-commit to GitHub vault if token is configured
+    github_path: str | None = None
+    github_url: str | None = None
+    if user.encrypted_github_token and user.github_username:
+        try:
+            gh_result = await _github_service.commit_named_resume(
+                encrypted_token=user.encrypted_github_token,
+                repo_full_name=f"{user.github_username}/{user.resume_repo_name or 'resume-vault'}",
+                version_tag=generated.version_tag,
+                tex_content=generated.latex_content,
+                pdf_content=None,
+                metadata={
+                    "company": company_name,
+                    "role": role_title,
+                    "job_id": job_id,
+                    "ats_score": generated.ats_score_estimate,
+                    "skills_gap": generated.skills_gap,
+                },
+                job_id=job_id,
+            )
+            github_path = gh_result.get("versions_path")
+            if github_path:
+                new_resume.github_path = github_path
+                new_resume.github_commit_sha = gh_result.get("versions_sha")
+                await db.commit()
+                github_url = (
+                    f"https://github.com/{user.github_username}/"
+                    f"{user.resume_repo_name or 'resume-vault'}/blob/main/{github_path}"
+                )
+                logger.info(f"Committed resume to GitHub: {github_path}")
+        except Exception as e:
+            logger.warning(f"GitHub commit failed for {generated.version_tag}: {e}")
+    else:
+        logger.debug(f"User {user.id} has no GitHub token; skipping vault commit")
+
     return {
         "resume_id": str(new_resume.id),
         "version_tag": generated.version_tag,
@@ -591,6 +627,8 @@ async def generate_resume(
         "changes_summary": generated.changes_summary,
         "llm_provider_used": generated.llm_provider_used,
         "warnings": generated.generation_warnings,
+        "github_path": github_path,
+        "github_url": github_url,
     }
 
 
