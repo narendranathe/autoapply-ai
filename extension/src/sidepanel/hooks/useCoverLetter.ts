@@ -61,7 +61,6 @@ export function useCoverLetter(context: PageContext): UseCoverLetterResult {
   const [coverLettersSectionOpen, setCoverLettersSectionOpen] = useState(false);
 
   const handleGenerateCoverLetter = async () => {
-    if (!context.company) return;
     setCoverLoading(true);
     setCoverError("");
     setCoverLetter("");
@@ -73,7 +72,7 @@ export function useCoverLetter(context: PageContext): UseCoverLetterResult {
       });
       const candidateName = [profileData.firstName, profileData.lastName].filter(Boolean).join(" ");
       const result = await vaultApi.generateCoverLetter({
-        companyName: context.company,
+        companyName: context.company || "",
         roleTitle: context.roleTitle,
         jdText: context.jdText ?? "",
         tone: coverTone,
@@ -95,7 +94,7 @@ export function useCoverLetter(context: PageContext): UseCoverLetterResult {
   };
 
   const handleSaveCoverLetter = async () => {
-    if (!coverLetter.trim() || !context.company) return;
+    if (!coverLetter.trim()) return;
     setSavingCoverLetter(true);
     try {
       await vaultApi.saveAnswer({

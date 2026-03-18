@@ -42,10 +42,20 @@
         "*://*.icims.com/*",
         "*://*.jobvite.com/*",
         "*://*.taleo.net/*",
+        "*://*.recruitingbypaycor.com/*",
+        "*://*.paylocity.com/*",
+        "*://*.paycomonline.com/*",
+        "*://*.eightfold.ai/*",
+        "*://*.breezy.hr/*",
+        "*://*.fountainhq.com/*",
+        "*://*.dayforce.com/*",
         "*://linkedin.com/jobs/*",
         "*://www.linkedin.com/jobs/*",
         "*://indeed.com/viewjob*",
-        "*://www.indeed.com/viewjob*"
+        "*://www.indeed.com/viewjob*",
+        "*://careers.*.*/*",
+        "*://jobs.*.*/*",
+        "*://apply.*.*/*"
       ],
       "js": ["content/floatingPanel.js"],
       "run_at": "document_idle"

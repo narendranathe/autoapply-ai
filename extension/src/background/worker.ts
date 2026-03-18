@@ -39,9 +39,21 @@ const CAREER_URL_PATTERNS = [
   /wellfound\.com\/jobs/,
   /otta\.com/,
   /gh_jid=/,
+  /recruitingbypaycor\.com/,
+  /paylocity\.com/,
+  /paycomonline\.com/,
+  /ultipro\.com/,
+  /successfactors\.com/,
+  /eightfold\.ai/,
+  /breezy\.hr/,
+  /fountainhq\.com/,
+  /dayforce\.com/,
   /careers\.[a-z]+\.[a-z]+/,
   /[a-z]+\.com\/careers\//,
   /[a-z]+\.com\/jobs\//,
+  /[a-z]+\.com\/apply\//,
+  /\/job-application/,
+  /\/job_application/,
 ];
 
 const JOB_SCOUT_PATTERNS = [
@@ -106,24 +118,36 @@ function classifyUrl(url: string): "apply" | "scout" | null {
 }
 
 function extractCompanyFromUrl(url: string, title: string): string {
-  // Try hostname first: "careers.google.com" → "Google"
+  const ATS_SUBDOMAINS = new Set(["greenhouse", "lever", "workday", "myworkday", "ashbyhq",
+    "smartrecruiters", "bamboohr", "icims", "jobvite", "taleo", "recruitingbypaycor",
+    "paylocity", "eightfold", "breezy"]);
+  const SKIP_PREFIXES = new Set(["careers", "jobs", "apply", "hiring", "work", "talent", "recruit", "job"]);
+
   try {
     const hostname = new URL(url).hostname.replace(/^www\./, "");
     const parts = hostname.split(".");
-    // "careers.google.com" → "google"
-    if (parts[0] === "careers" || parts[0] === "jobs") {
-      return parts[1] ? parts[1].charAt(0).toUpperCase() + parts[1].slice(1) : "";
-    }
     // "google.greenhouse.io" → "Google"
-    if (parts.length >= 3 && (parts[1] === "greenhouse" || parts[1] === "lever")) {
-      return parts[0].charAt(0).toUpperCase() + parts[0].slice(1);
+    if (parts.length >= 3 && ATS_SUBDOMAINS.has(parts[1] ?? "")) {
+      const name = parts[0] ?? "";
+      return name.split(/[-_]/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+    }
+    // "careers.frazierdeeter.com" → "Frazierdeeter"
+    if (SKIP_PREFIXES.has(parts[0] ?? "")) {
+      const name = parts[1] ?? "";
+      return name.split(/[-_]/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+    }
+    // "frazierdeeter.com/careers/..." → "Frazierdeeter"
+    const tld = parts[parts.length - 1] ?? "";
+    const domain = parts[parts.length - 2] ?? "";
+    if (tld.length <= 3 && domain && !SKIP_PREFIXES.has(domain)) {
+      return domain.split(/[-_]/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
     }
   } catch {
     // ignore
   }
 
   // Fall back to page title: "Software Engineer at Google" → "Google"
-  const atMatch = title.match(/\bat\s+([A-Z][a-zA-Z\s]+?)(?:\s*[\-–|]|$)/);
+  const atMatch = title.match(/\bat\s+([A-Z][a-zA-Z0-9\s&.,'()-]+?)(?:\s*[\-–|·]|$)/);
   if (atMatch) return atMatch[1].trim();
 
   return "";
@@ -198,8 +222,13 @@ chrome.runtime.onMessage.addListener(
         const tabId = sender.tab?.id;
         if (tabId) {
           // Store heuristically-detected context if not already known (URL didn't match patterns)
-          if (!tabContexts.has(tabId) && message.context) {
+          if (message.context) {
             tabContexts.set(tabId, message.context);
+            // Relay to sidepanel so it updates immediately (may already be open)
+            chrome.runtime.sendMessage<Message>({
+              type: "PAGE_CONTEXT_UPDATE",
+              payload: message.context,
+            }).catch(() => {});
           }
           chrome.sidePanel.open({ tabId }).catch(() => {});
         }

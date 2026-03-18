@@ -73,7 +73,12 @@ const JOB_PAGE_PATTERNS = [
 
 function isJobPage(): boolean {
   const url = window.location.href;
-  return JOB_PAGE_PATTERNS.some((p) => p.test(url));
+  if (JOB_PAGE_PATTERNS.some((p) => p.test(url))) return true;
+  // Heuristic: job-related heading + at least one form element
+  const jobKeywords = /\b(job|position|role|career|engineer|developer|manager|analyst|opening|vacancy|apply|application)\b/i;
+  const hasJobTitle = Array.from(document.querySelectorAll("h1, h2, h3")).some(el => jobKeywords.test(el.textContent || ""));
+  const hasFormSignal = !!document.querySelector('input:not([type=hidden]):not([type=submit]):not([type=button]), textarea, select, [contenteditable="true"]');
+  return hasJobTitle && hasFormSignal;
 }
 
 function extractCompanyAndRoleFromPage(): { company: string; roleTitle: string } {
@@ -128,8 +133,11 @@ function extractCompanyAndRoleFromPage(): { company: string; roleTitle: string }
       ?? docTitle;
   }
   if (!company) {
-    const domain = window.location.hostname.replace(/^www\./, "").split(".")[0] ?? "";
-    company = domain.charAt(0).toUpperCase() + domain.slice(1);
+    const hostname = window.location.hostname.replace(/^www\./, "");
+    const parts = hostname.split(".");
+    const SKIP = new Set(["careers", "jobs", "apply", "hiring", "work", "talent", "recruit"]);
+    const namePart = parts.find(p => p.length > 2 && !SKIP.has(p.toLowerCase())) ?? parts[0] ?? "";
+    company = namePart.split(/[-_]/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ").trim();
   }
 
   // Clean trailing noise
@@ -215,6 +223,21 @@ function getFieldLabel(el: HTMLElement): string {
     if (label && label !== el) return label.textContent?.trim() ?? "";
     parent = parent.parentElement;
   }
+  // Check field wrapper with class-based label
+  const wrapper = el.closest("[class*='field'], [class*='Field'], [class*='form-group'], [class*='form-item'], [class*='FormItem'], [class*='FormField']");
+  if (wrapper) {
+    const wrapperLabel = wrapper.querySelector("label, legend, [class*='label'], [class*='Label']");
+    if (wrapperLabel && wrapperLabel !== el) {
+      const text = wrapperLabel.textContent?.trim() ?? "";
+      if (text) return text;
+    }
+  }
+  // Check previous sibling for label text
+  const prev = el.previousElementSibling;
+  if (prev && ["SPAN", "DIV", "LABEL", "P"].includes(prev.tagName)) {
+    const text = prev.textContent?.trim() ?? "";
+    if (text && text.length < 80) return text;
+  }
   return el.getAttribute("name") ?? "";
 }
 
@@ -237,13 +260,14 @@ function classifyField(el: HTMLInputElement | HTMLSelectElement): FieldType {
 function detectFields(): DetectedField[] {
   const inputs = Array.from(
     document.querySelectorAll<HTMLInputElement | HTMLSelectElement>(
-      "input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=checkbox]):not([type=radio]), select"
+      "input:not([type=hidden]):not([type=submit]):not([type=button]), select"
     )
   );
   const fields: DetectedField[] = [];
   for (const el of inputs) {
     const fieldType = classifyField(el as HTMLInputElement);
-    if (fieldType === "unknown" || fieldType === "demographic") continue;
+    if (fieldType === "demographic") continue;
+    if (fieldType === "unknown" && !getFieldLabel(el)) continue;
     // Tag element with a stable data attribute so we can re-find it for fill
     const autoId = `aap_f${fields.length}`;
     el.setAttribute("data-aap-id", autoId);
@@ -264,7 +288,7 @@ function detectQuestions(): DetectedQuestion[] {
   const questions: DetectedQuestion[] = [];
   for (const ta of textareas) {
     const label = getFieldLabel(ta);
-    if (!label || label.length < 10) continue;
+    if (!label || label.length < 3) continue;
     let category: QuestionCategory = "custom";
     for (const { category: cat, patterns } of QUESTION_CATEGORY_PATTERNS) {
       if (patterns.some((p) => p.test(label))) {
