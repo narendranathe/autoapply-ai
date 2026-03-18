@@ -31,7 +31,7 @@ export interface UseCoverLetterResult {
   savedCoverLetters: Array<{ id: string; company_name: string; role_title: string | null; answer_text: string; created_at: string }>;
   setSavedCoverLetters: React.Dispatch<React.SetStateAction<Array<{ id: string; company_name: string; role_title: string | null; answer_text: string; created_at: string }>>>;
   coverLettersSectionOpen: boolean;
-  setCoverLettersSectionOpen: (v: boolean) => void;
+  setCoverLettersSectionOpen: React.Dispatch<React.SetStateAction<boolean>>;
   handleGenerateCoverLetter: () => Promise<void>;
   handleSaveCoverLetter: () => Promise<void>;
   handleCopyLetter: () => Promise<void>;

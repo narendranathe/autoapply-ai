@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import type { Message, PageContext } from "../shared/types";
 import { restoreClerkUserId } from "../shared/api";
+import { initClerk } from "../shared/clerkConfig";
 import ApplyMode from "./pages/ApplyMode";
 import JobScout from "./pages/JobScout";
 
@@ -30,6 +31,7 @@ export default function App() {
 
   useEffect(() => {
     restoreClerkUserId().catch(console.error);
+    initClerk().catch(console.error);
   }, []);
 
   useEffect(() => {

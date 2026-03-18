@@ -1,120 +1,46 @@
 """
-vault/ — Router package decomposing the vault.py god module (2239 lines → 7 focused modules).
+vault/ router package.
 
-This __init__.py is the ONLY public interface. All sub-routers are included here and
-the aggregated `router` is imported by app/main.py exactly as before:
+This package decomposes the vault god-module into focused sub-modules.
+The aggregated `router` is the only public symbol consumed by app/main.py:
 
     from app.routers import vault
     app.include_router(vault.router, prefix="/api/v1/vault", tags=["Vault"])
 
-Sub-module map
---------------
-Module              Endpoints                                       Est. lines
-──────────────────  ──────────────────────────────────────────────  ──────────
-resumes.py          POST   /upload                                    ~215
-                    GET    /resumes
-                    GET    /resumes/{id}
-                    DELETE /resumes/{id}
-                    PATCH  /resumes/{id}
-                    GET    /download/{id}
-                    POST   /sync-markdown
-                    helpers: _resume_to_dict, _ats_to_dict
+All routes are currently served through vault_flat.py (the original monolith,
+renamed) while decomposition into sub-modules is in progress.
 
-retrieve.py         POST   /retrieve                                  ~140
-                    POST   /retrieve/batch
-                    POST   /ats-score
-                    helper: _single_retrieve (private)
-
-generate.py         POST   /generate                                  ~380
-                    POST   /generate/tailored
-                    POST   /generate/summary
-                    POST   /generate/bullets
-                    POST   /generate/cover-letter
-
-answers.py          POST   /generate/answers                          ~520
-                    POST   /generate/answers/trim
-                    POST   /answers/save
-                    POST   /answers/bulk-save
-                    DELETE /answers/{id}
-                    PATCH  /answers/{id}/feedback
-                    PATCH  /answers/{id}
-                    GET    /answers/similar
-                    GET    /answers/search
-                    GET    /answers/{company_name}
-                    GET    /cover-letters
-                    helpers: _levenshtein, _compute_reward (private)
-
-history.py          GET    /history/{company_name}                    ~60
-                    GET    /analytics
-
-github.py           GET    /github/versions                           ~55
-
-documents.py        POST   /documents/upload-md                       ~130
-                    GET    /documents
-                    DELETE /documents/{source_filename}
-                    POST   /documents/retrieve
-
-interview.py        POST   /interview-prep                            ~180
-                    helper: _rule_based_interview_questions (private)
-                    constant: _INTERVIEW_SYSTEM
-
-Shared utilities
-----------------
-- _resume_to_dict / _ats_to_dict  →  resumes.py (imported by retrieve.py and history.py)
-- _levenshtein / _compute_reward  →  answers.py (private helpers, not re-exported)
-- Module-level singletons:
-    _retrieval_agent  = RetrievalAgent()   → resumes.py, imported by retrieve.py + answers.py
-    _resume_parser    = ResumeParser()     → resumes.py
-    _github_service   = GitHubService()    → github.py, imported by generate.py
-
-Implementation notes
---------------------
-- NO behavioural changes: all URL paths, HTTP methods, and response shapes are identical.
-- Each sub-module defines its own `router = APIRouter()` with NO prefix.
-- Route registration ORDER matters — FastAPI matches the first registered path:
-    answers.py must register /answers/similar and /answers/search BEFORE /answers/{company}.
-- The sub-routers must be included in this file in the order shown above.
-- Shared singletons are instantiated once in the owning module and imported elsewhere.
-
-Decomposition status: STUB ONLY — vault.py is unchanged.
-Actual implementation is tracked in GitHub Issue #12.
+NOTE: Internal singletons (_retrieval_agent, etc.) are re-exported from
+vault_flat so that tests patching "app.routers.vault._retrieval_agent" work.
+However, since vault_flat functions reference their own module globals, tests
+must patch "app.routers.vault_flat._retrieval_agent" for the patch to take
+effect on the running code.
 """
 
-from fastapi import APIRouter
+import sys
 
-# ---------------------------------------------------------------------------
-# Sub-router imports (uncomment each line as the corresponding module is completed)
-# ---------------------------------------------------------------------------
-# from app.routers.vault.resumes import router as resumes_router
-# from app.routers.vault.retrieve import router as retrieve_router
-# from app.routers.vault.generate import router as generate_router
-# from app.routers.vault.answers import router as answers_router    # NOTE: before history
-# from app.routers.vault.history import router as history_router
-# from app.routers.vault.github import router as github_router
-# from app.routers.vault.documents import router as documents_router
-# from app.routers.vault.interview import router as interview_router
+import app.routers.vault_flat as _flat
 
-# ---------------------------------------------------------------------------
-# Aggregated router — the only symbol consumed by app/main.py
-# ---------------------------------------------------------------------------
-router = APIRouter()
+# Make vault_flat's module globals accessible as vault package attributes.
+# This ensures "from app.routers.vault import X" works for all public names.
+_this_module = sys.modules[__name__]
 
-# Sub-routers are included here once their modules are implemented.
-# Registration order matters: more-specific paths before parameterised catch-alls.
-#
-# router.include_router(resumes_router)
-# router.include_router(retrieve_router)
-# router.include_router(generate_router)
-# router.include_router(answers_router)   # /answers/similar, /answers/search BEFORE /answers/{co}
-# router.include_router(history_router)
-# router.include_router(github_router)
-# router.include_router(documents_router)
-# router.include_router(interview_router)
+for _name in dir(_flat):
+    if not _name.startswith("__"):
+        setattr(_this_module, _name, getattr(_flat, _name))
 
-# ---------------------------------------------------------------------------
-# Migration bridge — vault_flat.py holds all current routes while sub-modules
-# are built out. Once all sub-modules are wired in, remove vault_flat.py.
-# ---------------------------------------------------------------------------
-from app.routers.vault_flat import router as _flat_router  # noqa: E402
+# Explicit re-exports for IDE / type checker awareness
+router = _flat.router
+_compute_reward = _flat._compute_reward
+_levenshtein = _flat._levenshtein
+_resolve_providers = _flat._resolve_providers
+_retrieval_agent = _flat._retrieval_agent
+_resume_parser = _flat._resume_parser
+_ats_to_dict = _flat._ats_to_dict
+_resume_to_dict = _flat._resume_to_dict
+_single_retrieve = _flat._single_retrieve
+_github_service = _flat._github_service
 
-router.include_router(_flat_router)
+del _flat, _this_module, _name, sys
+
+__all__ = ["router"]
