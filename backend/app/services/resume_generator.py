@@ -31,6 +31,7 @@ import httpx
 from loguru import logger
 
 from app.services.ats_service import ATSResult
+from app.services.llm_gateway import LLMGateway
 
 # ── Load instruction files ─────────────────────────────────────────────────
 
@@ -357,6 +358,9 @@ async def _call_ollama(system: str, user: str, model: str = "llama3.1:8b") -> st
         return response.json()["response"]
 
 
+_llm_gateway = LLMGateway()
+
+
 async def _llm_generate(
     system_prompt: str,
     user_prompt: str,
@@ -367,33 +371,16 @@ async def _llm_generate(
     """
     Try LLM providers in cascade order.
     Returns (raw_text, provider_name_used).
+
+    Delegates to LLMGateway — single source of truth for provider dispatch.
     """
-    cascade = []
-
-    if provider == "anthropic" and api_key:
-        cascade.append(("anthropic", lambda: _call_anthropic(system_prompt, user_prompt, api_key)))
-    elif provider == "openai" and api_key:
-        cascade.append(("openai", lambda: _call_openai(system_prompt, user_prompt, api_key)))
-    elif provider == "groq" and api_key:
-        cascade.append(("groq", lambda: _call_groq(system_prompt, user_prompt, api_key)))
-    elif provider == "kimi" and api_key:
-        cascade.append(("kimi", lambda: _call_kimi(system_prompt, user_prompt, api_key)))
-    elif provider == "ollama":
-        cascade.append(("ollama", lambda: _call_ollama(system_prompt, user_prompt, ollama_model)))
-
-    # Always try Ollama as local fallback before giving up (only if not already first)
-    if provider != "ollama":
-        cascade.append(("ollama", lambda: _call_ollama(system_prompt, user_prompt, ollama_model)))
-
-    for name, call in cascade:
-        try:
-            result = await call()
-            if result and len(result) > 200:
-                return result, name
-        except Exception as e:
-            logger.warning(f"LLM provider {name} failed: {e}")
-
-    return "", "fallback"
+    return await _llm_gateway.generate(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        provider=provider,
+        api_key=api_key,
+        ollama_model=ollama_model,
+    )
 
 
 # ── Answer generation (Q&A) ────────────────────────────────────────────────

@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.base import async_session_factory
+from app.services.llm_gateway import LLMGateway
 
 if TYPE_CHECKING:
     from app.models.user import User
@@ -163,3 +164,8 @@ async def get_current_user(
             "Send Authorization: Bearer <token> from your Clerk session."
         ),
     )
+
+
+def get_llm_gateway() -> LLMGateway:
+    """Provide an LLMGateway instance as a FastAPI dependency."""
+    return LLMGateway()

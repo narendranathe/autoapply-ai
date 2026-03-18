@@ -130,6 +130,35 @@
         <button class="btn btn-primary" id="save-api" style="margin-left: 8px;">Save</button>
       </div>
 
+      <!-- GitHub Integration -->
+      <div class="card" id="github-card">
+        <h2>GitHub Integration</h2>
+        <label for="github-username">GitHub Username</label>
+        <input type="text" id="github-username" placeholder="e.g. narendranathe" />
+
+        <div style="margin-top:12px">
+          <label for="github-pat">Personal Access Token (PAT)</label>
+          <div class="provider-key-row">
+            <input type="password" id="github-pat" placeholder="ghp_..." />
+            <a href="https://github.com/settings/tokens/new?scopes=repo" target="_blank" class="get-key-link">Get one →</a>
+          </div>
+          <p class="hint">Fine-grained or classic token. Needs <strong>repo</strong> scope.</p>
+        </div>
+
+        <div style="margin-top:12px">
+          <label for="github-repo">Resume Repository Name</label>
+          <input type="text" id="github-repo" placeholder="resume-vault" />
+          <p class="hint">The repo where resumes will be committed. Will be created if it doesn't exist.</p>
+        </div>
+
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:16px;">
+          <button class="btn btn-primary" id="github-save-btn">Save GitHub Config</button>
+          <button class="btn btn-secondary" id="github-test-btn" style="display:none">Test Connection</button>
+          <button id="github-remove-btn" class="btn" style="background:#1a0808;color:#f87171;border:1px solid #7f1d1d;margin-top:0;" disabled>Remove</button>
+        </div>
+        <div id="github-status" class="status"></div>
+      </div>
+
       <!-- LLM Providers -->
       <div class="card">
         <h2>LLM Providers</h2>

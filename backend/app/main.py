@@ -14,7 +14,17 @@ from app.config import settings
 from app.middleware.logging_middleware import StructuredLoggingMiddleware
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.middleware.request_id import RequestIDMiddleware
-from app.routers import applications, auth, health, resume, vault, work_history
+from app.routers import (
+    applications,
+    auth,
+    health,
+    reflect,
+    resume,
+    user_provider_config,
+    users,
+    vault,
+    work_history,
+)
 
 
 @asynccontextmanager
@@ -73,6 +83,9 @@ def create_app() -> FastAPI:
     app.include_router(applications.router, prefix="/api/v1/applications", tags=["Applications"])
     app.include_router(vault.router, prefix="/api/v1/vault", tags=["Vault"])
     app.include_router(auth.router, prefix="/api/v1/auth", tags=["Auth"])
+    app.include_router(users.router, prefix="/api/v1/users", tags=["Users"])
+    app.include_router(user_provider_config.router, prefix="/api/v1/users", tags=["Users"])
     app.include_router(work_history.router, prefix="/api/v1/work-history", tags=["Work History"])
+    app.include_router(reflect.router, prefix="/api/v1", tags=["Reflect"])
 
     return app
