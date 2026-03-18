@@ -24,7 +24,6 @@ Endpoints:
   DELETE /api/v1/vault/answers/{id}            Delete a saved answer from the bank
 """
 
-import asyncio
 import contextlib
 import hashlib
 import json as _json

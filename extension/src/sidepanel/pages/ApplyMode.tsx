@@ -28,6 +28,8 @@ function saveDraftSession(jobUrl: string | undefined, suffix: string, value: unk
 
 interface Props { context: PageContext }
 
+type Tab = "resumes" | "fields" | "questions" | "history" | "prep" | "cover";
+
 function scoreColor(s: number): string {
   if (s >= 80) return "#10b981";
   if (s >= 65) return "#f59e0b";
@@ -105,7 +107,7 @@ function getProfileValue(fieldType: string, profile: UserProfile | null): string
 
 export default function ApplyMode({ context }: Props) {
   const jobUrl = context.jobUrl;
-  const { tab, setTab } = useTabNavigation();
+  const [tab, setTab] = useState<Tab>("resumes");
   const [resumes, setResumes] = useState<ResumeCard[]>([]);
   const [ats, setAts] = useState<ATSScoreResult | null>(null);
   const [loading, setLoading] = useState(false);
