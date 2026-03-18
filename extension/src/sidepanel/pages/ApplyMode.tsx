@@ -4,6 +4,7 @@ import { applicationsApi, vaultApi, workHistoryApi, type GenerateTailoredRespons
 import ATSScoreBar from "../components/ATSScoreBar";
 import ResumeCardComponent from "../components/ResumeCard";
 import { useTabNavigation, type Tab } from "../hooks/useTabNavigation";
+import { useProviders, getFreshProviders, type UserProfile } from "../hooks/useProviders";
 
 // ── Draft persistence helpers (sessionStorage, keyed by job URL) ────────────
 
@@ -57,23 +58,6 @@ function CompanyAvatar({ name }: { name: string }) {
   );
 }
 
-interface UserProfile {
-  firstName?: string;
-  lastName?: string;
-  email?: string;
-  phone?: string;
-  city?: string;
-  state?: string;
-  zip?: string;
-  country?: string;
-  linkedinUrl?: string;
-  githubUrl?: string;
-  portfolioUrl?: string;
-  degree?: string;
-  yearsExperience?: string;
-  sponsorship?: string;
-  salary?: string;
-}
 
 function getProfileValue(fieldType: string, profile: UserProfile | null): string {
   if (!profile) return "";
@@ -116,10 +100,8 @@ export default function ApplyMode({ context }: Props) {
   );
   const [savingAnswer, setSavingAnswer] = useState<string | null>(null);
   const [generatingAnswer, setGeneratingAnswer] = useState<string | null>(null);
-  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const { profile, providers, providersLoaded, promptTemplates } = useProviders();
   const [workHistoryText, setWorkHistoryText] = useState<string>("");
-  const [providers, setProviders] = useState<Array<{ name: string; apiKey: string; model?: string }>>([]);
-  const [providersLoaded, setProvidersLoaded] = useState(false);
   const [draftProviders, setDraftProviders] = useState<Record<string, string[]>>(
     () => loadDraftSession(jobUrl, "draftProviders", {})
   );
@@ -137,8 +119,6 @@ export default function ApplyMode({ context }: Props) {
   const [uploadSuccess, setUploadSuccess] = useState<string>("");
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  // L3: per-category prompt style instructions
-  const [promptTemplates, setPromptTemplates] = useState<Record<string, string>>({});
   // C5/C6: application tracking
   const [trackedAppId, setTrackedAppId] = useState<string | null>(null);
   const [pastApplications, setPastApplications] = useState<TrackedApplication[]>([]);
@@ -219,45 +199,6 @@ export default function ApplyMode({ context }: Props) {
   const [ragDocList, setRagDocList] = useState<Array<{ source_filename: string; doc_type: string; chunk_count: number; has_dense_embeddings: boolean; created_at: string }>>([]);
   const [ragDocsLoaded, setRagDocsLoaded] = useState(false);
 
-  const PROVIDER_RANK: Record<string, number> = { anthropic: 1, openai: 2, gemini: 3, groq: 4, perplexity: 5, kimi: 6 };
-  const PROVIDER_MODELS: Record<string, string> = { anthropic: "claude-sonnet-4-6", openai: "gpt-4o", gemini: "gemini-1.5-flash", groq: "llama-3.3-70b-versatile", perplexity: "sonar", kimi: "moonshot-v1-32k" };
-
-  function buildProviderList(configs: Record<string, { enabled?: boolean; apiKey: string; model?: string }>) {
-    return Object.entries(configs)
-      .filter(([, cfg]) => !!cfg.apiKey)   // enabled = has a key, full stop
-      .map(([name, cfg]) => ({ name, apiKey: cfg.apiKey, model: cfg.model || PROVIDER_MODELS[name] || "" }))
-      .sort((a, b) => (PROVIDER_RANK[a.name] ?? 50) - (PROVIDER_RANK[b.name] ?? 50));
-  }
-
-  // Read providers fresh from storage every time — bypasses all React state race conditions
-  async function getFreshProviders(): Promise<Array<{ name: string; apiKey: string; model: string }>> {
-    return new Promise((resolve) => {
-      chrome.storage.local.get("providerConfigs", (data) => {
-        if (!data.providerConfigs) { resolve([]); return; }
-        resolve(buildProviderList(data.providerConfigs as Record<string, { enabled?: boolean; apiKey: string; model?: string }>));
-      });
-    });
-  }
-
-  useEffect(() => {
-    chrome.storage.local.get(["profile", "providerConfigs", "promptTemplates"], (data) => {
-      if (data.profile) setProfile(data.profile as UserProfile);
-      if (data.providerConfigs) setProviders(buildProviderList(data.providerConfigs as Record<string, { enabled: boolean; apiKey: string; model: string }>));
-      if (data.promptTemplates) setPromptTemplates(data.promptTemplates as Record<string, string>);
-      setProvidersLoaded(true);
-    });
-
-    const onChanged = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
-      if (area !== "local") return;
-      if (changes.profile?.newValue) setProfile(changes.profile.newValue as UserProfile);
-      if (changes.providerConfigs?.newValue) setProviders(buildProviderList(changes.providerConfigs.newValue as Record<string, { enabled: boolean; apiKey: string; model: string }>));
-      if (changes.promptTemplates?.newValue) setPromptTemplates(changes.promptTemplates.newValue as Record<string, string>);
-    };
-    chrome.storage.onChanged.addListener(onChanged);
-    return () => chrome.storage.onChanged.removeListener(onChanged);
-  }, []);
-
-  // Fetch work history text from backend (used to ground LLM answers)
   useEffect(() => {
     workHistoryApi
       .getText()
@@ -790,9 +731,6 @@ export default function ApplyMode({ context }: Props) {
     }
   };
 
-  // Keep a ref to the latest providers so auto-generate always uses fresh values
-  const providersRef = React.useRef(providers);
-  providersRef.current = providers;
   const workHistoryRef = React.useRef(workHistoryText);
   workHistoryRef.current = workHistoryText;
 
