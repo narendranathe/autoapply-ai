@@ -47,6 +47,45 @@ const JOB_SCOUT_PATTERNS = [
   /levels\.fyi\/jobs/,
 ];
 
+// ── Auth helpers ───────────────────────────────────────────────────────────
+
+/**
+ * Build auth headers for fetch() calls made from the service worker.
+ *
+ * Priority:
+ *   1. If a Clerk RS256 JWT exists in storage AND is not expired (with 30-second
+ *      buffer) → `Authorization: Bearer <token>`
+ *   2. Otherwise fall back to the legacy `X-Clerk-User-Id` header.
+ *
+ * All values are read fresh from chrome.storage.local on every call so the
+ * worker always picks up a newly-refreshed token without needing an explicit
+ * invalidation signal.
+ */
+async function workerBuildAuthHeaders(): Promise<Record<string, string>> {
+  const data = await chrome.storage.local.get([
+    "clerkUserId",
+    "clerkToken",
+    "clerkTokenExp",
+  ]);
+
+  const token = data.clerkToken as string | undefined;
+  const exp = (data.clerkTokenExp as number | undefined) ?? 0;
+  const userId = data.clerkUserId as string | undefined;
+
+  // Use JWT Bearer if present and not within 30 s of expiry.
+  // exp === 0 means expiry is unknown — treat token as valid.
+  if (token && (exp === 0 || Date.now() / 1000 < exp - 30)) {
+    return { Authorization: `Bearer ${token}` };
+  }
+
+  // Fall back to X-Clerk-User-Id (dev / legacy path)
+  if (userId) {
+    return { "X-Clerk-User-Id": userId };
+  }
+
+  return {};
+}
+
 // ── State ──────────────────────────────────────────────────────────────────
 
 // tab id → most recent PageContext detected by content script
@@ -223,16 +262,18 @@ chrome.runtime.onMessage.addListener(
         const emailMatches = message.payload;
         if (!emailMatches?.length) break;
 
-        chrome.storage.local.get(["clerkUserId", "apiBaseUrl"]).then((data) => {
+        chrome.storage.local.get(["clerkUserId", "apiBaseUrl"]).then(async (data) => {
           const userId = data.clerkUserId as string | undefined;
           const apiBase = (data.apiBaseUrl as string | undefined) || "https://autoapply-ai-api.fly.dev/api/v1";
           if (!userId) return;
+
+          const authHdrs = await workerBuildAuthHeaders();
 
           for (const match of emailMatches) {
             if (!match.company) continue;
             // Step 1: list applications for this company
             fetch(`${apiBase}/applications?company=${encodeURIComponent(match.company)}&limit=1`, {
-              headers: { "X-Clerk-User-Id": userId },
+              headers: authHdrs,
             }).then((r) => r.json()).then((res: { items?: Array<{ id: string; status: string }> }) => {
               const app = res.items?.[0];
               if (!app) return;
@@ -246,7 +287,7 @@ chrome.runtime.onMessage.addListener(
               if (newRank <= currentRank) return;
               return fetch(`${apiBase}/applications/${app.id}`, {
                 method: "PATCH",
-                headers: { "Content-Type": "application/json", "X-Clerk-User-Id": userId },
+                headers: { "Content-Type": "application/json", ...authHdrs },
                 body: JSON.stringify({ status: match.status }),
               });
             }).catch(() => {});
@@ -268,15 +309,17 @@ chrome.runtime.onMessage.addListener(
         chrome.runtime.sendMessage<Message>({ type: "PAGE_CONTEXT_UPDATE", payload: ctx }).catch(() => {});
 
         // Fire-and-forget: update via API using stored credentials
-        chrome.storage.local.get(["clerkUserId", "apiBaseUrl"]).then((data) => {
+        chrome.storage.local.get(["clerkUserId", "apiBaseUrl"]).then(async (data) => {
           const userId = data.clerkUserId as string | undefined;
           const apiBase = (data.apiBaseUrl as string | undefined) || "https://autoapply-ai-api.fly.dev/api/v1";
           if (!userId || !ctx.jobUrl) return;
 
+          const authHdrs = await workerBuildAuthHeaders();
+
           // Use the track endpoint to get/create the application record first, then patch status
           fetch(`${apiBase}/applications/track`, {
             method: "POST",
-            headers: { "Content-Type": "application/json", "X-Clerk-User-Id": userId },
+            headers: { "Content-Type": "application/json", ...authHdrs },
             body: JSON.stringify({
               company_name: ctx.company,
               role_title: ctx.roleTitle,
@@ -287,7 +330,7 @@ chrome.runtime.onMessage.addListener(
             if (!res.application_id) return;
             return fetch(`${apiBase}/applications/${res.application_id}`, {
               method: "PATCH",
-              headers: { "Content-Type": "application/json", "X-Clerk-User-Id": userId },
+              headers: { "Content-Type": "application/json", ...authHdrs },
               body: JSON.stringify({ status: "applied" }),
             });
           }).catch(() => {});

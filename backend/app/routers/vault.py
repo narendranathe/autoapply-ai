@@ -1722,7 +1722,7 @@ def _ats_to_dict(r: ATSResult) -> dict:
 @router.get("/download/{resume_id}")
 async def download_resume_file(
     resume_id: uuid.UUID,
-    fmt: str = "tex",  # "tex" | "markdown"
+    fmt: str = "tex",  # "tex" | "markdown" | "pdf"
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -1731,6 +1731,12 @@ async def download_resume_file(
 
     fmt=tex       → returns the LaTeX source (.tex)
     fmt=markdown  → returns the markdown preview (.md)
+    fmt=pdf       → serves the LaTeX source with a .pdf filename ({FirstName}.pdf).
+                    No server-side compilation — the file is raw LaTeX.  Browsers
+                    that open it in a viewer will show plain text; the primary use
+                    case is triggering a "Save as … .pdf" download so the file
+                    lands in the user's Downloads folder with the recruiter-friendly
+                    name stored in Resume.recruiter_filename.
     """
     from fastapi.responses import Response
 
@@ -1745,6 +1751,12 @@ async def download_resume_file(
         content = resume.markdown_content or ""
         media_type = "text/markdown"
         ext = "md"
+    elif fmt == "pdf":
+        # MVP: serve LaTeX source renamed to {FirstName}.pdf so the download
+        # lands with a recruiter-friendly filename.  No pdflatex on this host.
+        content = resume.latex_content or resume.raw_text or ""
+        media_type = "application/x-tex"
+        ext = "pdf"
     else:
         content = resume.latex_content or resume.raw_text or ""
         media_type = "application/x-tex"
@@ -1753,9 +1765,11 @@ async def download_resume_file(
     if not content:
         raise HTTPException(status_code=404, detail=f"No {fmt} content available for this resume")
 
-    filename = resume.recruiter_filename or f"{resume.version_tag or resume.id}.{ext}"
-    if not filename.endswith(f".{ext}"):
-        filename = f"{filename.rsplit('.', 1)[0]}.{ext}"
+    # recruiter_filename is stored as "{FirstName}.pdf"; swap extension to match fmt
+    base_filename = resume.recruiter_filename or f"{resume.version_tag or resume.id}"
+    # Strip any existing extension so we can attach the correct one
+    stem = base_filename.rsplit(".", 1)[0] if "." in base_filename else base_filename
+    filename = f"{stem}.{ext}"
 
     return Response(
         content=content.encode("utf-8"),
