@@ -1108,6 +1108,7 @@ async def generate_full_latex_resume(
     provider: str,
     api_key: str = "",
     ollama_model: str = "llama3.1:8b",
+    rag_context: str = "",
 ) -> GeneratedResume:
     """
     Generate a complete LaTeX resume tailored to the given JD.
@@ -1155,6 +1156,7 @@ CANDIDATE EDUCATION:
 
 {cloud_guidance}
 
+{f"CANDIDATE BACKGROUND (from uploaded documents):{chr(10)}{rag_context}{chr(10)}" if rag_context else ""}
 TEMPLATE STRUCTURE TO FILL:
 {template}
 

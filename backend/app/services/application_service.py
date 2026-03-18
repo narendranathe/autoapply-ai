@@ -140,7 +140,16 @@ class ApplicationService:
 
         Valid transitions: draft → tailored → applied → rejected/interview → offer
         """
-        valid_statuses = {"draft", "tailored", "applied", "rejected", "interview", "offer"}
+        valid_statuses = {
+            "discovered",
+            "draft",
+            "tailored",
+            "applied",
+            "rejected",
+            "phone_screen",
+            "interview",
+            "offer",
+        }
         if new_status not in valid_statuses:
             raise ValueError(f"Invalid status: {new_status}. Must be one of {valid_statuses}")
 
