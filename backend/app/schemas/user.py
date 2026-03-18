@@ -30,6 +30,22 @@ class UserSetupLLM(BaseModel):
     api_key: str = Field(..., min_length=10, description="API key for the LLM provider")
 
 
+class GitHubTokenRequest(BaseModel):
+    """Schema for PUT /api/v1/users/github-token."""
+
+    github_token: str = Field(..., min_length=10, description="GitHub Personal Access Token")
+    github_username: str = Field(..., min_length=1, max_length=255)
+    resume_repo_name: str = Field(default="resume-vault", min_length=1, max_length=255)
+
+
+class GitHubTokenResponse(BaseModel):
+    """Response for PUT and DELETE /api/v1/users/github-token."""
+
+    configured: bool
+    github_username: str | None
+    resume_repo_name: str | None
+
+
 class UserResponse(BaseModel):
     """Schema for returning user data. Note: NO sensitive fields."""
 
