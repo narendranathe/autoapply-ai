@@ -6,6 +6,7 @@ repos:
       - id: end-of-file-fixer
       - id: check-yaml
       - id: check-json
+        exclude: ^dashboard/tsconfig.*\.json$
       - id: check-added-large-files
         args: ['--maxkb=500']
       - id: no-commit-to-branch

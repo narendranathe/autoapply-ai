@@ -184,7 +184,7 @@ async def test_put_invalid_provider_name_raises_422():
 @pytest.mark.asyncio
 async def test_resolve_providers_uses_db_when_providers_json_empty():
     """_resolve_providers must return DB providers when providers_json is empty."""
-    from app.routers.vault_flat import _resolve_providers
+    from app.routers.vault._shared import _resolve_providers
     from app.utils.encryption import encrypt_value
 
     mock_user = MagicMock()
