@@ -15,11 +15,15 @@ export interface ApplicationRecord {
   company_name: string;
   role_title: string;
   job_url: string | null;
+  job_id: string | null;
+  job_description: string | null;
   platform: string | null;
   status: AppStatus;
   similarity_score: number | null;
+  is_priority: boolean;
   notes: string | null;
   created_at: string;
+  updated_at: string;
 }
 
 export interface ApplicationListResponse {

@@ -1,55 +1,93 @@
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { useState, useEffect } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useMediaQuery } from "./hooks/useMediaQuery";
+import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { Toaster as Sonner } from "@/components/ui/sonner";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "./providers/AuthProvider";
-import { ProtectedRoute } from "./components/ProtectedRoute";
-import { Sidebar } from "./components/Sidebar";
-import { MobileBanner } from "./components/MobileBanner";
+import { SyncProvider } from "./providers/SyncContext";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import Mirror from "./pages/Mirror";
+import { Sidebar, MobileBottomNav } from "./components/DashboardSidebar";
+import HomeDashboard from "./pages/HomeDashboard";
 import Applications from "./pages/Applications";
+import JobScout from "./pages/JobScout";
+import CoverLetters from "./pages/CoverLetters";
+import Resumes from "./pages/Resumes";
 import Vault from "./pages/Vault";
-import Reflection from "./pages/Reflection";
 import Settings from "./pages/Settings";
-import NotFound from "./pages/NotFound";
+import DashboardNotFound from "./pages/DashboardNotFound";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000 } },
 });
 
-function Layout() {
+function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(() => window.matchMedia(query).matches);
+  useEffect(() => {
+    const mq = window.matchMedia(query);
+    const handler = (e: MediaQueryListEvent) => setMatches(e.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, [query]);
+  return matches;
+}
+
+function DashboardLayout() {
   const isMobile = useMediaQuery("(max-width: 768px)");
-  if (isMobile) return <MobileBanner />;
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try { return localStorage.getItem("sidebar_collapsed") === "true"; } catch { return false; }
+  });
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const custom = e as CustomEvent<{ collapsed: boolean }>;
+      setSidebarCollapsed(custom.detail.collapsed);
+    };
+    window.addEventListener("sidebar-toggle", handler);
+    return () => window.removeEventListener("sidebar-toggle", handler);
+  }, []);
 
   return (
-    <div style={{ display: "flex", minHeight: "100svh", width: "100%" }}>
-      <Sidebar />
-      <main style={{ flex: 1, background: "#0D0D0D", overflow: "auto" }}>
+    <div className="flex w-full min-h-screen">
+      {!isMobile && <Sidebar />}
+      <main
+        className="flex-1"
+        style={{
+          marginLeft: isMobile ? 0 : (sidebarCollapsed ? 52 : 220),
+          paddingBottom: isMobile ? 72 : 0,
+          transition: "margin-left 200ms ease",
+        }}
+      >
         <Routes>
-          <Route path="/" element={<Mirror />} />
+          <Route path="/" element={<HomeDashboard />} />
           <Route path="/applications" element={<Applications />} />
+          <Route path="/job-scout" element={<JobScout />} />
+          <Route path="/cover-letters" element={<CoverLetters />} />
+          <Route path="/resumes" element={<Resumes />} />
           <Route path="/vault" element={<Vault />} />
-          <Route path="/reflection" element={<Reflection />} />
           <Route path="/settings" element={<Settings />} />
-          <Route path="*" element={<NotFound />} />
+          <Route path="*" element={<DashboardNotFound />} />
         </Routes>
       </main>
+      {isMobile && <MobileBottomNav />}
     </div>
   );
 }
 
-export default function App() {
-  return (
-    <ErrorBoundary>
+const App = () => (
+  <QueryClientProvider client={queryClient}>
+    <TooltipProvider>
+      <Sonner />
       <AuthProvider>
-        <QueryClientProvider client={queryClient}>
-          <BrowserRouter>
-            <ProtectedRoute>
-              <Layout />
-            </ProtectedRoute>
-          </BrowserRouter>
-        </QueryClientProvider>
+        <SyncProvider>
+          <ErrorBoundary>
+            <BrowserRouter>
+              <DashboardLayout />
+            </BrowserRouter>
+          </ErrorBoundary>
+        </SyncProvider>
       </AuthProvider>
-    </ErrorBoundary>
-  );
-}
+    </TooltipProvider>
+  </QueryClientProvider>
+);
+
+export default App;

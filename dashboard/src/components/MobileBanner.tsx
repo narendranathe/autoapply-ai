@@ -1,28 +1,32 @@
+import { colors } from "../lib/tokens";
+
 export function MobileBanner() {
   return (
-    <div style={{
-      minHeight: '100vh',
-      background: '#0D0D0D',
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      justifyContent: 'center',
-      padding: 24,
-      textAlign: 'center',
-      gap: 16,
-    }}>
-      <h1 style={{ color: '#E8E8E8', fontSize: 28, fontWeight: 600, margin: 0 }}>MIRROR</h1>
-      <p style={{ color: '#F5F0E8', maxWidth: 320, lineHeight: 1.6, margin: 0 }}>
+    <div
+      className="flex flex-col items-center justify-center min-h-screen p-8 text-center"
+      style={{ background: colors.obsidian }}
+    >
+      <h1
+        className="text-2xl mb-4"
+        style={{ color: colors.mercury, fontWeight: 700 }}
+      >
+        AutoApply
+      </h1>
+      <p className="text-sm mb-6" style={{ color: colors.muted }}>
         Open the Chrome extension for the full experience
       </p>
       <a
         href="https://chrome.google.com/webstore"
         target="_blank"
-        rel="noopener noreferrer"
-        style={{ color: '#00CED1', fontSize: 14 }}
+        rel="noreferrer"
+        className="inline-block px-5 py-2.5 rounded-lg text-sm font-semibold no-underline"
+        style={{
+          background: colors.teal,
+          color: colors.obsidian,
+        }}
       >
         Get the extension
       </a>
     </div>
-  )
+  );
 }
