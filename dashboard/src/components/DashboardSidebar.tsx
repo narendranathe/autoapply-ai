@@ -1,78 +1,102 @@
-import { useLocation, useNavigate } from "react-router-dom";
-import { motion } from "framer-motion";
+import { useState, useEffect } from "react";
+import { NavLink, useLocation } from "react-router-dom";
 import {
   LayoutDashboard,
   Briefcase,
-  Telescope,
+  Search,
+  FileEdit,
   FileText,
-  ScrollText,
-  BookOpen,
+  Archive,
   Settings,
-  LogOut,
-  Wifi,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
-import { useUser, useAuth } from "@clerk/clerk-react";
-import { useSyncTime } from "../providers/SyncContext";
-import { colors } from "../lib/tokens";
+import { useSafeAuth } from "./ProtectedRoute";
+import { useSync } from "../providers/SyncContext";
+import { colors, font } from "../lib/tokens";
 
 const NAV = [
   { to: "/", icon: LayoutDashboard, label: "Dashboard" },
   { to: "/applications", icon: Briefcase, label: "Applications" },
-  { to: "/job-scout", icon: Telescope, label: "Job Scout" },
-  { to: "/cover-letters", icon: FileText, label: "Cover Letters" },
-  { to: "/resumes", icon: ScrollText, label: "Resumes" },
-  { to: "/vault", icon: BookOpen, label: "Vault" },
+  { to: "/job-scout", icon: Search, label: "Job Scout" },
+  { to: "/cover-letters", icon: FileEdit, label: "Cover Letters" },
+  { to: "/resumes", icon: FileText, label: "Resumes" },
+  { to: "/vault", icon: Archive, label: "Vault" },
   { to: "/settings", icon: Settings, label: "Settings" },
 ];
 
-function formatSyncAge(date: Date | null): string {
+const LS_KEY = "sidebar_collapsed";
+
+function formatSyncAgo(date: Date | null): string {
   if (!date) return "Not synced yet";
   const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
-  if (seconds < 60) return `Synced ${seconds}s ago`;
+  if (seconds < 60) return "Last synced just now";
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `Synced ${minutes}m ago`;
-  return `Synced ${Math.floor(minutes / 60)}h ago`;
+  if (minutes < 60) return `Last synced ${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  return `Last synced ${hours}h ago`;
 }
 
-export function DashboardSidebar() {
-  const { user } = useUser();
-  const { signOut } = useAuth();
-  const { lastSynced } = useSyncTime();
+export function Sidebar() {
+  const { signOut } = useSafeAuth();
   const location = useLocation();
-  const navigate = useNavigate();
+  const { lastSynced } = useSync();
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return localStorage.getItem(LS_KEY) === "true"; } catch { return false; }
+  });
 
-  const initials = user
-    ? (user.firstName?.[0] ?? "") + (user.lastName?.[0] ?? "")
-    : "AA";
-  const displayName = user
-    ? `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim()
-    : "User";
+  useEffect(() => {
+    try { localStorage.setItem(LS_KEY, String(collapsed)); } catch {}
+    // Dispatch custom event so App.tsx can react to sidebar toggle
+    window.dispatchEvent(new CustomEvent("sidebar-toggle", { detail: { collapsed } }));
+  }, [collapsed]);
+
+  const width = collapsed ? 52 : 220;
 
   return (
     <aside
       className="hidden md:flex flex-col fixed left-0 top-0 h-screen z-40"
       style={{
-        width: 220,
-        background: colors.sidebar,
+        width,
+        background: colors.surface,
         borderRight: `1px solid ${colors.border}`,
+        fontFamily: font.family,
+        transition: "width 200ms ease",
       }}
     >
-      {/* Logo */}
-      <div className="px-5 pt-6 pb-4 flex items-center gap-2">
-        <div
-          className="w-2 h-2 rounded-full"
-          style={{ background: colors.teal }}
-        />
-        <span
-          className="text-sm tracking-tight font-semibold"
-          style={{ color: colors.mercury, fontFamily: "'Plus Jakarta Sans', sans-serif" }}
+      {/* Header */}
+      <div className="px-3 pt-5 pb-3 flex items-center justify-between">
+        {!collapsed && (
+          <div className="flex items-center gap-2">
+            <span
+              className="w-[6px] h-[6px] rounded-full inline-block"
+              style={{ background: colors.teal }}
+            />
+            <span
+              style={{
+                color: colors.mercury,
+                fontWeight: 700,
+                fontSize: 15,
+                fontFamily: font.family,
+                letterSpacing: "-0.01em",
+              }}
+            >
+              AutoApply AI
+            </span>
+          </div>
+        )}
+        <button
+          onClick={() => setCollapsed((c) => !c)}
+          className="border-0 bg-transparent cursor-pointer p-1 rounded"
+          style={{ color: colors.muted }}
+          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
         >
-          AutoApply AI
-        </span>
+          {collapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+        </button>
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 flex flex-col gap-0.5 px-3 mt-2">
+      <nav className="flex-1 flex flex-col gap-0.5 px-2 mt-1">
         {NAV.map((item) => {
           const isActive =
             item.to === "/"
@@ -80,114 +104,127 @@ export function DashboardSidebar() {
               : location.pathname.startsWith(item.to);
 
           return (
-            <button
+            <NavLink
               key={item.to}
-              onClick={() => navigate(item.to)}
-              className="group relative flex items-center gap-3 rounded-md px-3 py-2.5 text-sm w-full text-left border-0 cursor-pointer"
+              to={item.to}
+              title={collapsed ? item.label : undefined}
+              className="group relative flex items-center gap-2.5 rounded no-underline"
               style={{
+                padding: collapsed ? "8px 0" : "7px 10px",
+                justifyContent: collapsed ? "center" : "flex-start",
                 color: isActive ? colors.mercury : colors.muted,
-                background: isActive ? colors.hoverSurface : "transparent",
-                fontWeight: isActive ? 600 : 400,
+                background: isActive ? colors.tealSubtle : "transparent",
+                fontWeight: isActive ? 600 : 500,
+                fontSize: 13,
                 borderLeft: isActive
                   ? `2px solid ${colors.teal}`
                   : "2px solid transparent",
                 transition: "background 150ms, color 150ms",
-                fontFamily: "'Plus Jakarta Sans', sans-serif",
+                fontFamily: font.family,
               }}
               onMouseEnter={(e) => {
                 if (!isActive) {
-                  (e.currentTarget as HTMLElement).style.background = colors.hoverSurface;
-                  (e.currentTarget as HTMLElement).style.color = colors.mercury;
+                  (e.currentTarget).style.background = colors.hoverSurface;
+                  (e.currentTarget).style.color = colors.mercury;
                 }
               }}
               onMouseLeave={(e) => {
                 if (!isActive) {
-                  (e.currentTarget as HTMLElement).style.background = "transparent";
-                  (e.currentTarget as HTMLElement).style.color = colors.muted;
+                  (e.currentTarget).style.background = "transparent";
+                  (e.currentTarget).style.color = colors.muted;
                 }
               }}
             >
-              <item.icon size={16} strokeWidth={isActive ? 2.2 : 1.8} />
-              <span>{item.label}</span>
-            </button>
+              <item.icon size={18} strokeWidth={isActive ? 2 : 1.5} />
+              {!collapsed && <span>{item.label}</span>}
+            </NavLink>
           );
         })}
       </nav>
 
-      {/* Sync status */}
-      <div className="px-4 py-2 flex items-center gap-2">
-        <Wifi size={11} style={{ color: lastSynced ? colors.teal : colors.muted }} />
-        <span style={{ fontSize: 11, color: colors.muted }}>
-          {formatSyncAge(lastSynced)}
-        </span>
-      </div>
+      {/* Sync timestamp */}
+      {!collapsed && (
+        <div className="px-3 py-2">
+          <span
+            style={{
+              color: colors.muted,
+              fontSize: 11,
+              fontWeight: 600,
+              letterSpacing: "0.04em",
+              fontFamily: font.family,
+            }}
+          >
+            {formatSyncAgo(lastSynced)}
+          </span>
+        </div>
+      )}
 
       {/* User section */}
       <div
-        className="px-4 py-4 flex items-center gap-3"
+        className="px-3 py-3 flex items-center gap-2.5"
         style={{ borderTop: `1px solid ${colors.border}` }}
       >
         <div
-          className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold shrink-0"
+          className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-semibold shrink-0"
           style={{ background: `${colors.teal}20`, color: colors.teal }}
         >
-          {initials}
+          U
         </div>
-        <div className="flex-1 min-w-0">
-          <div className="text-sm truncate" style={{ color: colors.mercury, fontWeight: 500 }}>
-            {displayName}
+        {!collapsed && (
+          <div className="flex-1 min-w-0">
+            <button
+              onClick={() => signOut?.()}
+              className="text-[11px] hover:underline border-0 bg-transparent cursor-pointer p-0"
+              style={{ color: colors.muted, fontFamily: font.family }}
+            >
+              Sign out
+            </button>
           </div>
-          <button
-            onClick={() => signOut?.()}
-            className="text-xs mt-0.5 hover:underline border-0 bg-transparent cursor-pointer p-0 flex items-center gap-1"
-            style={{ color: colors.muted }}
-          >
-            <LogOut size={10} /> Sign out
-          </button>
-        </div>
+        )}
       </div>
     </aside>
   );
 }
 
+// Mobile bottom nav
 export function MobileBottomNav() {
   const location = useLocation();
-  const navigate = useNavigate();
-  const MOBILE_NAV = NAV.slice(0, 5); // first 5 for mobile
 
   return (
-    <motion.nav
-      initial={{ y: 100 }}
-      animate={{ y: 0 }}
+    <nav
       className="fixed bottom-0 left-0 right-0 z-50 flex md:hidden"
       style={{
-        background: colors.sidebar,
+        background: colors.surface,
         borderTop: `1px solid ${colors.border}`,
         padding: "6px 0 env(safe-area-inset-bottom, 6px)",
       }}
     >
-      {MOBILE_NAV.map((item) => {
+      {NAV.slice(0, 5).map((item) => {
         const isActive =
           item.to === "/"
             ? location.pathname === "/"
             : location.pathname.startsWith(item.to);
 
         return (
-          <button
+          <NavLink
             key={item.to}
-            onClick={() => navigate(item.to)}
-            className="flex-1 flex flex-col items-center gap-1 py-2 border-0 bg-transparent cursor-pointer"
+            to={item.to}
+            className="flex-1 flex flex-col items-center gap-1 py-2 no-underline"
             style={{
               color: isActive ? colors.teal : colors.muted,
               fontSize: 10,
               fontWeight: isActive ? 600 : 400,
+              fontFamily: font.family,
             }}
           >
-            <item.icon size={18} />
+            <item.icon size={20} />
             <span>{item.label}</span>
-          </button>
+          </NavLink>
         );
       })}
-    </motion.nav>
+    </nav>
   );
 }
+
+// Legacy export alias
+export { Sidebar as DashboardSidebar };

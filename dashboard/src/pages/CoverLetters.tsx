@@ -1,294 +1,354 @@
-import { useCallback, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useState, useCallback, useRef } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
-import { Copy, Download, ChevronDown, ChevronUp, Send, Square, Check } from "lucide-react";
+import { Plus, Save, Copy, Download, ChevronRight } from "lucide-react";
 import { useApiClient } from "../hooks/useApiClient";
-import { useAuth } from "@clerk/clerk-react";
-import { fetchCoverLetters, type CoverLetter } from "../api/coverLetters";
-import { colors } from "../lib/tokens";
+import { useSafeAuth } from "../components/ProtectedRoute";
+import { colors, font } from "../lib/tokens";
 import { fadeUp } from "../lib/animations";
+
+interface CoverLetter {
+  id: string;
+  company: string;
+  role: string;
+  content: string;
+  created_at: string;
+}
+
+interface CoverLettersResponse {
+  items: CoverLetter[];
+}
+
+function formatDate(iso: string): string {
+  return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? "https://autoapply-ai-api.fly.dev/api/v1";
 
-function relativeDate(dateStr: string): string {
-  const d = new Date(dateStr);
-  const diff = Date.now() - d.getTime();
-  const days = Math.floor(diff / 86_400_000);
-  if (days === 0) return "today";
-  if (days < 30) return `${days}d ago`;
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-}
+export default function CoverLetters() {
+  const api = useApiClient();
+  const { getToken } = useSafeAuth();
+  const queryClient = useQueryClient();
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [editContent, setEditContent] = useState("");
+  const [showGenerator, setShowGenerator] = useState(false);
 
-function groupByCompany(letters: CoverLetter[]): Record<string, CoverLetter[]> {
-  return letters.reduce((acc, cl) => {
-    const key = cl.company_name ?? "General";
+  // Generator state
+  const [genCompany, setGenCompany] = useState("");
+  const [genRole, setGenRole] = useState("");
+  const [genJD, setGenJD] = useState("");
+  const [streaming, setStreaming] = useState(false);
+  const [streamTokens, setStreamTokens] = useState<string[]>([]);
+  const abortRef = useRef<AbortController | null>(null);
+
+  const { data, isLoading } = useQuery({
+    queryKey: ["cover-letters"],
+    queryFn: async () => {
+      const res = await api.get<CoverLettersResponse>("/vault/cover-letters");
+      return res.data;
+    },
+  });
+
+  const items = data?.items ?? [];
+
+  // Group by company
+  const grouped = items.reduce<Record<string, CoverLetter[]>>((acc, cl) => {
+    const key = cl.company || "Other";
     if (!acc[key]) acc[key] = [];
     acc[key].push(cl);
     return acc;
-  }, {} as Record<string, CoverLetter[]>);
-}
+  }, {});
 
-function CoverLetterItem({ cl }: { cl: CoverLetter }) {
-  const [expanded, setExpanded] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const selected = items.find((cl) => cl.id === selectedId);
 
-  const copy = () => {
-    navigator.clipboard.writeText(cl.content);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
+  const handleSelect = useCallback((cl: CoverLetter) => {
+    setSelectedId(cl.id);
+    setEditContent(cl.content);
+    setShowGenerator(false);
+    setStreamTokens([]);
+  }, []);
 
-  const download = () => {
-    const blob = new Blob([cl.content], { type: "text/plain" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `cover-letter-${cl.company_name ?? "general"}.txt`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
+  const handleNew = useCallback(() => {
+    setSelectedId(null);
+    setEditContent("");
+    setShowGenerator(true);
+    setStreamTokens([]);
+    setGenCompany("");
+    setGenRole("");
+    setGenJD("");
+  }, []);
 
-  return (
-    <div style={{ borderBottom: `1px solid ${colors.border}`, padding: "12px 0" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          {cl.role_title && (
-            <div style={{ fontSize: 13, fontWeight: 500, color: colors.mercury }}>{cl.role_title}</div>
-          )}
-          <div style={{ fontSize: 11, color: colors.muted }}>{relativeDate(cl.created_at)}</div>
-          {!expanded && (
-            <div style={{ fontSize: 12, color: colors.muted, marginTop: 4 }}>
-              {cl.content.slice(0, 120)}...
-            </div>
-          )}
-        </div>
-        <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-          <button onClick={copy} style={{
-            background: "none", border: `1px solid ${colors.border}`, borderRadius: 6,
-            padding: "4px 8px", cursor: "pointer", color: copied ? colors.teal : colors.muted,
-            display: "flex", alignItems: "center",
-          }}>
-            {copied ? <Check size={12} /> : <Copy size={12} />}
-          </button>
-          <button onClick={download} style={{
-            background: "none", border: `1px solid ${colors.border}`, borderRadius: 6,
-            padding: "4px 8px", cursor: "pointer", color: colors.muted, display: "flex", alignItems: "center",
-          }}>
-            <Download size={12} />
-          </button>
-          <button onClick={() => setExpanded(!expanded)} style={{
-            background: "none", border: `1px solid ${colors.border}`, borderRadius: 6,
-            padding: "4px 8px", cursor: "pointer", color: colors.muted, display: "flex", alignItems: "center",
-          }}>
-            {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-          </button>
-        </div>
-      </div>
-      {expanded && (
-        <pre style={{
-          marginTop: 12, padding: 14, background: "#0D0D0D",
-          border: `1px solid ${colors.border}`, borderRadius: 8,
-          fontSize: 12, color: colors.mercury, lineHeight: 1.7,
-          whiteSpace: "pre-wrap", fontFamily: "'Plus Jakarta Sans', sans-serif",
-          maxHeight: 300, overflow: "auto",
-        }}>
-          {cl.content}
-        </pre>
-      )}
-    </div>
-  );
-}
-
-const inp: React.CSSProperties = {
-  width: "100%", padding: "8px 12px", background: "#0D0D0D",
-  border: "1px solid #2A2A2A", borderRadius: 7,
-  color: "#E8E8E8", fontSize: 13, outline: "none",
-  fontFamily: "'Plus Jakarta Sans', sans-serif", boxSizing: "border-box",
-};
-const lbl: React.CSSProperties = {
-  fontSize: 11, color: "#6B7280", fontWeight: 500,
-  textTransform: "uppercase", letterSpacing: "0.06em",
-  marginBottom: 6, display: "block",
-};
-
-export default function CoverLetters() {
-  const apiClient = useApiClient();
-  const { getToken } = useAuth();
-  const [company, setCompany] = useState("");
-  const [role, setRole] = useState("");
-  const [jd, setJd] = useState("");
-  const [streamTokens, setStreamTokens] = useState<string[]>([]);
-  const [streaming, setStreaming] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const abortRef = useRef<AbortController | null>(null);
-
-  const { data: letters = [], isLoading } = useQuery({
-    queryKey: ["cover-letters"],
-    queryFn: () => fetchCoverLetters(apiClient),
-    refetchInterval: 60_000,
-  });
-
-  const grouped = groupByCompany(letters);
-  const companies = Object.keys(grouped).sort();
-
-  const generate = useCallback(async () => {
-    if (!company || !role) return;
+  // SSE Generate
+  const handleGenerate = useCallback(async () => {
     setStreamTokens([]);
     setStreaming(true);
     abortRef.current = new AbortController();
+
     try {
-      const token = await getToken();
-      const authHeader: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {};
+      const token = await getToken?.();
       const response = await fetch(`${BASE_URL}/vault/cover-letters/generate`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeader },
-        body: JSON.stringify({ company_name: company, role_title: role, job_description: jd }),
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          company: genCompany,
+          role: genRole,
+          job_description: genJD,
+        }),
         signal: abortRef.current.signal,
       });
-      if (!response.ok || !response.body) throw new Error(`API ${response.status}`);
+
+      if (!response.ok || !response.body) {
+        throw new Error(`API error: ${response.status}`);
+      }
+
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
-      const collected: string[] = [];
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        for (const line of decoder.decode(value, { stream: true }).split("\n")) {
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = chunk.split("\n");
+        for (const line of lines) {
           if (line.startsWith("data: ")) {
             const text = line.slice(6);
-            if (text && text !== "[DONE]") { collected.push(text); setStreamTokens([...collected]); }
-          } else if (line.trim() && !line.startsWith(":")) {
-            collected.push(line); setStreamTokens([...collected]);
+            if (text === "[DONE]") break;
+            if (text) setStreamTokens((prev) => [...prev, text]);
           }
         }
       }
     } catch (err: unknown) {
-      if (err instanceof Error && err.name !== "AbortError")
-        setStreamTokens(["[Generation failed — check API connection]"]);
+      if (err instanceof Error && err.name !== "AbortError") {
+        setStreamTokens((prev) => [...prev, "\n[Generation failed - check API connection]"]);
+      }
     } finally {
       setStreaming(false);
       abortRef.current = null;
     }
-  }, [company, role, jd, getToken]);
+  }, [getToken, genCompany, genRole, genJD]);
 
-  const stop = () => { abortRef.current?.abort(); setStreaming(false); };
+  const generatedText = streamTokens.join("");
 
-  const copyOutput = () => {
-    navigator.clipboard.writeText(streamTokens.join(""));
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
+  const handleCopy = useCallback(async (text: string) => {
+    await navigator.clipboard.writeText(text);
+  }, []);
 
-  const downloadOutput = () => {
-    const blob = new Blob([streamTokens.join("")], { type: "text/plain" });
+  const handleDownload = useCallback((text: string, company: string) => {
+    const blob = new Blob([text], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `cover-letter-${company}-${role}.txt`.replace(/\s+/g, "-").toLowerCase();
+    a.download = `cover-letter-${company.toLowerCase().replace(/\s+/g, "-")}.txt`;
     a.click();
     URL.revokeObjectURL(url);
-  };
+  }, []);
 
-  const canGenerate = !!company && !!role;
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      if (selectedId) {
+        await api.patch(`/vault/cover-letters/${selectedId}`, { content: editContent });
+      }
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["cover-letters"] });
+    },
+  });
 
   return (
-    <motion.div variants={fadeUp} initial="hidden" animate="visible" style={{
-      minHeight: "100svh", background: colors.obsidian,
-      padding: "40px 40px 60px", fontFamily: "'Plus Jakarta Sans', sans-serif", boxSizing: "border-box",
-    }}>
-      <div style={{ marginBottom: 32 }}>
-        <div style={{ fontSize: 11, fontWeight: 500, color: colors.teal, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 6 }}>
-          Cover Letters
+    <motion.div
+      variants={fadeUp}
+      initial="hidden"
+      animate="visible"
+      className="flex h-[calc(100vh-0px)]"
+      style={{ fontFamily: font.family }}
+    >
+      {/* Left: Repository Panel */}
+      <div
+        className="w-[300px] shrink-0 flex flex-col overflow-y-auto"
+        style={{
+          background: colors.surface,
+          borderRight: `1px solid ${colors.border}`,
+        }}
+      >
+        <div className="px-4 pt-5 pb-3 flex items-center justify-between">
+          <h1 style={{ fontSize: 15, fontWeight: 600, color: colors.mercury }}>
+            Cover Letters
+          </h1>
+          <button
+            onClick={handleNew}
+            className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-semibold border-0 cursor-pointer"
+            style={{ background: colors.teal, color: colors.obsidian }}
+          >
+            <Plus size={12} /> New
+          </button>
         </div>
-        <div style={{ fontSize: 22, fontWeight: 600, color: colors.mercury }}>Cover Letter Studio</div>
+
+        {isLoading ? (
+          <div className="p-3 space-y-2">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="rounded mercury-shimmer" style={{ height: 48, background: colors.surface2 }} />
+            ))}
+          </div>
+        ) : items.length === 0 ? (
+          <div className="px-4 py-8 text-center">
+            <span style={{ fontSize: 12, color: colors.muted }}>
+              No cover letters yet - generate your first one.
+            </span>
+          </div>
+        ) : (
+          <div className="flex-1">
+            {Object.entries(grouped).map(([company, letters]) => (
+              <div key={company}>
+                <div className="px-4 py-2" style={{ borderBottom: `1px solid ${colors.border}` }}>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: colors.muted, letterSpacing: "0.04em" }}>
+                    {company.toUpperCase()}
+                  </span>
+                </div>
+                {letters.map((cl) => (
+                  <button
+                    key={cl.id}
+                    onClick={() => handleSelect(cl)}
+                    className="w-full text-left px-4 py-2.5 border-0 cursor-pointer flex items-center gap-2"
+                    style={{
+                      background: selectedId === cl.id ? colors.tealSubtle : "transparent",
+                      borderBottom: `1px solid ${colors.border}22`,
+                      fontFamily: font.family,
+                    }}
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="truncate" style={{ fontSize: 12, color: colors.mercury, fontWeight: 500 }}>
+                        {cl.role}
+                      </div>
+                      <div className="truncate" style={{ fontSize: 11, color: colors.muted }}>
+                        {formatDate(cl.created_at)} - {cl.content.slice(0, 40)}...
+                      </div>
+                    </div>
+                    <ChevronRight size={14} style={{ color: colors.muted }} />
+                  </button>
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 400px", gap: 32, alignItems: "start" }}>
-        {/* Repository */}
-        <div style={{ background: colors.surface, border: `1px solid ${colors.border}`, borderRadius: 12, padding: 24 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: colors.mercury, marginBottom: 20 }}>
-            My Cover Letters {letters.length > 0 && <span style={{ color: colors.muted, fontWeight: 400 }}>({letters.length})</span>}
-          </div>
-          {isLoading && <div style={{ color: colors.muted, fontSize: 13 }}>Loading...</div>}
-          {!isLoading && letters.length === 0 && (
-            <div style={{ color: colors.muted, fontSize: 13, padding: "24px 0", textAlign: "center" }}>
-              No cover letters yet. Generate your first one →
-            </div>
-          )}
-          {companies.map((co) => (
-            <div key={co} style={{ marginBottom: 20 }}>
-              <div style={{ fontSize: 11, fontWeight: 600, color: colors.teal, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
-                {co}
+      {/* Right: Editor/Generator Panel */}
+      <div className="flex-1 flex flex-col p-6 overflow-y-auto" style={{ background: colors.obsidian }}>
+        {showGenerator || (!selectedId && !streaming) ? (
+          // Generator form
+          <div className="max-w-xl">
+            <h2 style={{ fontSize: 15, fontWeight: 600, color: colors.mercury, marginBottom: 16 }}>
+              Generate Cover Letter
+            </h2>
+            <div className="space-y-3">
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 600, color: colors.muted, letterSpacing: "0.04em" }}>COMPANY</label>
+                <input
+                  value={genCompany}
+                  onChange={(e) => setGenCompany(e.target.value)}
+                  className="w-full mt-1 px-3 py-2 rounded text-sm outline-none"
+                  style={{ background: colors.surface, border: `1px solid ${colors.border}`, color: colors.mercury, fontFamily: font.family }}
+                />
               </div>
-              {grouped[co].map((cl) => <CoverLetterItem key={cl.id} cl={cl} />)}
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 600, color: colors.muted, letterSpacing: "0.04em" }}>ROLE</label>
+                <input
+                  value={genRole}
+                  onChange={(e) => setGenRole(e.target.value)}
+                  className="w-full mt-1 px-3 py-2 rounded text-sm outline-none"
+                  style={{ background: colors.surface, border: `1px solid ${colors.border}`, color: colors.mercury, fontFamily: font.family }}
+                />
+              </div>
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 600, color: colors.muted, letterSpacing: "0.04em" }}>JOB DESCRIPTION</label>
+                <textarea
+                  value={genJD}
+                  onChange={(e) => setGenJD(e.target.value)}
+                  rows={6}
+                  className="w-full mt-1 px-3 py-2 rounded text-sm outline-none resize-y"
+                  style={{ background: colors.surface, border: `1px solid ${colors.border}`, color: colors.mercury, fontFamily: font.family }}
+                />
+              </div>
+              <button
+                onClick={handleGenerate}
+                disabled={streaming || !genCompany || !genRole}
+                className="px-4 py-2 rounded text-sm font-semibold border-0 cursor-pointer"
+                style={{
+                  background: colors.teal,
+                  color: colors.obsidian,
+                  opacity: streaming || !genCompany || !genRole ? 0.5 : 1,
+                }}
+              >
+                {streaming ? "Generating..." : "Generate"}
+              </button>
             </div>
-          ))}
-        </div>
 
-        {/* Generator */}
-        <div style={{
-          background: colors.surface, border: `1px solid ${colors.border}`,
-          borderRadius: 12, padding: 24, display: "flex", flexDirection: "column", gap: 16,
-          position: "sticky", top: 24,
-        }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: colors.mercury }}>Generate New</div>
-          <div>
-            <label style={lbl}>Company</label>
-            <input value={company} onChange={e => setCompany(e.target.value)} placeholder="e.g. Google" style={inp} />
-          </div>
-          <div>
-            <label style={lbl}>Role Title</label>
-            <input value={role} onChange={e => setRole(e.target.value)} placeholder="e.g. Senior Engineer" style={inp} />
-          </div>
-          <div>
-            <label style={lbl}>Job Description (optional)</label>
-            <textarea value={jd} onChange={e => setJd(e.target.value)} rows={5} placeholder="Paste the job description..." style={{ ...inp, resize: "vertical" }} />
-          </div>
-          {!streaming ? (
-            <button onClick={generate} disabled={!canGenerate} style={{
-              padding: "9px 16px", borderRadius: 7, fontSize: 13, fontWeight: 600,
-              background: canGenerate ? colors.teal : colors.surface,
-              color: canGenerate ? "#0D0D0D" : colors.muted,
-              border: `1px solid ${canGenerate ? colors.teal : colors.border}`,
-              cursor: canGenerate ? "pointer" : "not-allowed",
-              display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-            }}>
-              <Send size={13} /> Generate
-            </button>
-          ) : (
-            <button onClick={stop} style={{
-              padding: "9px 16px", borderRadius: 7, fontSize: 13, fontWeight: 600,
-              background: "transparent", border: `1px solid ${colors.ember}`, color: colors.ember,
-              cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-            }}>
-              <Square size={13} /> Stop
-            </button>
-          )}
-          {streamTokens.length > 0 && (
-            <div>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                <label style={lbl}>Output</label>
-                <div style={{ display: "flex", gap: 6 }}>
-                  <button onClick={copyOutput} style={{
-                    background: "none", border: `1px solid ${colors.border}`, borderRadius: 6,
-                    padding: "3px 8px", cursor: "pointer", color: copied ? colors.teal : colors.muted,
-                    fontSize: 11, display: "flex", alignItems: "center", gap: 4,
-                  }}>
-                    {copied ? <Check size={10} /> : <Copy size={10} />} Copy
-                  </button>
-                  <button onClick={downloadOutput} style={{
-                    background: "none", border: `1px solid ${colors.border}`, borderRadius: 6,
-                    padding: "3px 8px", cursor: "pointer", color: colors.muted,
-                    fontSize: 11, display: "flex", alignItems: "center", gap: 4,
-                  }}>
-                    <Download size={10} /> .txt
-                  </button>
-                </div>
+            {/* Streaming output */}
+            {streamTokens.length > 0 && (
+              <pre
+                className="mt-4 p-4 rounded-lg text-sm leading-relaxed whitespace-pre-wrap"
+                style={{ background: colors.surface, border: `1px solid ${colors.border}`, color: colors.mercury, fontFamily: font.family }}
+              >
+                {generatedText}
+              </pre>
+            )}
+
+            {generatedText && !streaming && (
+              <div className="flex gap-2 mt-3">
+                <button onClick={() => handleCopy(generatedText)} className="flex items-center gap-1 px-3 py-1.5 rounded text-xs font-medium border-0 cursor-pointer" style={{ background: colors.surface, color: colors.mercury, border: `1px solid ${colors.border}` }}>
+                  <Copy size={12} /> Copy
+                </button>
+                <button onClick={() => handleDownload(generatedText, genCompany)} className="flex items-center gap-1 px-3 py-1.5 rounded text-xs font-medium border-0 cursor-pointer" style={{ background: colors.surface, color: colors.mercury, border: `1px solid ${colors.border}` }}>
+                  <Download size={12} /> Download .txt
+                </button>
               </div>
-              <textarea value={streamTokens.join("")} onChange={() => {}} rows={12}
-                style={{ ...inp, resize: "vertical", lineHeight: 1.7, color: streaming ? colors.teal : colors.mercury }} />
+            )}
+          </div>
+        ) : selected ? (
+          // Inline editor
+          <div className="flex-1 flex flex-col">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 style={{ fontSize: 15, fontWeight: 600, color: colors.mercury }}>
+                  {selected.company} - {selected.role}
+                </h2>
+                <span style={{ fontSize: 11, color: colors.muted }}>{formatDate(selected.created_at)}</span>
+              </div>
             </div>
-          )}
-        </div>
+
+            <textarea
+              value={editContent}
+              onChange={(e) => setEditContent(e.target.value)}
+              className="flex-1 w-full p-4 rounded-lg text-sm outline-none resize-none"
+              style={{
+                background: colors.surface,
+                border: `1px solid ${colors.border}`,
+                color: colors.mercury,
+                fontFamily: font.family,
+                minHeight: 300,
+              }}
+            />
+
+            <div className="flex gap-2 mt-3">
+              <button
+                onClick={() => saveMutation.mutate()}
+                className="flex items-center gap-1 px-3 py-1.5 rounded text-xs font-semibold border-0 cursor-pointer"
+                style={{ background: colors.teal, color: colors.obsidian }}
+              >
+                <Save size={12} /> {saveMutation.isPending ? "Saving..." : "Save"}
+              </button>
+              <button onClick={() => handleCopy(editContent)} className="flex items-center gap-1 px-3 py-1.5 rounded text-xs font-medium border-0 cursor-pointer" style={{ background: colors.surface, color: colors.mercury, border: `1px solid ${colors.border}` }}>
+                <Copy size={12} /> Copy
+              </button>
+              <button onClick={() => handleDownload(editContent, selected.company)} className="flex items-center gap-1 px-3 py-1.5 rounded text-xs font-medium border-0 cursor-pointer" style={{ background: colors.surface, color: colors.mercury, border: `1px solid ${colors.border}` }}>
+                <Download size={12} /> Download .txt
+              </button>
+            </div>
+          </div>
+        ) : null}
       </div>
     </motion.div>
   );

@@ -1,705 +1,296 @@
-import { useState, useRef, useCallback } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { useState, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
-import { Upload, X, Download, ChevronRight, FileText } from "lucide-react";
+import { X, ChevronRight, Search } from "lucide-react";
 import { useApiClient } from "../hooks/useApiClient";
+import { colors, font } from "../lib/tokens";
+import { fadeUp } from "../lib/animations";
 
-// ── Design tokens ──────────────────────────────────────────────────────────────
-const OBSIDIAN = "#0D0D0D";
-const MERCURY = "#E8E8E8";
-const AURORA = "#00CED1";
-const EMBER = "#FF6B35";
-const AMBER = "#F59E0B";
-
-// ── Types ──────────────────────────────────────────────────────────────────────
-interface Resume {
+// Types
+interface VaultAnswer {
   id: string;
-  filename: string;
-  version_tag: string | null;
-  is_base_template: boolean;
-  target_company: string | null;
-  ats_score: number | null;
-  ats_breakdown: Record<string, number> | null;
-  raw_text: string | null;
+  question: string;
+  answer: string;
+  category: string | null;
+  similarity_score: number | null;
+  reward_score: number | null;
   created_at: string;
 }
 
-interface ResumesResponse {
-  resumes: Resume[];
+interface VaultResponse {
+  items: VaultAnswer[];
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
+const CATEGORIES = ["All", "Cover Letter", "Experience", "Skills", "Behavioral", "Other"] as const;
+
 function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
+  return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
-function atsColor(score: number): string {
-  if (score >= 80) return AURORA;
-  if (score >= 65) return AMBER;
-  return EMBER;
-}
-
-// ── Skeleton card ──────────────────────────────────────────────────────────────
-function SkeletonCard() {
+// Highlight match
+function Highlight({ text, query }: { text: string; query: string }) {
+  if (!query) return <>{text}</>;
+  const idx = text.toLowerCase().indexOf(query.toLowerCase());
+  if (idx === -1) return <>{text}</>;
   return (
-    <div
-      style={{
-        background: "#1A1A1A",
-        borderRadius: 10,
-        padding: "20px",
-        border: "1px solid #2A2A2A",
-        height: 160,
-      }}
-    >
-      {[70, 40, 55, 30].map((w, i) => (
-        <div
-          key={i}
-          style={{
-            width: `${w}%`,
-            height: 12,
-            borderRadius: 6,
-            background: "linear-gradient(90deg,#222 25%,#333 50%,#222 75%)",
-            backgroundSize: "200% 100%",
-            animation: "pulse 1.5s ease-in-out infinite",
-            marginBottom: i < 3 ? 12 : 0,
-          }}
-        />
-      ))}
-    </div>
+    <>
+      {text.slice(0, idx)}
+      <mark style={{ background: `${colors.teal}30`, color: colors.mercury, borderRadius: 2 }}>
+        {text.slice(idx, idx + query.length)}
+      </mark>
+      {text.slice(idx + query.length)}
+    </>
   );
 }
 
-// ── Resume card ────────────────────────────────────────────────────────────────
-function ResumeCard({
-  resume,
-  onClick,
-}: {
-  resume: Resume;
-  onClick: () => void;
-}) {
-  const score = resume.ats_score;
+// Answer Card
+function AnswerCard({ item, search, onClick }: { item: VaultAnswer; search: string; onClick: () => void }) {
   return (
-    <motion.div
-      whileHover={{ scale: 1.02, borderColor: AURORA }}
+    <div
       onClick={onClick}
+      className="cursor-pointer group"
       style={{
-        background: "#1A1A1A",
-        borderRadius: 10,
-        padding: "20px",
-        border: "1px solid #2A2A2A",
-        cursor: "pointer",
-        transition: "border-color 0.2s",
-        height: 160,
-        display: "flex",
-        flexDirection: "column",
-        justifyContent: "space-between",
-        overflow: "hidden",
-      }}
-    >
-      {/* Header row */}
-      <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
-        <FileText size={16} color={AURORA} style={{ flexShrink: 0, marginTop: 2 }} />
-        <span
-          style={{
-            fontFamily: "monospace",
-            fontSize: 13,
-            color: MERCURY,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            flex: 1,
-          }}
-        >
-          {resume.filename}
-        </span>
-      </div>
-
-      {/* Badges */}
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-        <span
-          style={{
-            fontSize: 11,
-            padding: "2px 8px",
-            borderRadius: 99,
-            background: resume.is_base_template ? `${AURORA}22` : "#2A2A2A",
-            color: resume.is_base_template ? AURORA : "#999",
-            border: `1px solid ${resume.is_base_template ? AURORA : "#333"}`,
-          }}
-        >
-          {resume.is_base_template ? "base" : (resume.version_tag ?? "v1")}
-        </span>
-        <span
-          style={{
-            fontSize: 11,
-            padding: "2px 8px",
-            borderRadius: 99,
-            background: "#2A2A2A",
-            color: "#bbb",
-          }}
-        >
-          {resume.target_company ?? "General"}
-        </span>
-      </div>
-
-      {/* ATS score + date */}
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-        }}
-      >
-        {score !== null ? (
-          <span
-            style={{
-              fontSize: 13,
-              fontWeight: 700,
-              color: atsColor(score),
-            }}
-          >
-            ATS {score}
-          </span>
-        ) : (
-          <span style={{ fontSize: 12, color: "#555" }}>No ATS score</span>
-        )}
-        <span style={{ fontSize: 11, color: "#666" }}>
-          {formatDate(resume.created_at)}
-        </span>
-      </div>
-    </motion.div>
-  );
-}
-
-// ── Drawer ─────────────────────────────────────────────────────────────────────
-function ResumeDrawer({
-  resume,
-  onClose,
-  onDownload,
-}: {
-  resume: Resume;
-  onClose: () => void;
-  onDownload: (id: string, filename: string) => void;
-}) {
-  const score = resume.ats_score;
-  return (
-    <motion.div
-      initial={{ x: "100%" }}
-      animate={{ x: 0 }}
-      exit={{ x: "100%" }}
-      transition={{ duration: 0.32, ease: [0.25, 0.1, 0.25, 1] }}
-      style={{
-        position: "fixed",
-        top: 0,
-        right: 0,
-        width: 400,
-        height: "100vh",
-        background: "#111",
-        borderLeft: "1px solid #2A2A2A",
-        zIndex: 200,
-        display: "flex",
-        flexDirection: "column",
-        overflowY: "hidden",
-      }}
-    >
-      {/* Drawer header */}
-      <div
-        style={{
-          padding: "20px 24px",
-          borderBottom: "1px solid #2A2A2A",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          flexShrink: 0,
-        }}
-      >
-        <span
-          style={{
-            fontFamily: "monospace",
-            fontSize: 13,
-            color: MERCURY,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            maxWidth: 280,
-          }}
-        >
-          {resume.filename}
-        </span>
-        <button
-          onClick={onClose}
-          aria-label="Close resume preview"
-          style={{
-            background: "none",
-            border: "none",
-            cursor: "pointer",
-            color: "#666",
-            padding: 4,
-          }}
-        >
-          <X size={18} />
-        </button>
-      </div>
-
-      {/* Meta */}
-      <div
-        style={{
-          padding: "16px 24px",
-          borderBottom: "1px solid #1E1E1E",
-          flexShrink: 0,
-          display: "flex",
-          gap: 12,
-          flexWrap: "wrap",
-        }}
-      >
-        <span
-          style={{
-            fontSize: 12,
-            padding: "3px 10px",
-            borderRadius: 99,
-            background: resume.is_base_template ? `${AURORA}22` : "#2A2A2A",
-            color: resume.is_base_template ? AURORA : "#999",
-          }}
-        >
-          {resume.is_base_template ? "base" : (resume.version_tag ?? "v1")}
-        </span>
-        <span
-          style={{ fontSize: 12, padding: "3px 10px", borderRadius: 99, background: "#2A2A2A", color: "#bbb" }}
-        >
-          {resume.target_company ?? "General"}
-        </span>
-        {score !== null && (
-          <span style={{ fontSize: 12, fontWeight: 700, color: atsColor(score), padding: "3px 0" }}>
-            ATS {score}
-          </span>
-        )}
-      </div>
-
-      {/* ATS breakdown */}
-      {resume.ats_breakdown && Object.keys(resume.ats_breakdown).length > 0 && (
-        <div
-          style={{
-            padding: "12px 24px",
-            borderBottom: "1px solid #1E1E1E",
-            flexShrink: 0,
-          }}
-        >
-          <div style={{ fontSize: 11, color: "#666", marginBottom: 8, textTransform: "uppercase", letterSpacing: 1 }}>
-            ATS Breakdown
-          </div>
-          {Object.entries(resume.ats_breakdown).map(([key, val]) => (
-            <div key={key} style={{ marginBottom: 6 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
-                <span style={{ fontSize: 12, color: "#aaa" }}>{key}</span>
-                <span style={{ fontSize: 12, color: atsColor(val), fontWeight: 600 }}>{val}</span>
-              </div>
-              <div style={{ height: 4, background: "#2A2A2A", borderRadius: 2, overflow: "hidden" }}>
-                <div style={{ width: `${val}%`, height: "100%", background: atsColor(val), borderRadius: 2 }} />
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Raw text */}
-      <div
-        style={{
-          flex: 1,
-          overflowY: "auto",
-          padding: "16px 24px",
-        }}
-      >
-        <div style={{ fontSize: 11, color: "#666", marginBottom: 8, textTransform: "uppercase", letterSpacing: 1 }}>
-          Content
-        </div>
-        <pre
-          style={{
-            fontFamily: "monospace",
-            fontSize: 12,
-            color: "#ccc",
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-word",
-            margin: 0,
-          }}
-        >
-          {resume.raw_text ?? "(No text extracted)"}
-        </pre>
-      </div>
-
-      {/* Download button */}
-      <div
-        style={{
-          padding: "16px 24px",
-          borderTop: "1px solid #2A2A2A",
-          flexShrink: 0,
-        }}
-      >
-        <button
-          onClick={() => onDownload(resume.id, resume.filename)}
-          style={{
-            width: "100%",
-            padding: "10px 0",
-            background: AURORA,
-            color: OBSIDIAN,
-            border: "none",
-            borderRadius: 8,
-            fontWeight: 700,
-            fontSize: 14,
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 8,
-          }}
-        >
-          <Download size={16} />
-          Download
-        </button>
-      </div>
-    </motion.div>
-  );
-}
-
-// ── Virtualised grid (>50 items) ───────────────────────────────────────────────
-const COLS = 3;
-const GAP = 16;
-const CARD_HEIGHT = 160;
-
-function VirtualGrid({
-  resumes,
-  onSelect,
-}: {
-  resumes: Resume[];
-  onSelect: (r: Resume) => void;
-}) {
-  const parentRef = useRef<HTMLDivElement>(null);
-
-  const rows = Math.ceil(resumes.length / COLS);
-
-  const virtualizer = useVirtualizer({
-    count: rows,
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => CARD_HEIGHT + GAP,
-    overscan: 3,
-  });
-
-  return (
-    <div ref={parentRef} style={{ overflowY: "auto", height: "calc(100vh - 180px)" }}>
-      <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
-        {virtualizer.getVirtualItems().map((vItem) => {
-          const startIdx = vItem.index * COLS;
-          const rowResumes = resumes.slice(startIdx, startIdx + COLS);
-          return (
-            <div
-              key={vItem.key}
-              style={{
-                position: "absolute",
-                top: vItem.start,
-                left: 0,
-                right: 0,
-                display: "grid",
-                gridTemplateColumns: `repeat(${COLS}, 1fr)`,
-                gap: GAP,
-                paddingBottom: GAP,
-              }}
-            >
-              {rowResumes.map((r) => (
-                <ResumeCard key={r.id} resume={r} onClick={() => onSelect(r)} />
-              ))}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-// ── Flat grid (≤50 items) ──────────────────────────────────────────────────────
-function FlatGrid({
-  resumes,
-  onSelect,
-}: {
-  resumes: Resume[];
-  onSelect: (r: Resume) => void;
-}) {
-  return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "repeat(3, 1fr)",
-        gap: GAP,
-      }}
-    >
-      {resumes.map((r) => (
-        <ResumeCard key={r.id} resume={r} onClick={() => onSelect(r)} />
-      ))}
-    </div>
-  );
-}
-
-// ── Upload progress bar ────────────────────────────────────────────────────────
-function UploadProgress({ progress }: { progress: number }) {
-  return (
-    <div
-      style={{
-        position: "fixed",
-        bottom: 90,
-        right: 24,
-        width: 240,
-        background: "#1A1A1A",
-        border: "1px solid #2A2A2A",
+        background: colors.surface,
+        border: `1px solid ${colors.border}`,
         borderRadius: 8,
-        padding: "10px 14px",
-        zIndex: 150,
+        padding: "14px 16px",
+        transition: "border-color 0.2s",
       }}
+      onMouseEnter={(e) => { (e.currentTarget).style.borderColor = `${colors.teal}40`; }}
+      onMouseLeave={(e) => { (e.currentTarget).style.borderColor = colors.border; }}
     >
-      <div style={{ fontSize: 12, color: "#aaa", marginBottom: 6 }}>Uploading… {progress}%</div>
-      <div style={{ height: 4, background: "#2A2A2A", borderRadius: 2, overflow: "hidden" }}>
-        <motion.div
-          animate={{ width: `${progress}%` }}
-          transition={{ ease: "easeOut" }}
-          style={{ height: "100%", background: AURORA, borderRadius: 2 }}
-        />
+      <div className="flex items-start justify-between gap-2 mb-2">
+        <p className="text-sm font-medium" style={{ color: colors.mercury, lineHeight: 1.4 }}>
+          <Highlight text={item.question.length > 100 ? item.question.slice(0, 100) + "..." : item.question} query={search} />
+        </p>
+        <ChevronRight size={14} className="opacity-0 group-hover:opacity-60 transition-opacity shrink-0 mt-0.5" style={{ color: colors.muted }} />
+      </div>
+
+      <p className="text-xs mb-3" style={{ color: colors.muted, lineHeight: 1.5 }}>
+        <Highlight text={item.answer.length > 120 ? item.answer.slice(0, 120) + "..." : item.answer} query={search} />
+      </p>
+
+      <div className="flex items-center gap-2 flex-wrap">
+        {item.category && (
+          <span
+            style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.04em", padding: "2px 6px", borderRadius: 4, background: colors.border, color: colors.mercury }}
+          >
+            {item.category}
+          </span>
+        )}
+        {item.similarity_score !== null && (
+          <span
+            style={{ fontSize: 10, fontWeight: 600, padding: "2px 6px", borderRadius: 4, background: `${colors.teal}18`, color: colors.teal }}
+          >
+            {Math.round(item.similarity_score * 100)}%
+          </span>
+        )}
+        {item.reward_score !== null && (
+          <span
+            style={{ fontSize: 10, fontWeight: 600, padding: "2px 6px", borderRadius: 4, background: `${colors.amber}18`, color: colors.amber }}
+          >
+            {item.reward_score >= 0.8 ? "Top" : item.reward_score.toFixed(2)}
+          </span>
+        )}
+        <span className="ml-auto" style={{ fontSize: 10, color: colors.muted }}>
+          {formatDate(item.created_at)}
+        </span>
       </div>
     </div>
   );
 }
 
-// ── Main Vault page ────────────────────────────────────────────────────────────
 export default function Vault() {
   const api = useApiClient();
-  const queryClient = useQueryClient();
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [activeCategory, setActiveCategory] = useState("All");
+  const [search, setSearch] = useState("");
+  const [selectedAnswer, setSelectedAnswer] = useState<VaultAnswer | null>(null);
 
-  const [selected, setSelected] = useState<Resume | null>(null);
-  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
-
-  // Fetch resumes
-  const { data, isLoading, isError } = useQuery<ResumesResponse>({
-    queryKey: ["vault-resumes"],
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ["vault-answers"],
     queryFn: async () => {
-      const res = await api.get<ResumesResponse>("/vault/resumes");
+      const res = await api.get<VaultResponse>("/vault/answers");
       return res.data;
     },
   });
 
-  const resumes: Resume[] = data?.resumes ?? [];
+  const items = data?.items ?? [];
 
-  // Upload mutation
-  const uploadMutation = useMutation<void, Error, File>({
-    mutationFn: async (file: File) => {
-      const form = new FormData();
-      form.append("file", file);
-      await api.post("/vault/upload", form, {
-        headers: { "Content-Type": "multipart/form-data" },
-        onUploadProgress: (evt) => {
-          if (evt.total) {
-            setUploadProgress(Math.round((evt.loaded / evt.total) * 100));
-          }
-        },
-      });
-    },
-    onSuccess: () => {
-      setUploadProgress(null);
-      void queryClient.invalidateQueries({ queryKey: ["vault-resumes"] });
-    },
-    onError: () => {
-      setUploadProgress(null);
-    },
-  });
-
-  const handleFileChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (file) {
-        setUploadProgress(0);
-        uploadMutation.mutate(file);
+  const filtered = useMemo(() => {
+    return items.filter((item) => {
+      if (!search && activeCategory !== "All") {
+        const cat = (item.category ?? "Other").toLowerCase();
+        if (cat !== activeCategory.toLowerCase()) return false;
       }
-      // reset input so same file can be re-uploaded
-      e.target.value = "";
-    },
-    [uploadMutation]
-  );
+      if (search) {
+        const q = search.toLowerCase();
+        if (!item.question.toLowerCase().includes(q) && !item.answer.toLowerCase().includes(q)) return false;
+      }
+      return true;
+    });
+  }, [items, activeCategory, search]);
 
-  const handleDownload = useCallback(
-    async (id: string, filename: string) => {
-      const res = await api.get(`/vault/download/${id}`, { responseType: "blob" });
-      const url = URL.createObjectURL(res.data as Blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      a.click();
-      URL.revokeObjectURL(url);
-    },
-    [api]
-  );
-
-  // Overlay backdrop when drawer open
-  const handleBackdropClick = () => setSelected(null);
+  const categoryCounts = useMemo(() => {
+    const counts: Record<string, number> = { All: items.length };
+    items.forEach((item) => {
+      const cat = item.category ?? "Other";
+      counts[cat] = (counts[cat] ?? 0) + 1;
+    });
+    return counts;
+  }, [items]);
 
   return (
-    <div style={{ padding: 32, position: "relative" }}>
-      <style>{`
-        @keyframes pulse {
-          0%,100% { background-position: 200% 0; }
-          50%      { background-position: -200% 0; }
-        }
-      `}</style>
+    <motion.div
+      variants={fadeUp}
+      initial="hidden"
+      animate="visible"
+      className="p-6 w-full max-w-5xl mx-auto"
+      style={{ fontFamily: font.family }}
+    >
+      <h1 style={{ fontSize: 20, fontWeight: 600, color: colors.mercury, marginBottom: 6 }}>
+        Vault
+      </h1>
+      <p style={{ fontSize: 12, color: colors.muted, marginBottom: 20 }}>
+        {isLoading ? "Loading..." : `${items.length} answer${items.length !== 1 ? "s" : ""} in your library`}
+      </p>
 
-      {/* Page header */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          marginBottom: 28,
-        }}
-      >
-        <div>
-          <h1 style={{ fontSize: 24, fontWeight: 700, color: MERCURY, margin: 0 }}>
-            Resume Vault
-          </h1>
-          <p style={{ color: "#666", fontSize: 13, marginTop: 4 }}>
-            {isLoading ? "Loading…" : `${resumes.length} resume${resumes.length !== 1 ? "s" : ""}`}
-          </p>
+      {/* Category tabs */}
+      <div className="flex items-center gap-1 mb-4 flex-wrap">
+        {CATEGORIES.map((cat) => (
+          <button
+            key={cat}
+            onClick={() => { setActiveCategory(cat); setSearch(""); }}
+            className="px-3 py-1.5 rounded text-xs font-medium border-0 cursor-pointer"
+            style={{
+              background: activeCategory === cat ? colors.tealSubtle : colors.surface,
+              color: activeCategory === cat ? colors.teal : colors.muted,
+              border: `1px solid ${activeCategory === cat ? `${colors.teal}30` : colors.border}`,
+              fontFamily: font.family,
+              transition: "all 150ms",
+            }}
+          >
+            {cat}
+            {categoryCounts[cat] != null && (
+              <span className="ml-1 opacity-60">{categoryCounts[cat]}</span>
+            )}
+          </button>
+        ))}
+
+        {/* Search */}
+        <div className="relative ml-auto">
+          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: colors.muted }} />
+          <input
+            type="text"
+            placeholder="Search answers"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="pl-7 pr-3 py-1.5 rounded text-xs outline-none"
+            style={{
+              background: colors.obsidian,
+              border: `1px solid ${colors.border}`,
+              color: colors.mercury,
+              width: 180,
+              fontFamily: font.family,
+            }}
+          />
         </div>
-
-        {/* Upload button */}
-        <button
-          onClick={() => fileInputRef.current?.click()}
-          disabled={uploadMutation.isPending}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            padding: "10px 18px",
-            background: AURORA,
-            color: OBSIDIAN,
-            border: "none",
-            borderRadius: 8,
-            fontWeight: 700,
-            fontSize: 14,
-            cursor: uploadMutation.isPending ? "not-allowed" : "pointer",
-            opacity: uploadMutation.isPending ? 0.6 : 1,
-          }}
-        >
-          <Upload size={16} />
-          Upload Resume
-        </button>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".pdf,.docx,.txt"
-          style={{ display: "none" }}
-          onChange={handleFileChange}
-        />
       </div>
 
-      {/* Error state */}
+      {/* Error */}
       {isError && (
-        <div
-          style={{
-            padding: "16px 20px",
-            background: `${EMBER}15`,
-            border: `1px solid ${EMBER}44`,
-            borderRadius: 8,
-            color: EMBER,
-            fontSize: 14,
-            marginBottom: 24,
-          }}
-        >
-          Failed to load resumes. Please try again.
+        <div className="rounded-lg p-4 mb-4" style={{ background: `${colors.ember}10`, border: `1px solid ${colors.ember}30` }}>
+          <p style={{ fontSize: 12, color: colors.ember }}>Failed to load vault answers.</p>
         </div>
       )}
 
-      {/* Skeleton grid */}
+      {/* Skeleton */}
       {isLoading && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: GAP }}>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {Array.from({ length: 6 }).map((_, i) => (
-            <SkeletonCard key={i} />
+            <div key={i} className="rounded-lg mercury-shimmer" style={{ background: colors.surface, border: `1px solid ${colors.border}`, height: 120 }} />
           ))}
         </div>
       )}
 
-      {/* Empty state */}
-      {!isLoading && !isError && resumes.length === 0 && (
-        <div
-          style={{
-            textAlign: "center",
-            padding: "80px 0",
-            color: "#555",
-          }}
-        >
-          <FileText size={48} color="#333" style={{ marginBottom: 16 }} />
-          <p style={{ fontSize: 16, margin: 0 }}>No resumes yet.</p>
-          <p style={{ fontSize: 13, marginTop: 8 }}>
-            Click{" "}
-            <span style={{ color: AURORA }}>Upload Resume</span> to get started.
+      {/* Empty */}
+      {!isLoading && !isError && filtered.length === 0 && (
+        <div className="text-center py-12">
+          <p style={{ fontSize: 13, color: colors.muted }}>
+            {search ? "No answers match your search." : "No answers in this category yet."}
           </p>
         </div>
       )}
 
-      {/* Resume grid */}
-      {!isLoading && resumes.length > 0 && (
-        resumes.length > 50 ? (
-          <VirtualGrid resumes={resumes} onSelect={setSelected} />
-        ) : (
-          <FlatGrid resumes={resumes} onSelect={setSelected} />
-        )
+      {/* Answer grid */}
+      {!isLoading && filtered.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {filtered.map((item) => (
+            <AnswerCard key={item.id} item={item} search={search} onClick={() => setSelectedAnswer(item)} />
+          ))}
+        </div>
       )}
 
-      {/* Upload progress */}
-      {uploadProgress !== null && <UploadProgress progress={uploadProgress} />}
-
-      {/* Drawer backdrop */}
+      {/* Detail Drawer */}
       <AnimatePresence>
-        {selected && (
+        {selectedAnswer && (
           <>
             <motion.div
-              key="backdrop"
+              initial={{ x: "100%" }}
+              animate={{ x: 0 }}
+              exit={{ x: "100%" }}
+              transition={{ duration: 0.25, ease: "easeOut" }}
+              className="fixed right-0 top-0 h-full w-[420px] z-50 overflow-y-auto p-6"
+              style={{ background: colors.surface2, borderLeft: `1px solid ${colors.border}` }}
+            >
+              <button
+                onClick={() => setSelectedAnswer(null)}
+                className="absolute top-4 right-4 p-1 border-0 bg-transparent cursor-pointer"
+                style={{ color: colors.muted }}
+              >
+                <X size={18} />
+              </button>
+
+              <h3 style={{ fontSize: 14, fontWeight: 600, color: colors.mercury, marginBottom: 8, paddingRight: 24 }}>
+                {selectedAnswer.question}
+              </h3>
+
+              <div className="flex items-center gap-2 mb-4">
+                {selectedAnswer.category && (
+                  <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 6px", borderRadius: 4, background: colors.border, color: colors.mercury }}>
+                    {selectedAnswer.category}
+                  </span>
+                )}
+                {selectedAnswer.similarity_score !== null && (
+                  <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 6px", borderRadius: 4, background: `${colors.teal}18`, color: colors.teal }}>
+                    {Math.round(selectedAnswer.similarity_score * 100)}%
+                  </span>
+                )}
+                {selectedAnswer.reward_score !== null && (
+                  <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 6px", borderRadius: 4, background: `${colors.amber}18`, color: colors.amber }}>
+                    {selectedAnswer.reward_score >= 0.8 ? "Top" : selectedAnswer.reward_score.toFixed(2)}
+                  </span>
+                )}
+              </div>
+
+              <p style={{ fontSize: 13, color: colors.mercury, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>
+                {selectedAnswer.answer}
+              </p>
+
+              <div className="mt-4 pt-3" style={{ borderTop: `1px solid ${colors.border}` }}>
+                <span style={{ fontSize: 11, color: colors.muted }}>Added {formatDate(selectedAnswer.created_at)}</span>
+              </div>
+            </motion.div>
+            <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              onClick={handleBackdropClick}
-              style={{
-                position: "fixed",
-                inset: 0,
-                background: "rgba(0,0,0,0.5)",
-                zIndex: 199,
-              }}
-            />
-            <ResumeDrawer
-              key="drawer"
-              resume={selected}
-              onClose={() => setSelected(null)}
-              onDownload={handleDownload}
+              className="fixed inset-0 z-40"
+              style={{ background: "rgba(0,0,0,0.5)" }}
+              onClick={() => setSelectedAnswer(null)}
             />
           </>
         )}
       </AnimatePresence>
-
-      {/* Chevron hint on cards when drawer closed */}
-      {!selected && resumes.length > 0 && (
-        <div
-          style={{
-            position: "fixed",
-            bottom: 24,
-            right: 24,
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            fontSize: 12,
-            color: "#444",
-          }}
-        >
-          <ChevronRight size={14} />
-          Click a card to preview
-        </div>
-      )}
-    </div>
+    </motion.div>
   );
 }

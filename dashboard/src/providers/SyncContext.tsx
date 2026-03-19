@@ -1,18 +1,30 @@
-import { createContext, useContext, useState, useCallback, type ReactNode } from "react";
+import { createContext, useContext, useState, type ReactNode } from "react";
 
 interface SyncContextValue {
   lastSynced: Date | null;
-  markSynced: () => void;
+  setLastSynced: (d: Date) => void;
 }
 
-const SyncContext = createContext<SyncContextValue>({ lastSynced: null, markSynced: () => {} });
+const SyncCtx = createContext<SyncContextValue>({
+  lastSynced: null,
+  setLastSynced: () => {},
+});
 
 export function SyncProvider({ children }: { children: ReactNode }) {
   const [lastSynced, setLastSynced] = useState<Date | null>(null);
-  const markSynced = useCallback(() => setLastSynced(new Date()), []);
-  return <SyncContext.Provider value={{ lastSynced, markSynced }}>{children}</SyncContext.Provider>;
+  return (
+    <SyncCtx.Provider value={{ lastSynced, setLastSynced }}>
+      {children}
+    </SyncCtx.Provider>
+  );
 }
 
+export function useSync() {
+  return useContext(SyncCtx);
+}
+
+// Backward compat alias
 export function useSyncTime() {
-  return useContext(SyncContext);
+  const { lastSynced, setLastSynced } = useContext(SyncCtx);
+  return { lastSynced, markSynced: () => setLastSynced(new Date()) };
 }
