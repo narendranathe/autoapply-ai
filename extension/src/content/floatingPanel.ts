@@ -467,6 +467,8 @@ class FloatingPanel {
   private promptTemplates: Record<string, string> = {};
   private categoryModelRoutes: Record<string, string> = {};
   private trackedAppId: string | null = null;
+  private _preAutoFillValues = new Map<string, string>();
+  private showAutoFillBanner = false;
 
   /** Build auth headers: prefer JWT Bearer, fall back to X-Clerk-User-Id. */
   private authHeaders(extraHeaders?: Record<string, string>): Record<string, string> {
@@ -670,6 +672,7 @@ class FloatingPanel {
         const json = await resp.json() as { ats_result?: { overallScore?: number } | null };
         if (json.ats_result?.overallScore != null) {
           this.atsScore = json.ats_result.overallScore;
+          this.maybeAutoFill();
         }
       }
     } catch {
@@ -678,6 +681,30 @@ class FloatingPanel {
       this.loadingAts = false;
       this.render();
     }
+  }
+
+  private maybeAutoFill(): void {
+    if (this.atsScore === null || this.atsScore < 0.75) return;
+    if (this.fields.length === 0) return;
+    const dismissKey = `aap_autofill_dismissed_${this.company.toLowerCase().replace(/\s+/g, "_")}`;
+    if (sessionStorage.getItem(dismissKey)) return;
+    // Snapshot current DOM values for Undo
+    this._preAutoFillValues.clear();
+    for (const field of this.fields) {
+      const el = document.querySelector(`[data-aap-id="${field.fieldId}"]`) as HTMLInputElement | HTMLTextAreaElement | null;
+      if (el) this._preAutoFillValues.set(field.fieldId, (el as HTMLInputElement).value ?? "");
+    }
+    this.fillAll();
+    this.showAutoFillBanner = true;
+    this.render();
+  }
+
+  private undoAutoFill(): void {
+    for (const [fieldId, value] of this._preAutoFillValues) {
+      fillDomField(fieldId, value);
+    }
+    this.showAutoFillBanner = false;
+    this.render();
   }
 
   private async fetchVaultAnswers(questionText: string, category: string, stateIndex: number): Promise<void> {
@@ -1593,6 +1620,17 @@ class FloatingPanel {
         font-weight: 700;
       }
 
+      /* ── AutoFill Banner ───────────────────────────────────────────────── */
+      .aap-autofill-banner {
+        display: flex; align-items: center; justify-content: space-between;
+        background: rgba(0,206,209,0.1); border: 1px solid rgba(0,206,209,0.3);
+        border-radius: 6px; padding: 8px 12px; margin: 10px 16px 0;
+        font-size: 12px; color: #00CED1;
+      }
+      .aap-autofill-actions { display: flex; gap: 6px; }
+      .aap-btn-undo { background: rgba(0,206,209,0.2); border: 1px solid #00CED1; color: #00CED1; border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 11px; pointer-events: all; }
+      .aap-btn-dismiss { background: transparent; border: none; color: #666; cursor: pointer; font-size: 14px; padding: 0 4px; pointer-events: all; }
+
       /* ── Similarity Badges ─────────────────────────────────────────────── */
       .aap-badge-vault {
         display: inline-block;
@@ -1657,6 +1695,16 @@ class FloatingPanel {
             <button class="cta-btn" id="__aap_autofill__">&#9889; Autofill ${fillableCount} field${fillableCount !== 1 ? "s" : ""}</button>
            </div>`
         : "";
+
+    const autoFillBannerHtml = this.showAutoFillBanner
+      ? `<div class="aap-autofill-banner">
+          <span>✓ Auto-filled from your profile (ATS match: ${Math.round((this.atsScore ?? 0) * 100)}%)</span>
+          <div class="aap-autofill-actions">
+            <button class="aap-btn-undo" data-action="undo-autofill">Undo</button>
+            <button class="aap-btn-dismiss" data-action="dismiss-autofill">✕</button>
+          </div>
+        </div>`
+      : "";
 
     const fieldsHtml =
       fields.length > 0
@@ -1772,6 +1820,7 @@ class FloatingPanel {
         </div>
         ${scoreBarHtml}
         ${ctaHtml}
+        ${autoFillBannerHtml}
         ${fieldsHtml}
         ${questionsHtml}
         ${footerHtml}
@@ -1788,6 +1837,25 @@ class FloatingPanel {
     toggle?.addEventListener("click", () => this.toggle());
     close?.addEventListener("click", () => this.toggle());
     autofill?.addEventListener("click", () => this.fillAll());
+
+    // Auto-fill banner action buttons (undo / dismiss)
+    this.shadow.querySelectorAll<HTMLButtonElement>("[data-action]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        switch (btn.dataset.action) {
+          case "undo-autofill":
+            this.undoAutoFill();
+            break;
+          case "dismiss-autofill":
+            this.showAutoFillBanner = false;
+            sessionStorage.setItem(
+              `aap_autofill_dismissed_${this.company.toLowerCase().replace(/\s+/g, "_")}`,
+              "1"
+            );
+            this.render();
+            break;
+        }
+      });
+    });
 
     // Fill individual field buttons
     this.shadow.querySelectorAll<HTMLButtonElement>(".fill-btn").forEach((btn) => {
