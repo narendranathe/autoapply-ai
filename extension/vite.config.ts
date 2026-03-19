@@ -19,8 +19,9 @@ function copyExtensionStaticFiles() {
   };
 }
 
-// Chrome MV3 multi-entry build.
-// Each entry compiles to its own output file in dist/.
+// Chrome MV3 main build: background service worker + sidepanel + options page.
+// Content scripts are built separately in vite.content.config.ts as IIFE bundles
+// because Chrome content scripts cannot use ES module import statements.
 export default defineConfig({
   plugins: [react(), copyExtensionStaticFiles()],
   build: {
@@ -28,14 +29,8 @@ export default defineConfig({
     emptyOutDir: true,
     rollupOptions: {
       input: {
-        // Background service worker (no DOM)
+        // Background service worker (no DOM) — runs as ES module (manifest declares type:module)
         "background/worker": resolve(__dirname, "src/background/worker.ts"),
-        // Content script — field detection, sends PageContext to sidepanel (all pages)
-        "content/detector": resolve(__dirname, "src/content/detector.ts"),
-        // Content script — in-page floating panel for form fill + Q&A (job pages only)
-        "content/floatingPanel": resolve(__dirname, "src/content/floatingPanel.ts"),
-        // Content script — Gmail email-status tracker (mail.google.com only)
-        "content/gmailContent": resolve(__dirname, "src/content/gmailContent.ts"),
         // Side panel React app
         "sidepanel/index": resolve(__dirname, "src/sidepanel/index.html"),
         // Options / settings page
