@@ -84,6 +84,11 @@ class Settings(BaseSettings):
     GITHUB_APP_CLIENT_ID: str = ""
     GITHUB_APP_CLIENT_SECRET: str = ""
 
+    # ── Vector Backend ────────────────────────────────────
+    VECTOR_BACKEND: str = "pgvector"  # "pgvector" | "pinecone"
+    PINECONE_API_KEY: str | None = None
+    PINECONE_INDEX_NAME: str = "autoapply-answers"
+
     # ── Monitoring ────────────────────────────────────────
     SENTRY_DSN: str = ""
     SENTRY_TRACES_SAMPLE_RATE: float = 0.1

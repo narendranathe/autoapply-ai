@@ -27,6 +27,10 @@ python-docx = "^1.1.2"
 pdfplumber = "^0.11.4"
 tiktoken = "^0.12.0"
 python-dotenv = "^1.2.1"
+pinecone-client = {version = "^3.0", optional = true}
+
+[tool.poetry.extras]
+pinecone = ["pinecone-client"]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.0"
