@@ -545,6 +545,7 @@ class FloatingPanel {
     this.loadAtsScore();
     void this.prefetchCoverLetter();
     this.observeMutations();
+    this.attachSPAResizeObserver();
 
     // SPAs often render the form asynchronously after the initial paint.
     // Retry detection at 1s and 3s so we catch late-rendering fields/questions.
@@ -932,6 +933,34 @@ class FloatingPanel {
     );
 
     this.render();
+  }
+
+  private attachSPAResizeObserver(): void {
+    const SPA_SELECTORS = [
+      ".app-container", "main",
+      '[data-qa="job-container"]', ".form-wrapper",
+      "[class*=step]", "[class*=wizard]",
+    ];
+    let spaResizeTimer: ReturnType<typeof setTimeout> | null = null;
+    const prevHeights = new Map<Element, number>();
+    const observer = new ResizeObserver((entries) => {
+      let significantChange = false;
+      for (const entry of entries) {
+        const newH = entry.contentRect.height;
+        const oldH = prevHeights.get(entry.target) ?? newH;
+        prevHeights.set(entry.target, newH);
+        if (Math.abs(newH - oldH) > 50) significantChange = true;
+      }
+      if (!significantChange) return;
+      if (spaResizeTimer !== null) clearTimeout(spaResizeTimer);
+      spaResizeTimer = setTimeout(() => this.redetect(), 400);
+    });
+    for (const sel of SPA_SELECTORS) {
+      document.querySelectorAll(sel).forEach((el) => {
+        prevHeights.set(el, el.getBoundingClientRect().height);
+        observer.observe(el);
+      });
+    }
   }
 
   private observeMutations(): void {
