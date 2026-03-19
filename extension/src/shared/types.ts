@@ -18,6 +18,7 @@ export interface DetectedField {
   fieldId: string;       // DOM element id / generated key
   fieldType: FieldType;
   label: string;
+  labelHash: string;     // djb2 hash of normalized label — used for dedup across re-scans
   currentValue: string;
   suggestedValue: string;
   confidence: number;    // 0.0–1.0

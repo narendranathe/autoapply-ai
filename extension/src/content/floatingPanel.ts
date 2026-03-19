@@ -19,6 +19,19 @@ import { initSmartRecruitersApply } from "./smartRecruitersApply";
 import { initTaleoApply } from "./taleoApply";
 import { initWorkdayApply } from "./workdayApply";
 
+// ── Label hashing ──────────────────────────────────────────────────────────
+
+function computeLabelHash(label: string): string {
+  const normalized = label.toLowerCase().replace(/\s+/g, " ").replace(/[^\w\s]/g, "").trim();
+  // djb2 hash — synchronous, no async needed
+  let hash = 5381;
+  for (let i = 0; i < normalized.length; i++) {
+    hash = ((hash << 5) + hash) + normalized.charCodeAt(i);
+    hash = hash & hash; // force 32-bit
+  }
+  return (hash >>> 0).toString(36);
+}
+
 // ── Types ──────────────────────────────────────────────────────────────────
 
 interface Profile {
@@ -43,6 +56,7 @@ interface QuestionState {
   question: DetectedQuestion;
   drafts: string[];
   draftProviders: string[];
+  draftSources?: Array<{ source: "vault" | "llm"; similarityScore?: number }>;
   selectedDraft: number;
   loading: boolean;
   loadingProvider: string;  // which provider is being tried (shown in spinner)
@@ -271,10 +285,13 @@ function detectFields(): DetectedField[] {
     // Tag element with a stable data attribute so we can re-find it for fill
     const autoId = `aap_f${fields.length}`;
     el.setAttribute("data-aap-id", autoId);
+    const label = getFieldLabel(el);
+    const labelHash = computeLabelHash(label);
     fields.push({
       fieldId: autoId,
       fieldType,
-      label: getFieldLabel(el),
+      label,
+      labelHash,
       currentValue: (el as HTMLInputElement).value ?? "",
       suggestedValue: "",
       confidence: 0.9,
@@ -450,6 +467,11 @@ class FloatingPanel {
   private promptTemplates: Record<string, string> = {};
   private categoryModelRoutes: Record<string, string> = {};
   private trackedAppId: string | null = null;
+  private _preAutoFillValues = new Map<string, string>();
+  private showAutoFillBanner = false;
+  private coverLetter: string = "";
+  private coverLetterSource: "vault" | "generated" | "" = "";
+  private _iframeMap = new Map<string, HTMLIFrameElement>();
 
   /** Build auth headers: prefer JWT Bearer, fall back to X-Clerk-User-Id. */
   private authHeaders(extraHeaders?: Record<string, string>): Record<string, string> {
@@ -522,7 +544,31 @@ class FloatingPanel {
     }));
     this.render();
     this.loadAtsScore();
+    void this.prefetchCoverLetter();
     this.observeMutations();
+    this.attachSPAResizeObserver();
+
+    // IframeFieldBridge: listen for field scan results from same-origin iframes
+    window.addEventListener("message", (e: MessageEvent) => {
+      if (e.data?.type === "AAP_FIELDS_RESULT" && Array.isArray(e.data.fields)) {
+        const iframeFields = e.data.fields as import("../shared/types").DetectedField[];
+        // Find the source iframe
+        const sourceFrame = Array.from(document.querySelectorAll("iframe")).find(
+          (f) => f.contentWindow === e.source
+        ) as HTMLIFrameElement | undefined;
+        if (!sourceFrame) return;
+        // Merge with dedup (fieldId + labelHash composite from #57)
+        const existingKeys = new Set(this.fields.map((f) => f.fieldId + ":" + f.labelHash));
+        const newIframeFields = iframeFields.filter((f) => !existingKeys.has(f.fieldId + ":" + f.labelHash));
+        for (const f of newIframeFields) {
+          this._iframeMap.set(f.fieldId, sourceFrame);
+        }
+        if (newIframeFields.length > 0) {
+          this.fields = [...this.fields, ...newIframeFields];
+          this.render();
+        }
+      }
+    });
 
     // SPAs often render the form asynchronously after the initial paint.
     // Retry detection at 1s and 3s so we catch late-rendering fields/questions.
@@ -620,7 +666,7 @@ class FloatingPanel {
     // 2. Belong to a category the user has encountered before (count >= 2)
     const candidates = this.questionStates
       .map((state, idx) => ({ state, idx, count: usage[state.question.category] ?? 0 }))
-      .filter(({ state, count }) => state.drafts.length === 0 && !state.loading && count >= 2)
+      .filter(({ state, count }) => state.drafts.length < 2 && !state.loading && count >= 2)
       .sort((a, b) => b.count - a.count) // highest-frequency first
       .slice(0, 3); // max 3 pre-generated per page load
 
@@ -653,6 +699,7 @@ class FloatingPanel {
         const json = await resp.json() as { ats_result?: { overallScore?: number } | null };
         if (json.ats_result?.overallScore != null) {
           this.atsScore = json.ats_result.overallScore;
+          this.maybeAutoFill();
         }
       }
     } catch {
@@ -660,6 +707,113 @@ class FloatingPanel {
     } finally {
       this.loadingAts = false;
       this.render();
+    }
+  }
+
+  private async prefetchCoverLetter(): Promise<void> {
+    if (!this.company || !this.clerkUserId) return;
+    // Idempotency guard — don't re-fetch if already done for this URL
+    const urlHash = btoa(window.location.href).slice(0, 16);
+    const guardKey = `aap_cl_prefetched_${urlHash}`;
+    if (sessionStorage.getItem(guardKey)) return;
+    sessionStorage.setItem(guardKey, "1");
+    try {
+      const params = new URLSearchParams({ company: this.company, limit: "1" });
+      const resp = await fetch(`${this.apiBase}/vault/cover-letters?${params}`, {
+        headers: this.authHeaders(),
+      });
+      if (!resp.ok) return;
+      const json = await resp.json() as { items?: Array<{ answer_text: string }> };
+      const items = json.items ?? [];
+      if (items.length > 0) {
+        this.coverLetter = items[0].answer_text;
+        this.coverLetterSource = "vault";
+        this.render();
+        return;
+      }
+      // No saved letter — queue background generation if JD text available
+      if (this.jdText) {
+        void this.generateCoverLetterBackground();
+      }
+    } catch {
+      // non-fatal
+    }
+  }
+
+  private async generateCoverLetterBackground(): Promise<void> {
+    // Only generate if no letter yet
+    if (this.coverLetter) return;
+    try {
+      const fd = new FormData();
+      fd.append("company_name", this.company);
+      if (this.roleTitle) fd.append("role_title", this.roleTitle);
+      if (this.jdText) fd.append("jd_text", this.jdText);
+      fd.append("tone", "professional");
+      fd.append("word_limit", "400");
+      const resp = await fetch(`${this.apiBase}/vault/generate/cover-letter`, {
+        method: "POST",
+        headers: this.authHeaders(),
+        body: fd,
+      });
+      if (!resp.ok) return;
+      const json = await resp.json() as { cover_letter?: string };
+      if (json.cover_letter) {
+        this.coverLetter = json.cover_letter;
+        this.coverLetterSource = "generated";
+        this.render();
+      }
+    } catch {
+      // non-fatal
+    }
+  }
+
+  private maybeAutoFill(): void {
+    if (this.atsScore === null || this.atsScore < 0.75) return;
+    if (this.fields.length === 0) return;
+    const dismissKey = `aap_autofill_dismissed_${this.company.toLowerCase().replace(/\s+/g, "_")}`;
+    if (sessionStorage.getItem(dismissKey)) return;
+    // Snapshot current DOM values for Undo
+    this._preAutoFillValues.clear();
+    for (const field of this.fields) {
+      const el = document.querySelector(`[data-aap-id="${field.fieldId}"]`) as HTMLInputElement | HTMLTextAreaElement | null;
+      if (el) this._preAutoFillValues.set(field.fieldId, (el as HTMLInputElement).value ?? "");
+    }
+    this.fillAll();
+    this.showAutoFillBanner = true;
+    this.render();
+  }
+
+  private undoAutoFill(): void {
+    for (const [fieldId, value] of this._preAutoFillValues) {
+      this.fillFieldSmart(fieldId, value);
+    }
+    this.showAutoFillBanner = false;
+    this.render();
+  }
+
+  private async fetchVaultAnswers(questionText: string, category: string, stateIndex: number): Promise<void> {
+    const state = this.questionStates[stateIndex];
+    if (!state || state.drafts.length > 0) return; // skip if already has drafts
+    if (!this.clerkUserId) return;
+    try {
+      const params = new URLSearchParams({ question_text: questionText, question_category: category, top_k: "3" });
+      const resp = await fetch(`${this.apiBase}/vault/answers/similar?${params}`, {
+        headers: this.authHeaders(),
+      });
+      if (!resp.ok) return;
+      const json = await resp.json() as { answers?: Array<{ answer_text: string; similarity_score: number; reward_score: number }> };
+      const vaultDrafts = (json.answers ?? [])
+        .filter(a => a.similarity_score >= 0.25)
+        .map(a => ({ text: a.answer_text, source: "vault" as const, similarityScore: a.similarity_score }));
+      if (vaultDrafts.length === 0) return;
+      // Re-check index is still valid (page may have navigated)
+      const currentState = this.questionStates[stateIndex];
+      if (!currentState || currentState.drafts.length > 0) return;
+      currentState.drafts = vaultDrafts.map(d => d.text);
+      currentState.draftSources = vaultDrafts.map(d => ({ source: d.source, similarityScore: d.similarityScore }));
+      this.render();
+    } catch {
+      // non-fatal — fall back to LLM generation
     }
   }
 
@@ -752,7 +906,17 @@ class FloatingPanel {
     for (const field of this.fields) {
       if (field.fieldType === "resume_upload" || field.fieldType === "cover_letter_upload") continue;
       const value = profileValue(field.fieldType, this.profile);
-      if (value) fillDomField(field.fieldId, value);
+      if (value) this.fillFieldSmart(field.fieldId, value);
+    }
+  }
+
+  /** Fill a field — routes to iframe postMessage if the field came from a same-origin iframe. */
+  private fillFieldSmart(fieldId: string, value: string): void {
+    const sourceIframe = this._iframeMap.get(fieldId);
+    if (sourceIframe) {
+      sourceIframe.contentWindow?.postMessage({ type: "AAP_FILL_FIELD", fieldId, value }, "*");
+    } else {
+      fillDomField(fieldId, value);
     }
   }
 
@@ -767,8 +931,15 @@ class FloatingPanel {
     // ── Fields ──────────────────────────────────────────────────────────────
     const newFields = detectFields();
     if (newFields.length > 0) {
-      // New scan found fields — use them (also re-tags elements with fresh data-aap-id)
-      this.fields = newFields;
+      // Dedup against already-tracked fields using composite key (fieldId + labelHash)
+      // to avoid re-adding the same field when the panel re-scans a stable form.
+      const existingIds = new Set(this.fields.map((f) => f.fieldId + ":" + f.labelHash));
+      const dedupedFields = newFields.filter((f) => !existingIds.has(f.fieldId + ":" + f.labelHash));
+      // Merge: keep existing tracked fields still in DOM, then add truly new ones
+      const stillPresent = this.fields.filter(
+        (f) => !!document.querySelector(`[data-aap-id="${f.fieldId}"]`)
+      );
+      this.fields = [...stillPresent, ...dedupedFields];
     } else if (this.fields.length > 0) {
       // New scan found nothing — check which existing tagged elements are still in the DOM.
       // Keep those; remove only the ones that have genuinely disappeared.
@@ -785,6 +956,8 @@ class FloatingPanel {
     for (const q of newQuestions) {
       if (!existingIds.has(q.questionId)) {
         this.questionStates.push({ question: q, drafts: [], draftProviders: [], selectedDraft: 0, loading: false, loadingProvider: "", loadingStartMs: 0, error: null });
+        // Fire vault recall in background — do not await (non-blocking)
+        void this.fetchVaultAnswers(q.questionText, q.category, this.questionStates.length - 1);
       }
     }
     // Remove only questions whose textarea has actually left the DOM
@@ -792,7 +965,49 @@ class FloatingPanel {
       (s) => !!document.querySelector(`[data-aap-id="${s.question.questionId}"]`)
     );
 
+    this.scanIframes();
     this.render();
+  }
+
+  private scanIframes(): void {
+    const iframes = Array.from(document.querySelectorAll("iframe")) as HTMLIFrameElement[];
+    for (const iframe of iframes) {
+      try {
+        // Test same-origin access
+        void iframe.contentWindow?.location.href;
+        iframe.contentWindow?.postMessage({ type: "AAP_SCAN_FIELDS" }, "*");
+      } catch {
+        // Cross-origin — skip silently
+      }
+    }
+  }
+
+  private attachSPAResizeObserver(): void {
+    const SPA_SELECTORS = [
+      ".app-container", "main",
+      '[data-qa="job-container"]', ".form-wrapper",
+      "[class*=step]", "[class*=wizard]",
+    ];
+    let spaResizeTimer: ReturnType<typeof setTimeout> | null = null;
+    const prevHeights = new Map<Element, number>();
+    const observer = new ResizeObserver((entries) => {
+      let significantChange = false;
+      for (const entry of entries) {
+        const newH = entry.contentRect.height;
+        const oldH = prevHeights.get(entry.target) ?? newH;
+        prevHeights.set(entry.target, newH);
+        if (Math.abs(newH - oldH) > 50) significantChange = true;
+      }
+      if (!significantChange) return;
+      if (spaResizeTimer !== null) clearTimeout(spaResizeTimer);
+      spaResizeTimer = setTimeout(() => this.redetect(), 400);
+    });
+    for (const sel of SPA_SELECTORS) {
+      document.querySelectorAll(sel).forEach((el) => {
+        prevHeights.set(el, el.getBoundingClientRect().height);
+        observer.observe(el);
+      });
+    }
   }
 
   private observeMutations(): void {
@@ -1540,6 +1755,43 @@ class FloatingPanel {
         text-transform: uppercase;
         font-weight: 700;
       }
+
+      /* ── AutoFill Banner ───────────────────────────────────────────────── */
+      .aap-autofill-banner {
+        display: flex; align-items: center; justify-content: space-between;
+        background: rgba(0,206,209,0.1); border: 1px solid rgba(0,206,209,0.3);
+        border-radius: 6px; padding: 8px 12px; margin: 10px 16px 0;
+        font-size: 12px; color: #00CED1;
+      }
+      .aap-autofill-actions { display: flex; gap: 6px; }
+      .aap-btn-undo { background: rgba(0,206,209,0.2); border: 1px solid #00CED1; color: #00CED1; border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 11px; pointer-events: all; }
+      .aap-btn-dismiss { background: transparent; border: none; color: #666; cursor: pointer; font-size: 14px; padding: 0 4px; pointer-events: all; }
+
+      /* ── Similarity Badges ─────────────────────────────────────────────── */
+      .aap-badge-vault {
+        display: inline-block;
+        padding: 1px 6px;
+        border-radius: 9999px;
+        font-size: 10px;
+        font-weight: 600;
+        background: rgba(0,206,209,0.15);
+        color: #00CED1;
+        border: 1px solid rgba(0,206,209,0.3);
+        margin-left: 6px;
+        vertical-align: middle;
+      }
+      .aap-badge-llm {
+        display: inline-block;
+        padding: 1px 6px;
+        border-radius: 9999px;
+        font-size: 10px;
+        font-weight: 600;
+        background: rgba(99,102,241,0.15);
+        color: #818cf8;
+        border: 1px solid rgba(99,102,241,0.3);
+        margin-left: 6px;
+        vertical-align: middle;
+      }
     `;
   }
 
@@ -1580,6 +1832,16 @@ class FloatingPanel {
            </div>`
         : "";
 
+    const autoFillBannerHtml = this.showAutoFillBanner
+      ? `<div class="aap-autofill-banner">
+          <span>✓ Auto-filled from your profile (ATS match: ${Math.round((this.atsScore ?? 0) * 100)}%)</span>
+          <div class="aap-autofill-actions">
+            <button class="aap-btn-undo" data-action="undo-autofill">Undo</button>
+            <button class="aap-btn-dismiss" data-action="dismiss-autofill">✕</button>
+          </div>
+        </div>`
+      : "";
+
     const fieldsHtml =
       fields.length > 0
         ? `<div class="section">
@@ -1603,6 +1865,13 @@ class FloatingPanel {
            </div>`
         : "";
 
+    const coverLetterHtml = this.coverLetter
+      ? `<div class="section">
+          <div class="section-heading">Cover Letter ${this.coverLetterSource === "vault" ? '<span class="aap-badge-vault" style="font-size:11px">Loaded from vault</span>' : ""}</div>
+          <div class="draft-text" style="max-height:120px">${this.coverLetter.replace(/</g, "&lt;")}</div>
+        </div>`
+      : "";
+
     const questionsHtml =
       questionStates.length > 0
         ? `<div class="section">
@@ -1617,11 +1886,15 @@ class FloatingPanel {
                   ? `<div class="draft-tabs">
                       ${state.drafts
                         .map((_, di) => {
+                          const src = state.draftSources?.[di];
                           const provName = state.draftProviders[di];
                           const label = provName
                             ? provName.charAt(0).toUpperCase() + provName.slice(1)
                             : `Draft ${di + 1}`;
-                          return `<button class="draft-tab ${di === state.selectedDraft ? "active" : ""}" data-q-idx="${qi}" data-d-idx="${di}">${label}</button>`;
+                          const badge = src?.source === "vault"
+                            ? `<span class="aap-badge-vault">From Memory · ${Math.round((src.similarityScore ?? 0) * 100)}% match</span>`
+                            : `<span class="aap-badge-llm">Generated</span>`;
+                          return `<button class="draft-tab ${di === state.selectedDraft ? "active" : ""}" data-q-idx="${qi}" data-d-idx="${di}">${label}${badge}</button>`;
                         })
                         .join("")}
                      </div>
@@ -1690,7 +1963,9 @@ class FloatingPanel {
         </div>
         ${scoreBarHtml}
         ${ctaHtml}
+        ${autoFillBannerHtml}
         ${fieldsHtml}
+        ${coverLetterHtml}
         ${questionsHtml}
         ${footerHtml}
       </div>`;
@@ -1707,6 +1982,25 @@ class FloatingPanel {
     close?.addEventListener("click", () => this.toggle());
     autofill?.addEventListener("click", () => this.fillAll());
 
+    // Auto-fill banner action buttons (undo / dismiss)
+    this.shadow.querySelectorAll<HTMLButtonElement>("[data-action]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        switch (btn.dataset.action) {
+          case "undo-autofill":
+            this.undoAutoFill();
+            break;
+          case "dismiss-autofill":
+            this.showAutoFillBanner = false;
+            sessionStorage.setItem(
+              `aap_autofill_dismissed_${this.company.toLowerCase().replace(/\s+/g, "_")}`,
+              "1"
+            );
+            this.render();
+            break;
+        }
+      });
+    });
+
     // Fill individual field buttons
     this.shadow.querySelectorAll<HTMLButtonElement>(".fill-btn").forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -1714,7 +2008,7 @@ class FloatingPanel {
         const field = this.fields[idx];
         if (!field) return;
         const value = profileValue(field.fieldType, this.profile);
-        if (value) fillDomField(field.fieldId, value);
+        if (value) this.fillFieldSmart(field.fieldId, value);
       });
     });
 

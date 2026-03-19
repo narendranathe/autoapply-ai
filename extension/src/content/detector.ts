@@ -13,6 +13,19 @@
 import type { DetectedField, DetectedQuestion, FieldType, JobCard, Message, PageContext, QuestionCategory } from "../shared/types";
 import { FIELD_PATTERNS, QUESTION_CATEGORY_PATTERNS } from "../shared/detection-patterns";
 
+// ── Label hashing ──────────────────────────────────────────────────────────
+
+function computeLabelHash(label: string): string {
+  const normalized = label.toLowerCase().replace(/\s+/g, " ").replace(/[^\w\s]/g, "").trim();
+  // djb2 hash — synchronous, no async needed
+  let hash = 5381;
+  for (let i = 0; i < normalized.length; i++) {
+    hash = ((hash << 5) + hash) + normalized.charCodeAt(i);
+    hash = hash & hash; // force 32-bit
+  }
+  return (hash >>> 0).toString(36);
+}
+
 // ── Field detection ────────────────────────────────────────────────────────
 
 function getFieldLabel(el: HTMLElement): string {
@@ -88,10 +101,13 @@ function detectFields(): DetectedField[] {
     const fieldType = classifyField(el as HTMLInputElement);
     if (fieldType === "unknown" && !getFieldLabel(el as HTMLElement)) continue;
 
+    const label = getFieldLabel(el as HTMLElement);
+    const labelHash = computeLabelHash(label);
     fields.push({
       fieldId: el.id || el.name || `field_${fields.length}`,
       fieldType,
-      label: getFieldLabel(el as HTMLElement),
+      label,
+      labelHash,
       currentValue: (el as HTMLInputElement).value || "",
       suggestedValue: "",
       confidence: 0.9,
@@ -684,5 +700,29 @@ history.pushState = function (...args) {
 window.addEventListener("popstate", () => setTimeout(buildAndSendContext, 800));
 
 } // end shouldRunInFrame() guard
+
+// IframeFieldBridge: respond to scan requests from parent frame
+window.addEventListener("message", (e: MessageEvent) => {
+  if (e.data?.type !== "AAP_SCAN_FIELDS") return;
+  const fields = detectFields();
+  (e.source as Window)?.postMessage({ type: "AAP_FIELDS_RESULT", fields }, "*");
+});
+
+// IframeFieldBridge: handle fill requests from parent frame
+window.addEventListener("message", (e: MessageEvent) => {
+  if (e.data?.type !== "AAP_FILL_FIELD") return;
+  const { fieldId, value } = e.data as { fieldId: string; value: string };
+  if (fieldId && value !== undefined) {
+    const el = document.querySelector(`[data-aap-id="${fieldId}"]`) as HTMLInputElement | HTMLTextAreaElement | null;
+    if (el) {
+      el.focus();
+      const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set
+        ?? Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
+      nativeInputValueSetter?.call(el, value);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  }
+});
 
 export {};

@@ -87,7 +87,7 @@ async def generate_answers(
         db, user.id, question_text, question_category, top_k=3
     )
     # Only inject answers with a meaningful reward score (0.6+)
-    past_texts = [a.answer_text for a in best_past if (a.reward_score or 0) >= 0.6]
+    past_texts = [ans.answer_text for _, ans in best_past if (ans.reward_score or 0) >= 0.6]
 
     # Cascade mode: try providers in priority order, use first that works for all 3 drafts
     # #25: prefer server-side config when client sends empty providers_json
@@ -537,17 +537,18 @@ async def get_similar_answers(
     return {
         "answers": [
             {
-                "answer_id": str(a.id),
-                "question_text": a.question_text,
-                "answer_text": a.answer_text,
-                "company_name": a.company_name,
-                "question_category": a.question_category,
-                "reward_score": a.reward_score,
-                "feedback": a.feedback,
-                "word_count": a.word_count,
-                "created_at": a.created_at.isoformat(),
+                "answer_id": str(ans.id),
+                "question_text": ans.question_text,
+                "answer_text": ans.answer_text,
+                "company_name": ans.company_name,
+                "question_category": ans.question_category,
+                "reward_score": ans.reward_score,
+                "similarity_score": round(score, 4),
+                "feedback": ans.feedback,
+                "word_count": ans.word_count,
+                "created_at": ans.created_at.isoformat(),
             }
-            for a in best
+            for score, ans in best
         ],
         "total": len(best),
     }
