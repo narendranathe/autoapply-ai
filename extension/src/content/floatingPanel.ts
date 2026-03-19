@@ -56,6 +56,7 @@ interface QuestionState {
   question: DetectedQuestion;
   drafts: string[];
   draftProviders: string[];
+  draftSources?: Array<{ source: "vault" | "llm"; similarityScore?: number }>;
   selectedDraft: number;
   loading: boolean;
   loadingProvider: string;  // which provider is being tried (shown in spinner)
@@ -636,7 +637,7 @@ class FloatingPanel {
     // 2. Belong to a category the user has encountered before (count >= 2)
     const candidates = this.questionStates
       .map((state, idx) => ({ state, idx, count: usage[state.question.category] ?? 0 }))
-      .filter(({ state, count }) => state.drafts.length === 0 && !state.loading && count >= 2)
+      .filter(({ state, count }) => state.drafts.length < 2 && !state.loading && count >= 2)
       .sort((a, b) => b.count - a.count) // highest-frequency first
       .slice(0, 3); // max 3 pre-generated per page load
 
@@ -676,6 +677,32 @@ class FloatingPanel {
     } finally {
       this.loadingAts = false;
       this.render();
+    }
+  }
+
+  private async fetchVaultAnswers(questionText: string, category: string, stateIndex: number): Promise<void> {
+    const state = this.questionStates[stateIndex];
+    if (!state || state.drafts.length > 0) return; // skip if already has drafts
+    if (!this.clerkUserId) return;
+    try {
+      const params = new URLSearchParams({ question_text: questionText, question_category: category, top_k: "3" });
+      const resp = await fetch(`${this.apiBase}/vault/answers/similar?${params}`, {
+        headers: this.authHeaders(),
+      });
+      if (!resp.ok) return;
+      const json = await resp.json() as { answers?: Array<{ answer_text: string; similarity_score: number; reward_score: number }> };
+      const vaultDrafts = (json.answers ?? [])
+        .filter(a => a.similarity_score >= 0.25)
+        .map(a => ({ text: a.answer_text, source: "vault" as const, similarityScore: a.similarity_score }));
+      if (vaultDrafts.length === 0) return;
+      // Re-check index is still valid (page may have navigated)
+      const currentState = this.questionStates[stateIndex];
+      if (!currentState || currentState.drafts.length > 0) return;
+      currentState.drafts = vaultDrafts.map(d => d.text);
+      currentState.draftSources = vaultDrafts.map(d => ({ source: d.source, similarityScore: d.similarityScore }));
+      this.render();
+    } catch {
+      // non-fatal — fall back to LLM generation
     }
   }
 
@@ -808,6 +835,8 @@ class FloatingPanel {
     for (const q of newQuestions) {
       if (!existingIds.has(q.questionId)) {
         this.questionStates.push({ question: q, drafts: [], draftProviders: [], selectedDraft: 0, loading: false, loadingProvider: "", loadingStartMs: 0, error: null });
+        // Fire vault recall in background — do not await (non-blocking)
+        void this.fetchVaultAnswers(q.questionText, q.category, this.questionStates.length - 1);
       }
     }
     // Remove only questions whose textarea has actually left the DOM
