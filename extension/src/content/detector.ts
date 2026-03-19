@@ -701,4 +701,28 @@ window.addEventListener("popstate", () => setTimeout(buildAndSendContext, 800));
 
 } // end shouldRunInFrame() guard
 
+// IframeFieldBridge: respond to scan requests from parent frame
+window.addEventListener("message", (e: MessageEvent) => {
+  if (e.data?.type !== "AAP_SCAN_FIELDS") return;
+  const fields = detectFields();
+  (e.source as Window)?.postMessage({ type: "AAP_FIELDS_RESULT", fields }, "*");
+});
+
+// IframeFieldBridge: handle fill requests from parent frame
+window.addEventListener("message", (e: MessageEvent) => {
+  if (e.data?.type !== "AAP_FILL_FIELD") return;
+  const { fieldId, value } = e.data as { fieldId: string; value: string };
+  if (fieldId && value !== undefined) {
+    const el = document.querySelector(`[data-aap-id="${fieldId}"]`) as HTMLInputElement | HTMLTextAreaElement | null;
+    if (el) {
+      el.focus();
+      const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set
+        ?? Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
+      nativeInputValueSetter?.call(el, value);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  }
+});
+
 export {};

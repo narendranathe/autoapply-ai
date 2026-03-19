@@ -471,6 +471,7 @@ class FloatingPanel {
   private showAutoFillBanner = false;
   private coverLetter: string = "";
   private coverLetterSource: "vault" | "generated" | "" = "";
+  private _iframeMap = new Map<string, HTMLIFrameElement>();
 
   /** Build auth headers: prefer JWT Bearer, fall back to X-Clerk-User-Id. */
   private authHeaders(extraHeaders?: Record<string, string>): Record<string, string> {
@@ -546,6 +547,28 @@ class FloatingPanel {
     void this.prefetchCoverLetter();
     this.observeMutations();
     this.attachSPAResizeObserver();
+
+    // IframeFieldBridge: listen for field scan results from same-origin iframes
+    window.addEventListener("message", (e: MessageEvent) => {
+      if (e.data?.type === "AAP_FIELDS_RESULT" && Array.isArray(e.data.fields)) {
+        const iframeFields = e.data.fields as import("../shared/types").DetectedField[];
+        // Find the source iframe
+        const sourceFrame = Array.from(document.querySelectorAll("iframe")).find(
+          (f) => f.contentWindow === e.source
+        ) as HTMLIFrameElement | undefined;
+        if (!sourceFrame) return;
+        // Merge with dedup (fieldId + labelHash composite from #57)
+        const existingKeys = new Set(this.fields.map((f) => f.fieldId + ":" + f.labelHash));
+        const newIframeFields = iframeFields.filter((f) => !existingKeys.has(f.fieldId + ":" + f.labelHash));
+        for (const f of newIframeFields) {
+          this._iframeMap.set(f.fieldId, sourceFrame);
+        }
+        if (newIframeFields.length > 0) {
+          this.fields = [...this.fields, ...newIframeFields];
+          this.render();
+        }
+      }
+    });
 
     // SPAs often render the form asynchronously after the initial paint.
     // Retry detection at 1s and 3s so we catch late-rendering fields/questions.
@@ -762,7 +785,7 @@ class FloatingPanel {
 
   private undoAutoFill(): void {
     for (const [fieldId, value] of this._preAutoFillValues) {
-      fillDomField(fieldId, value);
+      this.fillFieldSmart(fieldId, value);
     }
     this.showAutoFillBanner = false;
     this.render();
@@ -883,7 +906,17 @@ class FloatingPanel {
     for (const field of this.fields) {
       if (field.fieldType === "resume_upload" || field.fieldType === "cover_letter_upload") continue;
       const value = profileValue(field.fieldType, this.profile);
-      if (value) fillDomField(field.fieldId, value);
+      if (value) this.fillFieldSmart(field.fieldId, value);
+    }
+  }
+
+  /** Fill a field — routes to iframe postMessage if the field came from a same-origin iframe. */
+  private fillFieldSmart(fieldId: string, value: string): void {
+    const sourceIframe = this._iframeMap.get(fieldId);
+    if (sourceIframe) {
+      sourceIframe.contentWindow?.postMessage({ type: "AAP_FILL_FIELD", fieldId, value }, "*");
+    } else {
+      fillDomField(fieldId, value);
     }
   }
 
@@ -932,7 +965,21 @@ class FloatingPanel {
       (s) => !!document.querySelector(`[data-aap-id="${s.question.questionId}"]`)
     );
 
+    this.scanIframes();
     this.render();
+  }
+
+  private scanIframes(): void {
+    const iframes = Array.from(document.querySelectorAll("iframe")) as HTMLIFrameElement[];
+    for (const iframe of iframes) {
+      try {
+        // Test same-origin access
+        void iframe.contentWindow?.location.href;
+        iframe.contentWindow?.postMessage({ type: "AAP_SCAN_FIELDS" }, "*");
+      } catch {
+        // Cross-origin — skip silently
+      }
+    }
   }
 
   private attachSPAResizeObserver(): void {
@@ -1961,7 +2008,7 @@ class FloatingPanel {
         const field = this.fields[idx];
         if (!field) return;
         const value = profileValue(field.fieldType, this.profile);
-        if (value) fillDomField(field.fieldId, value);
+        if (value) this.fillFieldSmart(field.fieldId, value);
       });
     });
 
