@@ -766,6 +766,163 @@ async function uploadRagDocument() {
   }
 }
 
+// ── Resume Vault Sync ─────────────────────────────────────────────────────────
+
+type SyncFileStatus = "pending" | "uploading" | "uploaded" | "already_synced" | "error" | "unsupported_type";
+
+interface SyncFileRow {
+  file: File;
+  status: SyncFileStatus;
+  message?: string;
+}
+
+let _syncRows: SyncFileRow[] = [];
+
+function renderSyncFileList() {
+  const listEl = get("vault-sync-file-list");
+  const progressEl = get("vault-sync-progress");
+  if (_syncRows.length === 0) {
+    listEl.style.display = "none";
+    progressEl.style.display = "none";
+    return;
+  }
+
+  listEl.style.display = "block";
+
+  const statusIcon: Record<SyncFileStatus, string> = {
+    pending: "&#9679;",
+    uploading: "&#8230;",
+    uploaded: "&#10003;",
+    already_synced: "&#9646;",
+    error: "&#10007;",
+    unsupported_type: "&#8212;",
+  };
+  const statusColor: Record<SyncFileStatus, string> = {
+    pending: "#94a3b8",
+    uploading: "#a78bfa",
+    uploaded: "#34d399",
+    already_synced: "#64748b",
+    error: "#f87171",
+    unsupported_type: "#64748b",
+  };
+
+  listEl.innerHTML = _syncRows
+    .map((row) => {
+      const icon = statusIcon[row.status];
+      const color = statusColor[row.status];
+      const label = row.status === "already_synced"
+        ? "already in vault"
+        : row.status === "unsupported_type"
+        ? "skipped (unsupported type)"
+        : row.status;
+      return `
+        <div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid #1e1e3a;font-size:12px;">
+          <span style="color:${color};font-size:14px;">${icon}</span>
+          <span style="flex:1;color:#e2e8f0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${row.file.name}">${row.file.name}</span>
+          <span style="color:${color};font-size:11px;">${label}${row.message ? " — " + row.message : ""}</span>
+        </div>
+      `;
+    })
+    .join("");
+
+  // Update progress text
+  const done = _syncRows.filter((r) => r.status !== "pending" && r.status !== "uploading").length;
+  const uploading = _syncRows.filter((r) => r.status === "uploading").length;
+  if (uploading > 0) {
+    progressEl.style.display = "block";
+    progressEl.textContent = `Syncing ${done + 1} of ${_syncRows.length} files\u2026`;
+  } else {
+    progressEl.style.display = "none";
+  }
+}
+
+function renderSyncSummary() {
+  const summaryEl = get("vault-sync-summary");
+  if (_syncRows.length === 0) {
+    summaryEl.style.display = "none";
+    return;
+  }
+  const uploaded = _syncRows.filter((r) => r.status === "uploaded").length;
+  const alreadySynced = _syncRows.filter((r) => r.status === "already_synced").length;
+  const errors = _syncRows.filter((r) => r.status === "error").length;
+  const skipped = _syncRows.filter((r) => r.status === "unsupported_type").length;
+
+  const parts: string[] = [];
+  if (uploaded > 0) parts.push(`<span style="color:#34d399;">${uploaded} uploaded</span>`);
+  if (alreadySynced > 0) parts.push(`<span style="color:#64748b;">${alreadySynced} already in vault</span>`);
+  if (errors > 0) parts.push(`<span style="color:#f87171;">${errors} failed</span>`);
+  if (skipped > 0) parts.push(`<span style="color:#64748b;">${skipped} skipped</span>`);
+
+  summaryEl.style.display = "block";
+  summaryEl.innerHTML = parts.join(" &nbsp;&bull;&nbsp; ");
+}
+
+function wireResumeSyncPanel() {
+  const pickBtn = get("vault-sync-pick-btn") as HTMLButtonElement;
+  const fileInput = document.getElementById("vault-sync-file-input") as HTMLInputElement;
+
+  pickBtn.addEventListener("click", () => {
+    // Reset state on new pick
+    _syncRows = [];
+    renderSyncFileList();
+    get("vault-sync-summary").style.display = "none";
+    showStatus("vault-sync-status", "", "info");
+    fileInput.value = "";
+    fileInput.click();
+  });
+
+  fileInput.addEventListener("change", async () => {
+    const files = Array.from(fileInput.files ?? []);
+    if (files.length === 0) return;
+
+    // Build initial row list
+    _syncRows = files.map((f) => ({ file: f, status: "pending" as SyncFileStatus }));
+    renderSyncFileList();
+    get("vault-sync-summary").style.display = "none";
+    showStatus("vault-sync-status", `Preparing to sync ${files.length} file\u2026`, "info");
+
+    const pickBtnEl = get("vault-sync-pick-btn") as HTMLButtonElement;
+    pickBtnEl.disabled = true;
+    pickBtnEl.textContent = "Syncing\u2026";
+
+    // Mark all as uploading for visual feedback
+    for (const row of _syncRows) row.status = "uploading";
+    renderSyncFileList();
+
+    try {
+      const result = await vaultApi.batchUploadResumes(files);
+
+      // Map API results back to rows
+      for (const apiRow of result.results) {
+        const matching = _syncRows.find((r) => r.file.name === apiRow.filename);
+        if (matching) {
+          matching.status = apiRow.status as SyncFileStatus;
+          if (apiRow.error) matching.message = apiRow.error;
+        }
+      }
+
+      renderSyncFileList();
+      renderSyncSummary();
+
+      const uploadedCount = result.uploaded ?? 0;
+      const alreadyCount = result.already_synced ?? 0;
+      if (uploadedCount === 0 && alreadyCount > 0) {
+        showStatus("vault-sync-status", `All ${alreadyCount} file${alreadyCount !== 1 ? "s" : ""} already in vault \u2014 nothing new added.`, "info");
+      } else {
+        showStatus("vault-sync-status", `Sync complete: ${uploadedCount} uploaded, ${alreadyCount} already in vault.`, "ok");
+      }
+    } catch (e) {
+      for (const row of _syncRows) row.status = "error";
+      for (const row of _syncRows) row.message = e instanceof Error ? e.message : String(e);
+      renderSyncFileList();
+      showStatus("vault-sync-status", `Sync failed: ${e instanceof Error ? e.message : "unknown error"}`, "err");
+    } finally {
+      pickBtnEl.disabled = false;
+      pickBtnEl.textContent = "\uD83D\uDCC1 Sync Resume Vault";
+    }
+  });
+}
+
 // Auto-update filename when doc type changes
 (document.getElementById("rag-doc-type") as HTMLSelectElement).addEventListener("change", (e) => {
   const type = (e.target as HTMLSelectElement).value;
@@ -787,6 +944,7 @@ loadPromptTemplates();
 loadModelRoutes();
 wireImportFromResume();
 loadRagDocsList();
+wireResumeSyncPanel();
 get("save-auth").addEventListener("click", saveAuth);
 get("test-api").addEventListener("click", testApi);
 get("save-api").addEventListener("click", saveApi);

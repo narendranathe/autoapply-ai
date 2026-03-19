@@ -464,6 +464,28 @@ export const vaultApi = {
     );
   },
 
+  /** Batch upload resumes from a folder. Skips files already in vault (SHA-256 dedup). */
+  async batchUploadResumes(files: File[]): Promise<{
+    results: Array<{ filename: string; status: string; file_hash?: string; resume_id?: string; error?: string }>;
+    total: number;
+    uploaded: number;
+    already_synced: number;
+  }> {
+    await ensureInit();
+    const fd = new FormData();
+    for (const f of files) fd.append("files", f, f.name);
+    const resp = await fetch(`${getApiBase()}/vault/resumes/batch-upload`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: fd,
+    });
+    if (!resp.ok) {
+      const errText = await resp.text();
+      throw new Error(`Batch upload failed (${resp.status}): ${errText}`);
+    }
+    return resp.json();
+  },
+
   /** Update resume metadata (target company/role/version tag) */
   patchResume(resumeId: string, params: { targetCompany?: string; targetRole?: string; versionTag?: string }): Promise<{
     resume_id: string; target_company: string | null; target_role: string | null; version_tag: string | null; updated: boolean;
