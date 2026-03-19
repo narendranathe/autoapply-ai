@@ -737,71 +737,91 @@ High-reward past answers (≥ 0.8) are injected as style examples into future LL
 
 ---
 
-## Intelligent Detection + Vector Answer Memory (Roadmap — PRD #46)
+## Intelligent Detection + Vault Recall (Strategy C — PRD #56)
 
-### Overview
+> **PRD #46 superseded.** Dual-agent analysis (2026-03-18) rejected Strategy B (full TriObserver) in favour of Strategy C: a backward-compatible set of additive improvements on top of the existing single `MutationObserver`. See [PRD #56](https://github.com/narendranathe/autoapply-ai/issues/56) for full rationale.
 
-The next major capability upgrade introduces five interconnected systems that work together to make every form fill dramatically faster. The design principle: **the extension should know what to fill before you even see the field**.
+### Why Strategy B Was Rejected
 
-### 1. Tri-Observer Field Detection Engine
+| Rejected mechanism | Failure mode |
+|---|---|
+| Body-level `ResizeObserver` | Fires 10-15× per Workday step animation → race conditions on `questionStates` |
+| `IntersectionObserver` | Fires mid-animation before React re-attaches elements → partial DOM reads |
+| Auto-save on 2s keystroke debounce | Persists partial text (`"I worked at Goog"`) to vault → silent data corruption |
 
-Replaces the single `MutationObserver` with three combined DOM observers:
+### Strategy C: Tiered Observer Architecture + 3 Feature Slices
 
-| Observer | Trigger | Purpose |
+The design principle: **wire existing backend intelligence into the real-time detection loop** rather than adding new observers. Estimated savings: **45–80 seconds per application**.
+
+#### Detection Tiers
+
+| Tier | Mechanism | What it catches |
 |---|---|---|
-| `MutationObserver` | Node add/remove | Catch new inputs on SPA step transitions |
-| `ResizeObserver` | Form section height change | Detect multi-step form navigation |
-| `IntersectionObserver` | Form section scrolls into view | Catch paginated/accordion forms |
+| 1 (existing) | Single `MutationObserver` on form element add/remove | 95% of ATS platforms — do not change |
+| 2 (new) | Targeted `ResizeObserver` on known SPA containers only | Workday wizard step transitions, Greenhouse modal swaps |
+| 3 (new) | `postMessage` iframe injection (same-origin only) | Workday/Taleo iframe-embedded forms |
 
-Debounce reduced 800ms → 300ms. Shadow DOM piercing added — when custom elements appear, their `shadowRoot` is scanned for inputs. Cross-origin-safe iframe re-scan fires when iframe `src` changes.
+**Tier 2 containers watched:** `.app-container`, `main`, `[data-qa="job-container"]`, `.form-wrapper`, `[class*="step"]`, `[class*="wizard"]`
+**Tier 2 threshold:** only fires `redetect()` when container height changes by **>50px** (400ms debounce) — filters animation noise.
 
-### 2. Vector-Powered Answer Memory
+#### Feature Slice 1 — Vault Recall in `redetect()`
 
-When a question textarea is detected, the extension immediately queries `/vault/answers/similar` using semantic vector search (pgvector → Pinecone migration via `VECTOR_BACKEND` env var). Top-2 past answers ranked by:
+When `redetect()` adds a new question to `questionStates`, it immediately calls `GET /vault/answers/similar` **before** any LLM generation. Rules:
+- Hard floor: only show answers where `tfidf_similarity >= 0.25`
+- Vault answers labeled **"From Memory"** with similarity badge ("87% match")
+- If 2+ vault answers found (similarity ≥ 0.25), skip `preGenerateTopCategories()` for that question
+- `tfidf_similarity` added to `/vault/answers/similar` response (backend change)
+- Ranking: `reward_score × 0.7 + tfidf_similarity × 0.3` (existing algorithm, now exposed in response)
 
-```
-score = usage_count × 0.6 + reward_score × 0.4
-```
+#### Feature Slice 2 — ATS Auto-Fill Banner
 
-These surface as **"Previously used"** cards above the Generate button — no click required. If the user edits the text, it auto-saves after a 2-second debounce. The answer memory compounds over time: the more applications you fill, the less you generate from scratch.
+After `loadAtsScore()` resolves, if `atsScore >= 0.75`:
+1. Snapshot current DOM field values into `_preAutoFillValues: Map<string, string>`
+2. Call `fillAll()` (existing — fills from profile)
+3. Show dismissable **"Auto-filled from your profile"** banner with **Undo** button
+4. Undo restores exact pre-fill DOM values
+5. Banner dismissed per session — `sessionStorage` key: `aap_autofill_dismissed_<company>`
 
-### 3. ATS-Score Auto-Fill from Previous Applications
+**Never silently fills.** Banner + Undo is mandatory.
 
-When ATS retrieval scores a job at ≥ 75% similarity to a previous application:
-1. The previously used resume is recommended
-2. ALL form field values from that previous application are pre-populated via a new `ApplicationFieldSnapshot` model
-3. A dismissable banner shows: *"Pre-filled from [CompanyName] application — 8 fields applied"*
+#### Feature Slice 3 — Cover Letter Background Pre-Fetch
 
-This does **not** replace the manual resume selection flow — it supplements it. The user can dismiss and start fresh at any time.
+On `init()`, a non-blocking background fetch calls `GET /vault/cover-letters?company=<name>` (existing endpoint). Behaviour:
+- Match found → pre-populate cover letter textarea, show **"Loaded from vault"** badge
+- No match + `jdText` available → queue background generation (idempotency guard via sessionStorage per URL hash)
+- Manual Generate button still works as override
 
-### 4. Resume Vault Folder Sync
+#### Deduplication Fix
 
-A `~/resume_vault/` local folder is the source of truth for all resumes. The options page adds a **"Sync Resume Vault"** button that opens a directory picker and uploads any new `.pdf`, `.docx`, or `.tex` files to the backend in a single batched `POST /vault/folder-sync` call. Synced file names are stored in `chrome.storage.local` to diff on next sync. If the last sync was >24h ago, a badge appears on the extension options icon.
+Fields deduplicated by `fieldId + labelHash` composite key — not just `fieldId` alone. ATS platforms reuse generic IDs (`field_1`, `field_2`) across wizard steps; without label hash, the same field appears multiple times in the panel.
 
-### 5. Smart Cover Letter Auto-Surfacing
-
-On every job application page load, the floating panel:
-1. Checks `/vault/answers?category=cover_letter&company={company}` for an existing cover letter
-2. If found → pre-loads it into the Cover tab with a **"Previously used"** label
-3. If not found AND company is known → auto-generates in the background (opt-in via `coverAutoGenEnabled` storage flag)
-4. Generated letters are cached in `sessionStorage` keyed by `company+role` to prevent re-generation on re-renders
+Hash: `djb2(label.toLowerCase().replace(/\s+/g," ").replace(/[^\w\s]/g,"").trim())`
 
 ### Module Map
 
 ```
-Extension:
-├── TriObserverEngine        floatingPanel.ts — replaces observeMutations()          M
-├── QuestionAnswerPreloader  floatingPanel.ts — calls /similar on question appear     M
-├── ATSAutoFillBanner        floatingPanel.ts — calls /retrieve then /field-snapshot  M
-├── CoverLetterAutoLoader    floatingPanel.ts + useCoverLetter.ts                     S
-└── ResyncTrigger            options.ts — directory picker → /vault/folder-sync       M
+Extension (floatingPanel.ts unless noted):
+├── #57 LabelHashDeduplication   detectFields() + redetect() dedup set              S
+├── #58 VaultRecallConnector     redetect() lines 782-793 + background fetch         M
+├── #59 SimilarityBadgeUI        render() + css() — "From Memory" + % badge         S
+├── #60 ATSAutoFillBanner        maybeAutoFill() after loadAtsScore()                M
+├── #61 CoverLetterPreFetcher    prefetchCoverLetter() in init()                     S
+├── #62 SPAResizeObserver        attachSPAResizeObserver() in init()                 S
+└── #63 IframeFieldBridge        scanIframes() in redetect() + detector.ts handler  M
 
 Backend:
-├── ApplicationFieldSnapshot model + migration                                        S
-├── POST/GET /applications/{id}/field-snapshot                                        S
-├── VectorBackend abstraction (pgvector | Pinecone)                                   L
-├── Enhanced /vault/answers/similar (ranking by combined score)                       M
-└── POST /vault/folder-sync (batched multipart upload)                                M
+└── #58 tfidf_similarity exposed  retrieval_agent.py:337 return scored pairs        S
+        (part of VaultRecallConnector — no new models required)
+```
+
+### Dependency Graph
+
+```
+#57 (LabelHash) ──────────────────────────────────────► #63 (IframeFieldBridge)
+#58 (VaultRecall) ──► #59 (SimilarityBadge)
+#60 (ATSBanner)       [standalone]
+#61 (CoverLetterPre)  [standalone]
+#62 (SPAResize)       [standalone]
 ```
 
 ### Design Rules for Cover Letters
@@ -812,19 +832,21 @@ Cover letters are generated with these fixed rules (enforced in `/vault/generate
 - **Grounded in**: JD text + work history text + candidate profile name
 - **Company-specific**: company name and role title injected into prompt
 - **Saved**: every generated letter → `/vault/answers/save` with `category=cover_letter`
-- **Re-used**: next visit to same company → letter auto-surfaces (rule 1 above)
-- **Never overwrites**: existing saved letters for same company are shown as alternatives
+- **Re-used**: next visit to same company → letter auto-surfaces via `prefetchCoverLetter()`
+- **Never overwrites**: existing saved letters for same company shown as alternatives
 
 ### GitHub Issues
 
-| Issue | Feature | Status |
+| Issue | Module | Status |
 |---|---|---|
-| [#46](https://github.com/narendranathe/autoapply-ai/issues/46) | PRD: Full feature specification | Open |
-| #47 | TRACER: Tri-Observer Engine | Open |
-| #48 | ApplicationFieldSnapshot model | Open |
-| #49 | VectorBackend abstraction | Open |
-| #50 | QuestionAnswerPreloader | Open |
-| #51 | ATS Auto-Fill Banner | Open |
-| #52 | Smart Cover Letter Auto-Surfacing | Open |
-| #53 | Resume Vault Folder Sync | Open |
-| #54 | End-to-end hardening + tests | Open |
+| [#56](https://github.com/narendranathe/autoapply-ai/issues/56) | PRD: Strategy C — approved spec | Open |
+| [#57](https://github.com/narendranathe/autoapply-ai/issues/57) | TRACER: LabelHashDeduplication | Open |
+| [#58](https://github.com/narendranathe/autoapply-ai/issues/58) | VaultRecallConnector + tfidf_similarity response | Open |
+| [#59](https://github.com/narendranathe/autoapply-ai/issues/59) | SimilarityBadgeUI — "From Memory" + % badge | Open |
+| [#60](https://github.com/narendranathe/autoapply-ai/issues/60) | ATSAutoFillBanner — auto-fill + Undo | Open |
+| [#61](https://github.com/narendranathe/autoapply-ai/issues/61) | CoverLetterPreFetcher — background pre-load | Open |
+| [#62](https://github.com/narendranathe/autoapply-ai/issues/62) | SPAResizeObserver — Workday/Greenhouse step detection | Open |
+| [#63](https://github.com/narendranathe/autoapply-ai/issues/63) | IframeFieldBridge — same-origin iframe fields | Open |
+| [#46](https://github.com/narendranathe/autoapply-ai/issues/46) | PRD #46 — superseded by #56 | Open |
+| [#54](https://github.com/narendranathe/autoapply-ai/issues/54) | Resume Vault Folder Sync (independent) | Open |
+| [#50](https://github.com/narendranathe/autoapply-ai/issues/50) | VectorBackend / Pinecone abstraction (independent) | Open |
