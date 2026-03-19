@@ -341,7 +341,7 @@ class RetrievalAgent:
         question_text: str,
         question_category: str,
         top_k: int = 5,
-    ) -> list[ApplicationAnswer]:
+    ) -> list[tuple[float, ApplicationAnswer]]:
         """
         Find the best historical answers for this question category.
 
@@ -379,7 +379,7 @@ class RetrievalAgent:
             scored.append((composite, ans))
 
         scored.sort(key=lambda x: x[0], reverse=True)
-        return [ans for _, ans in scored[:top_k]]
+        return scored[:top_k]
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
