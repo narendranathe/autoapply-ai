@@ -2,6 +2,7 @@
 Vault sub-module: resume upload, list, get, delete, update, download, sync-markdown.
 """
 
+import hashlib
 import uuid
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
@@ -51,6 +52,24 @@ async def upload_resume(
             detail=f"Unsupported file type: {ext}. Supported: pdf, docx, tex, txt",
         )
 
+    # Dedup check: skip re-uploading a file already in the vault (by SHA-256)
+    file_hash = hashlib.sha256(file_bytes).hexdigest()
+    existing = (
+        await db.execute(
+            select(Resume).where(Resume.user_id == user.id, Resume.file_hash == file_hash)
+        )
+    ).scalar_one_or_none()
+    if existing:
+        logger.info(
+            f"Skipping duplicate upload {filename} (hash={file_hash[:12]}…) for user {user.id}"
+        )
+        return {
+            "status": "already_synced",
+            "file_hash": file_hash,
+            "resume_id": str(existing.id),
+            "filename": filename,
+        }
+
     # Parse content
     raw_text = ""
     latex_content = None
@@ -89,6 +108,7 @@ async def upload_resume(
         user_id=user.id,
         filename=filename,
         file_type=ext,
+        file_hash=file_hash,
         raw_text=raw_text[:50000],  # cap at 50K chars
         latex_content=latex_content,
         bullet_count=bullet_count,
@@ -118,6 +138,120 @@ async def upload_resume(
         "skills_detected": skills[:10],
         "version_tag": version_tag,
         "parse_warnings": parse_result.parse_warnings if parse_result else [],
+    }
+
+
+# ── Batch Upload ────────────────────────────────────────────────────────────
+
+
+@router.post("/resumes/batch-upload")
+async def batch_upload_resumes(
+    files: list[UploadFile] = File(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """
+    Upload multiple resumes in a single request.
+
+    Skips files already present in the vault (by SHA-256 hash).
+    Returns per-file status: uploaded | already_synced | error | unsupported_type
+    """
+    results: list[dict] = []
+
+    for f in files:
+        fname = f.filename or "resume"
+        try:
+            file_bytes = await f.read()
+            fhash = hashlib.sha256(file_bytes).hexdigest()
+            ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else "unknown"
+
+            if ext not in {"pdf", "docx", "tex", "txt"}:
+                results.append({"filename": fname, "status": "unsupported_type", "ext": ext})
+                continue
+
+            # Dedup: skip files already in vault
+            dup = (
+                await db.execute(
+                    select(Resume).where(Resume.user_id == user.id, Resume.file_hash == fhash)
+                )
+            ).scalar_one_or_none()
+            if dup:
+                results.append({"filename": fname, "status": "already_synced", "file_hash": fhash})
+                continue
+
+            # Parse content
+            raw_text = ""
+            latex_content = None
+            parse_result = None
+
+            try:
+                if ext == "pdf":
+                    parse_result = _resume_parser.parse_pdf(file_bytes)
+                elif ext == "docx":
+                    parse_result = _resume_parser.parse_docx(file_bytes)
+                elif ext == "tex":
+                    raw_text = file_bytes.decode("utf-8", errors="replace")
+                    latex_content = raw_text
+                else:
+                    raw_text = file_bytes.decode("utf-8", errors="replace")
+
+                if parse_result:
+                    raw_text = " ".join(b.text for b in parse_result.bullets)
+            except Exception as parse_err:
+                logger.warning(f"[batch-upload] Parse error for {fname}: {parse_err}")
+                raw_text = file_bytes.decode("utf-8", errors="replace")
+
+            tfidf_vec = build_tfidf_vector(raw_text) if raw_text else {}
+            skills = list(parse_result.skills) if parse_result else []
+            companies = list(parse_result.companies) if parse_result else []
+            bullet_count = len(parse_result.bullets) if parse_result else 0
+
+            resume = Resume(
+                user_id=user.id,
+                filename=fname,
+                file_type=ext,
+                file_hash=fhash,
+                raw_text=raw_text[:50000],
+                latex_content=latex_content,
+                bullet_count=bullet_count,
+                skills_detected=skills,
+                companies_found=companies,
+                tfidf_vector=tfidf_vec,
+                recruiter_filename=f"{user.email_hash[:8]}.pdf",
+                is_base_template=False,
+                is_generated=False,
+            )
+            db.add(resume)
+            await db.flush()  # get resume.id without committing yet
+
+            results.append(
+                {
+                    "filename": fname,
+                    "status": "uploaded",
+                    "file_hash": fhash,
+                    "resume_id": str(resume.id),
+                    "bullet_count": bullet_count,
+                }
+            )
+
+        except Exception as e:
+            logger.warning(f"[batch-upload] Unexpected error for {fname}: {e}")
+            results.append({"filename": fname, "status": "error", "error": str(e)})
+
+    await db.commit()
+
+    uploaded = sum(1 for r in results if r["status"] == "uploaded")
+    already_synced = sum(1 for r in results if r["status"] == "already_synced")
+    logger.info(
+        f"[batch-upload] user={user.id} total={len(results)} "
+        f"uploaded={uploaded} already_synced={already_synced}"
+    )
+
+    return {
+        "results": results,
+        "total": len(results),
+        "uploaded": uploaded,
+        "already_synced": already_synced,
     }
 
 
