@@ -13,6 +13,7 @@ import {
 import { useSearchParams } from "react-router-dom";
 import { FunnelBar } from "../components/FunnelBar";
 import { KanbanBoard } from "../components/KanbanBoard";
+import { CompanyDrawer } from "../components/CompanyDrawer";
 import { useApplications } from "../hooks/useApplications";
 import { patchApplicationStatus } from "../api/applications";
 import { useApiClient } from "../hooks/useApiClient";
@@ -299,7 +300,7 @@ function DrawerRow({
 }
 
 // ─── Table View ───────────────────────────────────────────────────────────────
-function TableView({ apps }: { apps: ApplicationRecord[] }) {
+function TableView({ apps, onCompanyClick }: { apps: ApplicationRecord[]; onCompanyClick?: (company: string) => void }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const api = useApiClient();
@@ -801,7 +802,12 @@ function TableView({ apps }: { apps: ApplicationRecord[] }) {
                     />
                   </td>
                   <td style={{ ...tdStyle, fontWeight: 600 }}>
-                    {app.company_name}
+                    <button
+                      onClick={() => onCompanyClick?.(app.company_name)}
+                      style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: "inherit", fontWeight: 600, fontSize: "inherit", fontFamily: "inherit" }}
+                    >
+                      {app.company_name}
+                    </button>
                   </td>
                   <td style={{ ...tdStyle, color: colors.muted }}>
                     {app.role_title}
@@ -899,8 +905,10 @@ export default function Applications() {
     const stored = localStorage.getItem(VIEW_KEY);
     return stored === "table" ? "table" : "board";
   });
+  const [selectedCompany, setSelectedCompany] = useState<string | null>(null);
 
   const { data } = useApplications();
+  const allApps = data?.items ?? [];
 
   function switchView(v: "board" | "table") {
     setView(v);
@@ -987,8 +995,13 @@ export default function Applications() {
           <KanbanBoard />
         </div>
       ) : (
-        <TableView apps={data?.items ?? []} />
+        <TableView apps={data?.items ?? []} onCompanyClick={setSelectedCompany} />
       )}
+      <CompanyDrawer
+        company={selectedCompany}
+        applications={allApps}
+        onClose={() => setSelectedCompany(null)}
+      />
     </div>
   );
 }
