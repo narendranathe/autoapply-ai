@@ -13,6 +13,19 @@
 import type { DetectedField, DetectedQuestion, FieldType, JobCard, Message, PageContext, QuestionCategory } from "../shared/types";
 import { FIELD_PATTERNS, QUESTION_CATEGORY_PATTERNS } from "../shared/detection-patterns";
 
+// ── Label hashing ──────────────────────────────────────────────────────────
+
+function computeLabelHash(label: string): string {
+  const normalized = label.toLowerCase().replace(/\s+/g, " ").replace(/[^\w\s]/g, "").trim();
+  // djb2 hash — synchronous, no async needed
+  let hash = 5381;
+  for (let i = 0; i < normalized.length; i++) {
+    hash = ((hash << 5) + hash) + normalized.charCodeAt(i);
+    hash = hash & hash; // force 32-bit
+  }
+  return (hash >>> 0).toString(36);
+}
+
 // ── Field detection ────────────────────────────────────────────────────────
 
 function getFieldLabel(el: HTMLElement): string {
@@ -88,10 +101,13 @@ function detectFields(): DetectedField[] {
     const fieldType = classifyField(el as HTMLInputElement);
     if (fieldType === "unknown" && !getFieldLabel(el as HTMLElement)) continue;
 
+    const label = getFieldLabel(el as HTMLElement);
+    const labelHash = computeLabelHash(label);
     fields.push({
       fieldId: el.id || el.name || `field_${fields.length}`,
       fieldType,
-      label: getFieldLabel(el as HTMLElement),
+      label,
+      labelHash,
       currentValue: (el as HTMLInputElement).value || "",
       suggestedValue: "",
       confidence: 0.9,

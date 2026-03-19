@@ -19,6 +19,19 @@ import { initSmartRecruitersApply } from "./smartRecruitersApply";
 import { initTaleoApply } from "./taleoApply";
 import { initWorkdayApply } from "./workdayApply";
 
+// ── Label hashing ──────────────────────────────────────────────────────────
+
+function computeLabelHash(label: string): string {
+  const normalized = label.toLowerCase().replace(/\s+/g, " ").replace(/[^\w\s]/g, "").trim();
+  // djb2 hash — synchronous, no async needed
+  let hash = 5381;
+  for (let i = 0; i < normalized.length; i++) {
+    hash = ((hash << 5) + hash) + normalized.charCodeAt(i);
+    hash = hash & hash; // force 32-bit
+  }
+  return (hash >>> 0).toString(36);
+}
+
 // ── Types ──────────────────────────────────────────────────────────────────
 
 interface Profile {
@@ -271,10 +284,13 @@ function detectFields(): DetectedField[] {
     // Tag element with a stable data attribute so we can re-find it for fill
     const autoId = `aap_f${fields.length}`;
     el.setAttribute("data-aap-id", autoId);
+    const label = getFieldLabel(el);
+    const labelHash = computeLabelHash(label);
     fields.push({
       fieldId: autoId,
       fieldType,
-      label: getFieldLabel(el),
+      label,
+      labelHash,
       currentValue: (el as HTMLInputElement).value ?? "",
       suggestedValue: "",
       confidence: 0.9,
@@ -767,8 +783,15 @@ class FloatingPanel {
     // ── Fields ──────────────────────────────────────────────────────────────
     const newFields = detectFields();
     if (newFields.length > 0) {
-      // New scan found fields — use them (also re-tags elements with fresh data-aap-id)
-      this.fields = newFields;
+      // Dedup against already-tracked fields using composite key (fieldId + labelHash)
+      // to avoid re-adding the same field when the panel re-scans a stable form.
+      const existingIds = new Set(this.fields.map((f) => f.fieldId + ":" + f.labelHash));
+      const dedupedFields = newFields.filter((f) => !existingIds.has(f.fieldId + ":" + f.labelHash));
+      // Merge: keep existing tracked fields still in DOM, then add truly new ones
+      const stillPresent = this.fields.filter(
+        (f) => !!document.querySelector(`[data-aap-id="${f.fieldId}"]`)
+      );
+      this.fields = [...stillPresent, ...dedupedFields];
     } else if (this.fields.length > 0) {
       // New scan found nothing — check which existing tagged elements are still in the DOM.
       // Keep those; remove only the ones that have genuinely disappeared.
