@@ -469,6 +469,8 @@ class FloatingPanel {
   private trackedAppId: string | null = null;
   private _preAutoFillValues = new Map<string, string>();
   private showAutoFillBanner = false;
+  private coverLetter: string = "";
+  private coverLetterSource: "vault" | "generated" | "" = "";
 
   /** Build auth headers: prefer JWT Bearer, fall back to X-Clerk-User-Id. */
   private authHeaders(extraHeaders?: Record<string, string>): Record<string, string> {
@@ -541,6 +543,7 @@ class FloatingPanel {
     }));
     this.render();
     this.loadAtsScore();
+    void this.prefetchCoverLetter();
     this.observeMutations();
 
     // SPAs often render the form asynchronously after the initial paint.
@@ -680,6 +683,63 @@ class FloatingPanel {
     } finally {
       this.loadingAts = false;
       this.render();
+    }
+  }
+
+  private async prefetchCoverLetter(): Promise<void> {
+    if (!this.company || !this.clerkUserId) return;
+    // Idempotency guard — don't re-fetch if already done for this URL
+    const urlHash = btoa(window.location.href).slice(0, 16);
+    const guardKey = `aap_cl_prefetched_${urlHash}`;
+    if (sessionStorage.getItem(guardKey)) return;
+    sessionStorage.setItem(guardKey, "1");
+    try {
+      const params = new URLSearchParams({ company: this.company, limit: "1" });
+      const resp = await fetch(`${this.apiBase}/vault/cover-letters?${params}`, {
+        headers: this.authHeaders(),
+      });
+      if (!resp.ok) return;
+      const json = await resp.json() as { items?: Array<{ answer_text: string }> };
+      const items = json.items ?? [];
+      if (items.length > 0) {
+        this.coverLetter = items[0].answer_text;
+        this.coverLetterSource = "vault";
+        this.render();
+        return;
+      }
+      // No saved letter — queue background generation if JD text available
+      if (this.jdText) {
+        void this.generateCoverLetterBackground();
+      }
+    } catch {
+      // non-fatal
+    }
+  }
+
+  private async generateCoverLetterBackground(): Promise<void> {
+    // Only generate if no letter yet
+    if (this.coverLetter) return;
+    try {
+      const fd = new FormData();
+      fd.append("company_name", this.company);
+      if (this.roleTitle) fd.append("role_title", this.roleTitle);
+      if (this.jdText) fd.append("jd_text", this.jdText);
+      fd.append("tone", "professional");
+      fd.append("word_limit", "400");
+      const resp = await fetch(`${this.apiBase}/vault/generate/cover-letter`, {
+        method: "POST",
+        headers: this.authHeaders(),
+        body: fd,
+      });
+      if (!resp.ok) return;
+      const json = await resp.json() as { cover_letter?: string };
+      if (json.cover_letter) {
+        this.coverLetter = json.cover_letter;
+        this.coverLetterSource = "generated";
+        this.render();
+      }
+    } catch {
+      // non-fatal
     }
   }
 
@@ -1729,6 +1789,13 @@ class FloatingPanel {
            </div>`
         : "";
 
+    const coverLetterHtml = this.coverLetter
+      ? `<div class="section">
+          <div class="section-heading">Cover Letter ${this.coverLetterSource === "vault" ? '<span class="aap-badge-vault" style="font-size:11px">Loaded from vault</span>' : ""}</div>
+          <div class="draft-text" style="max-height:120px">${this.coverLetter.replace(/</g, "&lt;")}</div>
+        </div>`
+      : "";
+
     const questionsHtml =
       questionStates.length > 0
         ? `<div class="section">
@@ -1822,6 +1889,7 @@ class FloatingPanel {
         ${ctaHtml}
         ${autoFillBannerHtml}
         ${fieldsHtml}
+        ${coverLetterHtml}
         ${questionsHtml}
         ${footerHtml}
       </div>`;
