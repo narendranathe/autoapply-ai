@@ -75,6 +75,10 @@ class Resume(Base, TimestampMixin):
     github_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     github_commit_sha: Mapped[str | None] = mapped_column(String(40), nullable=True)
 
+    # --- Content deduplication ---
+    # SHA-256 hex digest of the raw uploaded file bytes — used to skip re-uploading identical files
+    file_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+
     # --- ATS metadata (at time of generation) ---
     ats_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     target_company: Mapped[str | None] = mapped_column(String(200), nullable=True, index=True)
