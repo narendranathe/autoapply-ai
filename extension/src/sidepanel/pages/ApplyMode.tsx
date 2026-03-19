@@ -1,14 +1,18 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
-import type { ATSScoreResult, PageContext, ResumeCard } from "../../shared/types";
-import { applicationsApi, vaultApi, workHistoryApi, type GenerateTailoredResponse, type InterviewQuestion, type RetrieveResponse, type SimilarAnswer, type TrackedApplication } from "../../shared/api";
+import React, { useCallback, useEffect, useState } from "react";
+import type { PageContext, ResumeCard } from "../../shared/types";
+import { applicationsApi, vaultApi, type GenerateTailoredResponse, type InterviewQuestion, type TrackedApplication } from "../../shared/api";
 import ATSScoreBar from "../components/ATSScoreBar";
 import ResumeCardComponent from "../components/ResumeCard";
 import { useTabNavigation, type Tab } from "../hooks/useTabNavigation";
-import { useProviders, getFreshProviders, type UserProfile } from "../hooks/useProviders";
+import { useProviders, type UserProfile } from "../hooks/useProviders";
 import { useApplicationTracking } from "../hooks/useApplicationTracking";
 import { useApplicationHistory } from "../hooks/useApplicationHistory";
 import { useInterviewPrep } from "../hooks/useInterviewPrep";
 import { useCoverLetter } from "../hooks/useCoverLetter";
+import { useResumeVault } from "../hooks/useResumeVault";
+import { useQAGeneration } from "../hooks/useQAGeneration";
+import { useWritingTools } from "../hooks/useWritingTools";
+import { useRagDocs } from "../hooks/useRagDocs";
 
 // ── Draft persistence helpers (sessionStorage, keyed by job URL) ────────────
 
@@ -91,38 +95,98 @@ function getProfileValue(fieldType: string, profile: UserProfile | null): string
 }
 
 export default function ApplyMode({ context }: Props) {
-  const jobUrl = context.jobUrl;
   const { tab, setTab } = useTabNavigation("resumes");
-  const [resumes, setResumes] = useState<ResumeCard[]>([]);
-  const [ats, setAts] = useState<ATSScoreResult | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [answerDrafts, setAnswerDrafts] = useState<Record<string, string[]>>(
-    () => loadDraftSession(jobUrl, "answerDrafts", {})
-  );
-  const [selectedAnswers, setSelectedAnswers] = useState<Record<string, number>>(
-    () => loadDraftSession(jobUrl, "selectedAnswers", {})
-  );
-  const [savingAnswer, setSavingAnswer] = useState<string | null>(null);
-  const [generatingAnswer, setGeneratingAnswer] = useState<string | null>(null);
   const { profile, providers, providersLoaded, promptTemplates } = useProviders();
-  const [workHistoryText, setWorkHistoryText] = useState<string>("");
-  const [draftProviders, setDraftProviders] = useState<Record<string, string[]>>(
-    () => loadDraftSession(jobUrl, "draftProviders", {})
-  );
-  // answerId is set after saveAnswer — needed to record feedback
-  const [savedAnswerIds, setSavedAnswerIds] = useState<Record<string, string>>({});
-  const [generationErrors, setGenerationErrors] = useState<Record<string, string>>({});
-  // "From Memory" similar answers per question
-  const [memoryAnswers, setMemoryAnswers] = useState<Record<string, SimilarAnswer[]>>({});
-  // C3: edited answer text — tracks live edits to LLM drafts before saving
-  const [editedTexts, setEditedTexts] = useState<Record<string, string>>(
-    () => loadDraftSession(jobUrl, "editedTexts", {})
-  );
-  // C2: resume upload state
-  const [uploadError, setUploadError] = useState<string>("");
-  const [uploadSuccess, setUploadSuccess] = useState<string>("");
-  const [uploading, setUploading] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // C2/L6: resume vault — hook
+  const {
+    resumes,
+    setResumes,
+    ats,
+    loading,
+    viewingResumeId,
+    setViewingResumeId,
+    resumeContent,
+    renamingResumeId,
+    setRenamingResumeId,
+    renameTag,
+    setRenameTag,
+    tailoringResumeId,
+    tailorResults,
+    tailorErrors,
+    uploadError,
+    uploadSuccess,
+    uploading,
+    fileInputRef,
+    handleResumeUpload,
+    handleResumeDelete,
+    handleTailorResume,
+    handleViewResume,
+    handleRenameResume,
+    clearUploadFeedback,
+  } = useResumeVault(context);
+
+  // Q&A generation — hook
+  const {
+    answerDrafts,
+    setAnswerDrafts,
+    selectedAnswers,
+    setSelectedAnswers,
+    savingAnswer,
+    generatingAnswer,
+    draftProviders,
+    setDraftProviders,
+    savedAnswerIds,
+    generationErrors,
+    memoryAnswers,
+    setMemoryAnswers,
+    editedTexts,
+    setEditedTexts,
+    trimmingAnswer,
+    copiedAllAnswers,
+    setCopiedAllAnswers,
+    workHistoryText,
+    handleGenerateAnswers,
+    handleSaveAnswer,
+    handleUseMemoryAnswer,
+    handleTrimAnswer,
+    persistDrafts: persistQADrafts,
+  } = useQAGeneration(context, tab, promptTemplates);
+
+  // AI Writing Tools — hook
+  const {
+    generatingSummary,
+    generatedSummary,
+    summaryError,
+    summaryCopied,
+    setSummaryCopied,
+    generatingBullets,
+    generatedBullets,
+    bulletsError,
+    bulletsCopied,
+    setBulletsCopied,
+    handleGenerateSummary,
+    handleGenerateBullets,
+  } = useWritingTools(context, profile);
+
+  // RAG document management — hook
+  const {
+    ragDocContent,
+    setRagDocContent,
+    ragDocType,
+    setRagDocType,
+    ragDocFilename,
+    setRagDocFilename,
+    uploadingRagDoc,
+    ragUploadResult,
+    ragUploadError,
+    ragDocList,
+    ragDocsLoaded,
+    loadRagDocs,
+    handleUploadRagDoc,
+    handleDeleteRagDoc,
+  } = useRagDocs();
+
   // C5/C6: application tracking — hook
   const {
     trackedAppId,
@@ -133,16 +197,7 @@ export default function ApplyMode({ context }: Props) {
     handleMarkApplied,
     handleStatusUpdate: _handleStatusUpdate,
   } = useApplicationTracking(context);
-  // Resume content viewer
-  const [viewingResumeId, setViewingResumeId] = useState<string | null>(null);
-  const [resumeContent, setResumeContent] = useState<string>("");
-  // Resume rename
-  const [renamingResumeId, setRenamingResumeId] = useState<string | null>(null);
-  const [renameTag, setRenameTag] = useState("");
-  // L6: resume tailoring
-  const [tailoringResumeId, setTailoringResumeId] = useState<string | null>(null);
-  const [tailorResults, setTailorResults] = useState<Record<string, GenerateTailoredResponse>>({});
-  const [tailorErrors, setTailorErrors] = useState<Record<string, string>>({});
+
   // T1: application history — hook
   const {
     allApplications,
@@ -207,169 +262,16 @@ export default function ApplyMode({ context }: Props) {
     handleCopyLetter,
   } = useCoverLetter(context);
 
-  // Trim answer to char limit
-  const [trimmingAnswer, setTrimmingAnswer] = useState<string | null>(null);
-  // Copy all answers
-  const [copiedAllAnswers, setCopiedAllAnswers] = useState(false);
-  // AI Writing Tools (summary + bullets)
-  const [generatingSummary, setGeneratingSummary] = useState(false);
-  const [generatedSummary, setGeneratedSummary] = useState<string>("");
-  const [summaryError, setSummaryError] = useState<string>("");
-  const [summaryCopied, setSummaryCopied] = useState(false);
-  const [generatingBullets, setGeneratingBullets] = useState(false);
-  const [generatedBullets, setGeneratedBullets] = useState<string[]>([]);
-  const [bulletsError, setBulletsError] = useState<string>("");
-  const [bulletsCopied, setBulletsCopied] = useState(false);
-  // RAG document management
-  const [ragDocContent, setRagDocContent] = useState<string>("");
-  const [ragDocType, setRagDocType] = useState<"resume" | "work_history">("resume");
-  const [ragDocFilename, setRagDocFilename] = useState<string>("resume.md");
-  const [uploadingRagDoc, setUploadingRagDoc] = useState(false);
-  const [ragUploadResult, setRagUploadResult] = useState<string>("");
-  const [ragUploadError, setRagUploadError] = useState<string>("");
-  const [ragDocList, setRagDocList] = useState<Array<{ source_filename: string; doc_type: string; chunk_count: number; has_dense_embeddings: boolean; created_at: string }>>([]);
-  const [ragDocsLoaded, setRagDocsLoaded] = useState(false);
-
-  useEffect(() => {
-    workHistoryApi
-      .getText()
-      .then((res) => {
-        if (res.text) setWorkHistoryText(res.text);
-      })
-      .catch(() => {}); // silently fail — backend may be unreachable
-  }, []);
-
-  // Auto-load RAG docs on mount — user should not need to click every session
-  useEffect(() => {
-    loadRagDocs();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    if (!context.company) return;
-    setLoading(true);
-    vaultApi
-      .retrieve(context.company, context.jdText)
-      .then((res: RetrieveResponse) => {
-        setResumes(res.company_history ?? []);
-        if (res.ats_result) setAts(res.ats_result);
-      })
-      .catch(console.error)
-      .finally(() => setLoading(false));
-  }, [context.company]);
-
-  // Draft persistence — save to sessionStorage whenever drafts change
+  // Draft persistence — Q&A drafts are persisted by useQAGeneration; persist cover letter + interview here
   const persistDrafts = useCallback(() => {
-    saveDraftSession(jobUrl, "answerDrafts", answerDrafts);
-    saveDraftSession(jobUrl, "selectedAnswers", selectedAnswers);
-    saveDraftSession(jobUrl, "draftProviders", draftProviders);
-    saveDraftSession(jobUrl, "editedTexts", editedTexts);
-    saveDraftSession(jobUrl, "coverLetter", coverLetter);
-    saveDraftSession(jobUrl, "coverDrafts", coverDrafts);
-    saveDraftSession(jobUrl, "coverDraftProviders", coverDraftProviders);
-    saveDraftSession(jobUrl, "interviewQuestions", interviewQuestions);
-  }, [jobUrl, answerDrafts, selectedAnswers, draftProviders, editedTexts, coverLetter, coverDrafts, coverDraftProviders, interviewQuestions]);
+    persistQADrafts();
+    saveDraftSession(context.jobUrl, "coverLetter", coverLetter);
+    saveDraftSession(context.jobUrl, "coverDrafts", coverDrafts);
+    saveDraftSession(context.jobUrl, "coverDraftProviders", coverDraftProviders);
+    saveDraftSession(context.jobUrl, "interviewQuestions", interviewQuestions);
+  }, [persistQADrafts, context.jobUrl, coverLetter, coverDrafts, coverDraftProviders, interviewQuestions]);
 
   useEffect(() => { persistDrafts(); }, [persistDrafts]);
-
-  // Fetch "From Memory" similar answers whenever questions change
-  useEffect(() => {
-    if (context.openQuestions.length === 0) return;
-    context.openQuestions.forEach((q) => {
-      vaultApi
-        .getSimilarAnswers({ questionText: q.questionText, questionCategory: q.category, topK: 3 })
-        .then((res) => {
-          if (res.answers.length > 0) {
-            setMemoryAnswers((prev) => ({ ...prev, [q.questionId]: res.answers }));
-          }
-        })
-        .catch(() => {}); // silently fail — no history yet
-    });
-  }, [context.openQuestions]);
-
-  // C2: Upload a resume file from the sidepanel
-  const handleResumeUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!e.target.files) return;
-    // Reset input so same file can be re-selected after error
-    e.target.value = "";
-    if (!file) return;
-
-    const ALLOWED = ["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/x-tex", "text/plain"];
-    const ALLOWED_EXT = /\.(pdf|docx|tex|txt)$/i;
-    if (!ALLOWED.includes(file.type) && !ALLOWED_EXT.test(file.name)) {
-      setUploadError("Unsupported file type. Please upload a PDF, DOCX, or .tex file.");
-      return;
-    }
-    const MAX_MB = 5;
-    if (file.size > MAX_MB * 1024 * 1024) {
-      setUploadError(`File too large. Maximum size is ${MAX_MB} MB.`);
-      return;
-    }
-
-    setUploading(true);
-    setUploadError("");
-    setUploadSuccess("");
-    try {
-      const res = await vaultApi.uploadResume({
-        file,
-        targetCompany: context.company || undefined,
-        targetRole: context.roleTitle || undefined,
-      });
-      setUploadSuccess(`Uploaded "${res.filename}" (${res.bullet_count} bullets detected)`);
-      // Refresh resume list
-      const updated = await vaultApi.retrieve(context.company);
-      setResumes(updated.company_history ?? []);
-    } catch (err) {
-      setUploadError(err instanceof Error ? err.message : "Upload failed. Try again.");
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  // C2: Delete a resume from the vault
-  const handleResumeDelete = async (resumeId: string) => {
-    try {
-      await vaultApi.deleteResume(resumeId);
-      setResumes((prev) => prev.filter((r) => r.resumeId !== resumeId));
-    } catch {
-      // Silently fail — resume still shows
-    }
-  };
-
-  // L6: Generate a tailored resume from a vault resume + current JD
-  const handleTailorResume = async (resumeId: string) => {
-    if (!context.jdText) {
-      setTailorErrors((prev) => ({ ...prev, [resumeId]: "No job description detected. Navigate to the job posting page first." }));
-      return;
-    }
-    const freshProviders = await getFreshProviders();
-    if (freshProviders.length === 0) {
-      setTailorErrors((prev) => ({ ...prev, [resumeId]: "No API key found. Open Settings and add a Groq or Gemini key." }));
-      return;
-    }
-    setTailoringResumeId(resumeId);
-    setTailorErrors((prev) => { const n = { ...prev }; delete n[resumeId]; return n; });
-    try {
-      const result = await vaultApi.generateTailored({
-        baseResumeId: resumeId,
-        jdText: context.jdText,
-        companyName: context.company,
-        roleTitle: context.roleTitle,
-        providers: freshProviders,
-      });
-      setTailorResults((prev) => ({ ...prev, [resumeId]: result }));
-      // Refresh resume list to show newly generated resume
-      vaultApi.retrieve(context.company, context.jdText).then((res) => {
-        setResumes(res.company_history ?? []);
-        if (res.ats_result) setAts(res.ats_result);
-      }).catch(() => {});
-    } catch (err) {
-      setTailorErrors((prev) => ({ ...prev, [resumeId]: err instanceof Error ? err.message : "Tailoring failed" }));
-    } finally {
-      setTailoringResumeId(null);
-    }
-  };
 
   // T1: Update application status from History tab — also updates local list
   const handleStatusUpdate = async (appId: string, newStatus: string) => {
@@ -394,273 +296,6 @@ export default function ApplyMode({ context }: Props) {
   const handleFillField = (fieldId: string, value: string) => {
     chrome.runtime.sendMessage({ type: "FILL_FIELD", payload: { fieldId, value } });
   };
-
-  const handleGenerateAnswers = async (questionId: string, questionText: string, category: string, isRegenerate = false, maxLength?: number) => {
-    // Read providers directly from storage — never relies on potentially-stale React state
-    const freshProviders = await getFreshProviders();
-    if (freshProviders.length === 0) {
-      setGenerationErrors((prev) => ({ ...prev, [questionId]: "No API key found. Open Settings → enter any Groq or Gemini key → Save LLM Settings." }));
-      return;
-    }
-    if (isRegenerate) {
-      if (savedAnswerIds[questionId]) {
-        vaultApi.recordFeedback({ answerId: savedAnswerIds[questionId], feedback: "regenerated" }).catch(() => {});
-      }
-      setAnswerDrafts((prev) => { const n = { ...prev }; delete n[questionId]; return n; });
-      setDraftProviders((prev) => { const n = { ...prev }; delete n[questionId]; return n; });
-      setEditedTexts((prev) => { const n = { ...prev }; delete n[questionId]; return n; });
-    }
-    setGeneratingAnswer(questionId);
-    setGenerationErrors((prev) => { const n = { ...prev }; delete n[questionId]; return n; });
-    try {
-      const res = await vaultApi.generateAnswers({
-        questionText,
-        questionCategory: category,
-        companyName: context.company,
-        roleTitle: context.roleTitle,
-        jdText: context.jdText ?? "",
-        workHistoryText,
-        maxLength,
-        providers: freshProviders,
-        categoryInstructions: promptTemplates[category] || promptTemplates["custom"],
-      });
-      if (!res.drafts?.length) {
-        setGenerationErrors((prev) => ({ ...prev, [questionId]: "All providers failed — check your API keys in Settings." }));
-        return;
-      }
-      setAnswerDrafts((prev) => ({ ...prev, [questionId]: res.drafts }));
-      setSelectedAnswers((prev) => ({ ...prev, [questionId]: 0 }));
-      // C3: pre-fill editor with first draft
-      setEditedTexts((prev) => ({ ...prev, [questionId]: res.drafts[0] ?? "" }));
-      if (res.draft_providers?.length) {
-        setDraftProviders((prev) => ({ ...prev, [questionId]: res.draft_providers! }));
-      } else {
-        setGenerationErrors((prev) => ({ ...prev, [questionId]: "⚠ LLM fallback used — showing placeholder answers. Check your API keys." }));
-      }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : "Generation failed";
-      setGenerationErrors((prev) => ({ ...prev, [questionId]: msg }));
-    } finally {
-      setGeneratingAnswer(null);
-    }
-  };
-
-  const handleSaveAnswer = async (questionId: string, questionText: string, category: string) => {
-    const idx = selectedAnswers[questionId] ?? 0;
-    const originalDraft = answerDrafts[questionId]?.[idx] ?? "";
-    // C3: use the edited version if the user changed the text
-    const finalText = (editedTexts[questionId] ?? originalDraft).trim();
-    if (!finalText) return;
-
-    const wasEdited = finalText !== originalDraft.trim();
-
-    setSavingAnswer(questionId);
-    try {
-      const saved = await vaultApi.saveAnswer({
-        questionText,
-        questionCategory: category,
-        answerText: finalText,
-        companyName: context.company,
-        roleTitle: context.roleTitle,
-        llmProviderUsed: draftProviders[questionId]?.[0],
-      });
-      setSavedAnswerIds((prev) => ({ ...prev, [questionId]: saved.answer_id }));
-      // Record appropriate feedback — edited text signals lower confidence than used-as-is
-      vaultApi.recordFeedback({
-        answerId: saved.answer_id,
-        feedback: wasEdited ? "edited" : "used_as_is",
-        editedAnswer: wasEdited ? finalText : undefined,
-      }).catch(() => {});
-      chrome.runtime.sendMessage({ type: "FILL_ANSWER", payload: { questionId, text: finalText } });
-    } finally {
-      setSavingAnswer(null);
-    }
-  };
-
-  const handleUseMemoryAnswer = (questionId: string, questionText: string, category: string, memory: SimilarAnswer) => {
-    // Fill the textarea with this memory answer and record feedback on the original
-    vaultApi.recordFeedback({ answerId: memory.answer_id, feedback: "used_as_is" }).catch(() => {});
-    // Also save it as a new answer for the current context
-    vaultApi.saveAnswer({
-      questionText,
-      questionCategory: category,
-      answerText: memory.answer_text,
-      companyName: context.company,
-      roleTitle: context.roleTitle,
-    }).catch(() => {});
-    chrome.runtime.sendMessage({ type: "FILL_ANSWER", payload: { questionId, text: memory.answer_text } });
-  };
-
-  const handleTrimAnswer = async (questionId: string, maxLength: number) => {
-    const currentText = editedTexts[questionId] ?? answerDrafts[questionId]?.[selectedAnswers[questionId] ?? 0] ?? "";
-    if (!currentText || currentText.length <= maxLength) return;
-    setTrimmingAnswer(questionId);
-    try {
-      const freshProviders = await getFreshProviders();
-      const res = await vaultApi.trimAnswer({ answerText: currentText, maxChars: maxLength, providers: freshProviders });
-      setEditedTexts((prev) => ({ ...prev, [questionId]: res.trimmed }));
-    } catch { /* silently ignore */ } finally {
-      setTrimmingAnswer(null);
-    }
-  };
-
-  const handleGenerateSummary = async () => {
-    if (!context.company || !context.roleTitle) {
-      setSummaryError("Company and role title are required. Navigate to a job posting first.");
-      return;
-    }
-    setGeneratingSummary(true);
-    setSummaryError("");
-    setGeneratedSummary("");
-    try {
-      const freshProviders = await getFreshProviders();
-      const candidateName = profile ? `${profile.firstName ?? ""} ${profile.lastName ?? ""}`.trim() : "";
-      const res = await vaultApi.generateSummary({
-        companyName: context.company,
-        roleTitle: context.roleTitle,
-        jdText: context.jdText ?? "",
-        wordLimit: 80,
-        candidateName,
-        providers: freshProviders,
-      });
-      setGeneratedSummary(res.summary);
-    } catch (err) {
-      setSummaryError(err instanceof Error ? err.message : "Summary generation failed.");
-    } finally {
-      setGeneratingSummary(false);
-    }
-  };
-
-  const handleGenerateBullets = async () => {
-    if (!context.company || !context.roleTitle) {
-      setBulletsError("Company and role title are required. Navigate to a job posting first.");
-      return;
-    }
-    setGeneratingBullets(true);
-    setBulletsError("");
-    setGeneratedBullets([]);
-    try {
-      const freshProviders = await getFreshProviders();
-      const res = await vaultApi.generateBullets({
-        companyName: context.company,
-        roleTitle: context.roleTitle,
-        jdText: context.jdText ?? "",
-        numBullets: 5,
-        targetCompany: context.company,
-        providers: freshProviders,
-      });
-      setGeneratedBullets(res.bullets);
-    } catch (err) {
-      setBulletsError(err instanceof Error ? err.message : "Bullets generation failed.");
-    } finally {
-      setGeneratingBullets(false);
-    }
-  };
-
-  const loadRagDocs = async () => {
-    try {
-      const res = await vaultApi.listDocuments();
-      setRagDocList(res.documents);
-      setRagDocsLoaded(true);
-    } catch {
-      setRagDocsLoaded(true);
-    }
-  };
-
-  const handleUploadRagDoc = async () => {
-    if (!ragDocContent.trim()) {
-      setRagUploadError("Paste your markdown content first.");
-      return;
-    }
-    setUploadingRagDoc(true);
-    setRagUploadError("");
-    setRagUploadResult("");
-    try {
-      const res = await vaultApi.uploadMarkdownDoc({
-        content: ragDocContent,
-        docType: ragDocType,
-        sourceFilename: ragDocFilename || `${ragDocType}.md`,
-      });
-      setRagUploadResult(`✓ ${res.message}`);
-      setRagDocContent("");
-      await loadRagDocs();
-    } catch (err) {
-      setRagUploadError(err instanceof Error ? err.message : "Upload failed.");
-    } finally {
-      setUploadingRagDoc(false);
-    }
-  };
-
-  const handleDeleteRagDoc = async (filename: string) => {
-    try {
-      await vaultApi.deleteDocument(filename);
-      setRagDocList((prev) => prev.filter((d) => d.source_filename !== filename));
-    } catch {
-      /* ignore */
-    }
-  };
-
-  const workHistoryRef = React.useRef(workHistoryText);
-  workHistoryRef.current = workHistoryText;
-
-  // Track which question IDs have been auto-triggered so we only fire once per question
-  const autoTriggeredRef = React.useRef<Set<string>>(new Set());
-
-  // Auto-generate when Q&A tab is active and new questions appear
-  useEffect(() => {
-    if (tab !== "questions") return;
-    if (context.openQuestions.length === 0) return;
-    const currentWorkHistory = workHistoryRef.current;
-
-    context.openQuestions.forEach((q) => {
-      if (autoTriggeredRef.current.has(q.questionId)) return;
-      autoTriggeredRef.current.add(q.questionId);
-
-      setGeneratingAnswer(q.questionId);
-      setGenerationErrors((prev) => { const n = { ...prev }; delete n[q.questionId]; return n; });
-
-      // Read providers fresh from storage — no React state dependency
-      getFreshProviders().then((freshProviders) => {
-        if (freshProviders.length === 0) {
-          autoTriggeredRef.current.delete(q.questionId); // allow retry once user adds a key
-          setGeneratingAnswer((cur) => cur === q.questionId ? null : cur);
-          setGenerationErrors((prev) => ({ ...prev, [q.questionId]: "No API key found. Open Settings → enter any Groq or Gemini key → Save LLM Settings." }));
-          return;
-        }
-        return vaultApi.generateAnswers({
-          questionText: q.questionText,
-          questionCategory: q.category,
-          companyName: context.company,
-          roleTitle: context.roleTitle,
-          jdText: context.jdText ?? "",
-          workHistoryText: currentWorkHistory,
-          maxLength: q.maxLength,
-          providers: freshProviders,
-          categoryInstructions: promptTemplates[q.category] || promptTemplates["custom"],
-        }).then((res) => {
-          if (!res.drafts?.length) {
-            setGenerationErrors((prev) => ({ ...prev, [q.questionId]: "All providers failed — check your API keys in Settings." }));
-            return;
-          }
-          setAnswerDrafts((prev) => ({ ...prev, [q.questionId]: res.drafts }));
-          setSelectedAnswers((prev) => ({ ...prev, [q.questionId]: 0 }));
-          // C3: pre-fill editor with first draft
-          setEditedTexts((prev) => ({ ...prev, [q.questionId]: res.drafts[0] ?? "" }));
-          if (res.draft_providers?.length) {
-            setDraftProviders((prev) => ({ ...prev, [q.questionId]: res.draft_providers! }));
-          } else {
-            setGenerationErrors((prev) => ({ ...prev, [q.questionId]: "⚠ LLM fallback used — placeholder answers shown. Check your API keys." }));
-          }
-        }).catch((e) => {
-          autoTriggeredRef.current.delete(q.questionId);
-          setGenerationErrors((prev) => ({ ...prev, [q.questionId]: e instanceof Error ? e.message : "Generation failed" }));
-        }).finally(() => {
-          setGeneratingAnswer((cur) => cur === q.questionId ? null : cur);
-        });
-      });
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, context.openQuestions]);
 
   const tabs: Array<{ key: Tab; label: string; count: number }> = [
     { key: "resumes", label: "Resumes", count: resumes.length },
@@ -1008,7 +643,7 @@ export default function ApplyMode({ context }: Props) {
                 onChange={handleResumeUpload}
               />
               <button
-                onClick={() => { setUploadError(""); setUploadSuccess(""); fileInputRef.current?.click(); }}
+                onClick={() => { clearUploadFeedback(); fileInputRef.current?.click(); }}
                 disabled={uploading}
                 style={{ ...btnStyle("ghost", uploading), width: "100%", textAlign: "center" }}
               >
@@ -1037,14 +672,7 @@ export default function ApplyMode({ context }: Props) {
                   {/* View content inline + Rename */}
                   <div style={{ display: "flex", gap: 6, marginTop: 4, marginBottom: context.jdText ? 0 : 8 }}>
                     <button
-                      onClick={async () => {
-                        if (viewingResumeId === r.resumeId) { setViewingResumeId(null); return; }
-                        const res = await vaultApi.getResume(r.resumeId).catch(() => null);
-                        if (res) {
-                          setResumeContent(res.markdown_content || res.raw_text || res.latex_content || "No content available.");
-                          setViewingResumeId(r.resumeId);
-                        }
-                      }}
+                      onClick={() => void handleViewResume(r.resumeId)}
                       style={{ ...btnStyle("ghost"), fontSize: 10, padding: "3px 8px" }}
                     >
                       {viewingResumeId === r.resumeId ? "Hide" : "View"}
@@ -1070,13 +698,7 @@ export default function ApplyMode({ context }: Props) {
                         style={{ flex: 1, background: "#0a0a14", border: "1px solid #1f1f38", borderRadius: 6, color: "#e2e8f0", fontSize: 11, padding: "4px 8px", outline: "none" }}
                       />
                       <button
-                        onClick={async () => {
-                          try {
-                            await vaultApi.patchResume(r.resumeId, { versionTag: renameTag.trim() || undefined });
-                            setResumes((prev) => prev.map((res) => res.resumeId === r.resumeId ? { ...res, versionTag: renameTag.trim() || null } : res));
-                            setRenamingResumeId(null);
-                          } catch { /* silently ignore */ }
-                        }}
+                        onClick={() => void handleRenameResume(r.resumeId, renameTag).catch(() => {})}
                         style={{ ...btnStyle("primary"), fontSize: 10, padding: "4px 10px" }}
                       >
                         Save
