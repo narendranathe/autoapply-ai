@@ -1592,6 +1592,32 @@ class FloatingPanel {
         text-transform: uppercase;
         font-weight: 700;
       }
+
+      /* ── Similarity Badges ─────────────────────────────────────────────── */
+      .aap-badge-vault {
+        display: inline-block;
+        padding: 1px 6px;
+        border-radius: 9999px;
+        font-size: 10px;
+        font-weight: 600;
+        background: rgba(0,206,209,0.15);
+        color: #00CED1;
+        border: 1px solid rgba(0,206,209,0.3);
+        margin-left: 6px;
+        vertical-align: middle;
+      }
+      .aap-badge-llm {
+        display: inline-block;
+        padding: 1px 6px;
+        border-radius: 9999px;
+        font-size: 10px;
+        font-weight: 600;
+        background: rgba(99,102,241,0.15);
+        color: #818cf8;
+        border: 1px solid rgba(99,102,241,0.3);
+        margin-left: 6px;
+        vertical-align: middle;
+      }
     `;
   }
 
@@ -1669,11 +1695,15 @@ class FloatingPanel {
                   ? `<div class="draft-tabs">
                       ${state.drafts
                         .map((_, di) => {
+                          const src = state.draftSources?.[di];
                           const provName = state.draftProviders[di];
                           const label = provName
                             ? provName.charAt(0).toUpperCase() + provName.slice(1)
                             : `Draft ${di + 1}`;
-                          return `<button class="draft-tab ${di === state.selectedDraft ? "active" : ""}" data-q-idx="${qi}" data-d-idx="${di}">${label}</button>`;
+                          const badge = src?.source === "vault"
+                            ? `<span class="aap-badge-vault">From Memory · ${Math.round((src.similarityScore ?? 0) * 100)}% match</span>`
+                            : `<span class="aap-badge-llm">Generated</span>`;
+                          return `<button class="draft-tab ${di === state.selectedDraft ? "active" : ""}" data-q-idx="${qi}" data-d-idx="${di}">${label}${badge}</button>`;
                         })
                         .join("")}
                      </div>
