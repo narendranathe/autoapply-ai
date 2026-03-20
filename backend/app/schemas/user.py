@@ -113,3 +113,52 @@ class UserResponse(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class ProfileUpdate(BaseModel):
+    """Body for PATCH /api/v1/auth/me — all fields optional."""
+
+    first_name: str | None = Field(None, max_length=100)
+    last_name: str | None = Field(None, max_length=100)
+    phone: str | None = Field(None, max_length=50)
+    city: str | None = Field(None, max_length=100)
+    state: str | None = Field(None, max_length=100)
+    zip_code: str | None = Field(None, max_length=20)
+    country: str | None = Field(None, max_length=100)
+    linkedin_url: str | None = Field(None, max_length=500)
+    github_url: str | None = Field(None, max_length=500)
+    portfolio_url: str | None = Field(None, max_length=500)
+    degree: str | None = Field(None, max_length=200)
+    years_experience: str | None = Field(None, max_length=50)
+    salary: str | None = Field(None, max_length=100)
+    sponsorship: str | None = Field(None, max_length=100)
+    github_username: str | None = Field(None, max_length=255)
+
+
+class ProfileResponse(BaseModel):
+    """Full profile returned by GET /auth/me."""
+
+    user_id: str
+    clerk_id: str
+    first_name: str | None
+    last_name: str | None
+    phone: str | None
+    city: str | None
+    state: str | None
+    zip_code: str | None
+    country: str | None
+    linkedin_url: str | None
+    github_url: str | None
+    portfolio_url: str | None
+    degree: str | None
+    years_experience: str | None
+    salary: str | None
+    sponsorship: str | None
+    github_username: str | None
+    resume_repo_name: str
+    is_active: bool
+    total_resumes_generated: int
+    total_applications_tracked: int
+    has_github_token: bool
+    has_llm_key: bool
+    llm_provider: str | None
