@@ -1,6 +1,6 @@
 // Options page script — module scripts run after DOM is parsed, no DOMContentLoaded needed
 
-import { vaultApi, workHistoryApi, type WorkHistoryEntry } from "../shared/api";
+import { vaultApi, workHistoryApi, profileApi, type WorkHistoryEntry } from "../shared/api";
 
 const API_DEFAULT = "https://autoapply-ai-api.fly.dev/api/v1";
 
@@ -172,6 +172,7 @@ async function saveAuth() {
       showStatus("auth-status", `Verified and saved ✓${rawToken ? " (JWT)" : ""}`, "ok");
       loadSettings();
       loadWorkHistory();
+      syncProfileFromBackend().catch(() => {});
       return;
     }
 
@@ -195,6 +196,7 @@ async function saveAuth() {
         showStatus("auth-status", "Account created and saved ✓", "ok");
         loadSettings();
         loadWorkHistory();
+        syncProfileFromBackend().catch(() => {});
       } else {
         const errText = await registerResp.text();
         showStatus("auth-status", `Registration failed (${registerResp.status}): ${errText}`, "err");
@@ -241,6 +243,97 @@ async function saveLlm() {
   showStatus("llm-status", enabledCount > 0 ? `Saved — ${enabledCount} provider(s) enabled.` : "Saved — no providers enabled (fallback mode).", "ok");
 }
 
+/** Sync profile from backend into local storage and DOM inputs. */
+async function syncProfileFromBackend(): Promise<void> {
+  const { clerkUserId } = await chrome.storage.local.get("clerkUserId");
+  if (!clerkUserId) return; // not authenticated
+  try {
+    const remote = await profileApi.getProfile();
+    const profileData = await chrome.storage.local.get("profile");
+    const existing = (profileData.profile as Record<string, string> | undefined) ?? {};
+    const merged = { ...existing };
+
+    // Backend values win for non-null fields
+    if (remote.first_name) merged.firstName = remote.first_name;
+    if (remote.last_name) merged.lastName = remote.last_name;
+    if (remote.phone) merged.phone = remote.phone;
+    if (remote.city) merged.city = remote.city;
+    if (remote.state) merged.state = remote.state;
+    if (remote.zip_code) merged.zip = remote.zip_code;
+    if (remote.country) merged.country = remote.country;
+    if (remote.linkedin_url) merged.linkedinUrl = remote.linkedin_url;
+    if (remote.github_url) merged.githubUrl = remote.github_url;
+    if (remote.portfolio_url) merged.portfolioUrl = remote.portfolio_url;
+    if (remote.degree) merged.degree = remote.degree;
+    if (remote.years_experience) merged.yearsExperience = remote.years_experience;
+    if (remote.salary) merged.salary = remote.salary;
+    if (remote.sponsorship) merged.sponsorship = remote.sponsorship;
+
+    await chrome.storage.local.set({ profile: merged });
+
+    // Update DOM inputs with synced values
+    const setVal = (id: string, val: string | undefined) => {
+      const el = document.getElementById(id);
+      if (el && val) (el as HTMLInputElement | HTMLSelectElement).value = val;
+    };
+    setVal("profile-first", merged.firstName);
+    setVal("profile-last", merged.lastName);
+    setVal("profile-phone", merged.phone);
+    setVal("profile-city", merged.city);
+    setVal("profile-state", merged.state);
+    setVal("profile-zip", merged.zip);
+    setVal("profile-country", merged.country);
+    setVal("profile-linkedin", merged.linkedinUrl);
+    setVal("profile-github", merged.githubUrl);
+    setVal("profile-portfolio", merged.portfolioUrl);
+    setVal("profile-degree", merged.degree);
+    setVal("profile-yoe", merged.yearsExperience);
+    setVal("profile-salary", merged.salary);
+    setVal("profile-sponsorship", merged.sponsorship);
+
+    // Show confirmation indicator in auth section
+    const authStatus = get("auth-status");
+    if (authStatus && authStatus.className.includes("ok")) {
+      const syncEl = document.createElement("span");
+      syncEl.textContent = " · Profile synced from backend";
+      syncEl.style.color = "#00CED1";
+      syncEl.style.fontSize = "11px";
+      syncEl.id = "profile-sync-indicator";
+      const existing2 = document.getElementById("profile-sync-indicator");
+      if (existing2) existing2.remove();
+      authStatus.appendChild(syncEl);
+    }
+  } catch {
+    // Silent fail — backend may not be available
+  }
+}
+
+/** Sync profile from DOM inputs to backend. */
+async function syncProfileToBackend(): Promise<void> {
+  const { clerkUserId } = await chrome.storage.local.get("clerkUserId");
+  if (!clerkUserId) return;
+  try {
+    await profileApi.updateProfile({
+      first_name: getInput("profile-first").value.trim() || null,
+      last_name: getInput("profile-last").value.trim() || null,
+      phone: getInput("profile-phone").value.trim() || null,
+      city: getInput("profile-city").value.trim() || null,
+      state: getInput("profile-state").value.trim() || null,
+      zip_code: getInput("profile-zip").value.trim() || null,
+      country: getInput("profile-country").value.trim() || null,
+      linkedin_url: getInput("profile-linkedin").value.trim() || null,
+      github_url: getInput("profile-github").value.trim() || null,
+      portfolio_url: getInput("profile-portfolio").value.trim() || null,
+      degree: getInput("profile-degree").value.trim() || null,
+      years_experience: getInput("profile-yoe").value.trim() || null,
+      salary: getInput("profile-salary").value.trim() || null,
+      sponsorship: (document.getElementById("profile-sponsorship") as HTMLSelectElement).value || null,
+    });
+  } catch {
+    // Non-blocking — local save still succeeds
+  }
+}
+
 async function saveProfile() {
   const profile = {
     firstName: getInput("profile-first").value.trim(),
@@ -261,6 +354,8 @@ async function saveProfile() {
   };
   await chrome.storage.local.set({ profile });
   showStatus("profile-status", "Profile saved.", "ok");
+  // Also sync to backend (non-blocking)
+  syncProfileToBackend().catch(() => {});
 }
 
 // ── Work History ────────────────────────────────────────────────────────────

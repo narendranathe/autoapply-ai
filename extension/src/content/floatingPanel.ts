@@ -584,6 +584,58 @@ class FloatingPanel {
     // L4: record category usage, then pre-generate answers for top categories
     this.trackCategoryUsage();
     this.preGenerateTopCategories();
+
+    // Background sync profile from backend — non-blocking, silent fail
+    this.syncProfileFromBackend().catch(() => {});
+  }
+
+  private async syncProfileFromBackend(): Promise<void> {
+    if (!this.clerkUserId && !this.clerkToken) return; // not authenticated
+
+    try {
+      const resp = await fetch(`${this.apiBase}/auth/me`, {
+        headers: this.authHeaders(),
+      });
+      if (!resp.ok) return;
+
+      const remote = await resp.json() as {
+        first_name?: string | null;
+        last_name?: string | null;
+        phone?: string | null;
+        city?: string | null;
+        state?: string | null;
+        zip_code?: string | null;
+        country?: string | null;
+        linkedin_url?: string | null;
+        github_url?: string | null;
+        portfolio_url?: string | null;
+        degree?: string | null;
+        years_experience?: string | null;
+        salary?: string | null;
+        sponsorship?: string | null;
+      };
+
+      const merged: Partial<Profile> = { ...this.profile };
+      if (remote.first_name) merged.firstName = remote.first_name;
+      if (remote.last_name) merged.lastName = remote.last_name;
+      if (remote.phone) merged.phone = remote.phone;
+      if (remote.city) merged.city = remote.city;
+      if (remote.state) merged.state = remote.state;
+      if (remote.zip_code) merged.zip = remote.zip_code;
+      if (remote.country) merged.country = remote.country;
+      if (remote.linkedin_url) merged.linkedinUrl = remote.linkedin_url;
+      if (remote.github_url) merged.githubUrl = remote.github_url;
+      if (remote.portfolio_url) merged.portfolioUrl = remote.portfolio_url;
+      if (remote.degree) merged.degree = remote.degree;
+      if (remote.years_experience) merged.yearsExperience = remote.years_experience;
+      if (remote.salary) merged.salary = remote.salary;
+      if (remote.sponsorship) merged.sponsorship = remote.sponsorship;
+
+      this.profile = merged as Profile;
+      await chrome.storage.local.set({ profile: merged });
+    } catch {
+      // silent fail — content script operates offline-first
+    }
   }
 
   private async trackApplication(): Promise<void> {

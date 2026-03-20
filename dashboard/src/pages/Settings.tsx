@@ -1,11 +1,13 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Key, Briefcase, User, Puzzle, Edit2, Trash2,
   Plus, Save, X, CheckCircle, Eye, EyeOff,
 } from "lucide-react";
+import { toast } from "sonner";
 import { useApiClient } from "../hooks/useApiClient";
+import { useSafeUser } from "../components/ProtectedRoute";
 import { colors } from "../lib/tokens";
 import { fadeUp } from "../lib/animations";
 
@@ -63,74 +65,353 @@ function SectionCard({ children }: { children: React.ReactNode }) {
   );
 }
 
+// Profile field interface
+interface ProfileData {
+  user_id?: string;
+  clerk_id?: string;
+  first_name: string | null;
+  last_name: string | null;
+  phone: string | null;
+  city: string | null;
+  state: string | null;
+  zip_code: string | null;
+  country: string | null;
+  linkedin_url: string | null;
+  github_url: string | null;
+  portfolio_url: string | null;
+  degree: string | null;
+  years_experience: string | null;
+  salary: string | null;
+  sponsorship: string | null;
+  github_username?: string | null;
+  has_github_token?: boolean;
+  has_llm_key?: boolean;
+  llm_provider?: string | null;
+}
+
+type ProfileForm = {
+  first_name: string;
+  last_name: string;
+  phone: string;
+  city: string;
+  state: string;
+  zip_code: string;
+  country: string;
+  linkedin_url: string;
+  github_url: string;
+  portfolio_url: string;
+  degree: string;
+  years_experience: string;
+  salary: string;
+  sponsorship: string;
+};
+
+function emptyProfileForm(): ProfileForm {
+  return {
+    first_name: "", last_name: "", phone: "", city: "", state: "",
+    zip_code: "", country: "", linkedin_url: "", github_url: "",
+    portfolio_url: "", degree: "", years_experience: "", salary: "",
+    sponsorship: "",
+  };
+}
+
+function profileToForm(p: ProfileData): ProfileForm {
+  return {
+    first_name: p.first_name ?? "",
+    last_name: p.last_name ?? "",
+    phone: p.phone ?? "",
+    city: p.city ?? "",
+    state: p.state ?? "",
+    zip_code: p.zip_code ?? "",
+    country: p.country ?? "",
+    linkedin_url: p.linkedin_url ?? "",
+    github_url: p.github_url ?? "",
+    portfolio_url: p.portfolio_url ?? "",
+    degree: p.degree ?? "",
+    years_experience: p.years_experience ?? "",
+    salary: p.salary ?? "",
+    sponsorship: p.sponsorship ?? "",
+  };
+}
+
+function SkeletonField() {
+  return (
+    <div className="grid grid-cols-[160px_1fr] gap-4 items-center">
+      <div className="h-4 w-24 rounded" style={{ background: colors.hoverSurface }} />
+      <div className="h-9 w-full rounded-md" style={{ background: colors.hoverSurface }} />
+    </div>
+  );
+}
+
 // Profile Tab
 function ProfileTab() {
   const api = useApiClient();
   const queryClient = useQueryClient();
+  const { user } = useSafeUser();
 
   const { data: profile, isLoading } = useQuery({
     queryKey: ["auth-me"],
     queryFn: async () => {
-      const res = await api.get("/auth/me");
+      const res = await api.get<ProfileData>("/auth/me");
       return res.data;
     },
   });
 
-  const [form, setForm] = useState<Record<string, string>>({});
+  const [form, setForm] = useState<ProfileForm>(emptyProfileForm());
   const [dirty, setDirty] = useState(false);
 
-  const fields = [
-    { key: "first_name", label: "First Name" },
-    { key: "last_name", label: "Last Name" },
-    { key: "email", label: "Email" },
-    { key: "phone", label: "Phone" },
-    { key: "location", label: "Location" },
-    { key: "linkedin_url", label: "LinkedIn URL" },
-    { key: "github_url", label: "GitHub URL" },
-  ];
+  // Populate form when data loads
+  useEffect(() => {
+    if (profile) {
+      setForm(profileToForm(profile));
+      setDirty(false);
+    }
+  }, [profile]);
 
-  const getValue = (key: string) => form[key] ?? (profile as Record<string, unknown>)?.[key] ?? "";
-
-  const handleChange = (key: string, val: string) => {
+  const handleChange = (key: keyof ProfileForm, val: string) => {
     setForm((prev) => ({ ...prev, [key]: val }));
     setDirty(true);
   };
 
   const saveMutation = useMutation({
     mutationFn: async () => {
-      await api.patch("/auth/me", form);
+      // Send only non-empty fields (plus explicit empties to clear them)
+      const payload: Partial<ProfileData> = {};
+      (Object.keys(form) as Array<keyof ProfileForm>).forEach((k) => {
+        payload[k] = form[k] || null;
+      });
+      await api.patch("/auth/me", payload);
     },
     onSuccess: () => {
       setDirty(false);
       void queryClient.invalidateQueries({ queryKey: ["auth-me"] });
+      toast.success("Profile saved", { description: "Your profile has been updated." });
+    },
+    onError: () => {
+      toast.error("Save failed", { description: "Could not update profile. Try again." });
     },
   });
 
-  if (isLoading) {
-    return <SectionCard><p className="text-xs" style={{ color: colors.muted }}>Loading profile...</p></SectionCard>;
-  }
+  const inputStyle = {
+    background: colors.obsidian,
+    border: `1px solid ${colors.border}`,
+    color: colors.mercury,
+  };
+
+  const readOnlyStyle = {
+    ...inputStyle,
+    opacity: 0.6,
+    cursor: "not-allowed" as const,
+  };
 
   return (
     <div className="space-y-5">
       <SectionCard>
-        <div className="space-y-4">
-          {fields.map(({ key, label }) => (
-            <div key={key} className="grid grid-cols-[160px_1fr] gap-4 items-center">
-              <label className="text-sm font-medium" style={{ color: colors.muted }}>{label}</label>
+        {isLoading ? (
+          <div className="space-y-4">
+            {Array.from({ length: 8 }).map((_, i) => <SkeletonField key={i} />)}
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {/* First Name + Last Name row */}
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <label className="text-xs font-medium" style={{ color: colors.muted }}>First Name</label>
+                <input
+                  type="text"
+                  value={form.first_name}
+                  onChange={(e) => handleChange("first_name", e.target.value)}
+                  placeholder="First name"
+                  className="px-3 py-2 rounded-md text-sm outline-none w-full"
+                  style={inputStyle}
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-medium" style={{ color: colors.muted }}>Last Name</label>
+                <input
+                  type="text"
+                  value={form.last_name}
+                  onChange={(e) => handleChange("last_name", e.target.value)}
+                  placeholder="Last name"
+                  className="px-3 py-2 rounded-md text-sm outline-none w-full"
+                  style={inputStyle}
+                />
+              </div>
+            </div>
+
+            {/* Email — read-only from Clerk */}
+            <div className="space-y-1">
+              <label className="text-xs font-medium" style={{ color: colors.muted }}>Email (from account)</label>
               <input
-                type="text"
-                value={getValue(key) as string}
-                onChange={(e) => handleChange(key, e.target.value)}
+                type="email"
+                value={user?.primaryEmailAddress?.emailAddress ?? ""}
+                readOnly
                 className="px-3 py-2 rounded-md text-sm outline-none w-full"
-                style={{
-                  background: colors.obsidian,
-                  border: `1px solid ${colors.border}`,
-                  color: colors.mercury,
-                }}
+                style={readOnlyStyle}
               />
             </div>
-          ))}
-        </div>
+
+            {/* Phone */}
+            <div className="space-y-1">
+              <label className="text-xs font-medium" style={{ color: colors.muted }}>Phone</label>
+              <input
+                type="text"
+                value={form.phone}
+                onChange={(e) => handleChange("phone", e.target.value)}
+                placeholder="+1 555 000 0000"
+                className="px-3 py-2 rounded-md text-sm outline-none w-full"
+                style={inputStyle}
+              />
+            </div>
+
+            {/* City + State row */}
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <label className="text-xs font-medium" style={{ color: colors.muted }}>City</label>
+                <input
+                  type="text"
+                  value={form.city}
+                  onChange={(e) => handleChange("city", e.target.value)}
+                  placeholder="Dallas"
+                  className="px-3 py-2 rounded-md text-sm outline-none w-full"
+                  style={inputStyle}
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-medium" style={{ color: colors.muted }}>State</label>
+                <input
+                  type="text"
+                  value={form.state}
+                  onChange={(e) => handleChange("state", e.target.value)}
+                  placeholder="TX"
+                  className="px-3 py-2 rounded-md text-sm outline-none w-full"
+                  style={inputStyle}
+                />
+              </div>
+            </div>
+
+            {/* ZIP + Country row */}
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <label className="text-xs font-medium" style={{ color: colors.muted }}>ZIP Code</label>
+                <input
+                  type="text"
+                  value={form.zip_code}
+                  onChange={(e) => handleChange("zip_code", e.target.value)}
+                  placeholder="75201"
+                  className="px-3 py-2 rounded-md text-sm outline-none w-full"
+                  style={inputStyle}
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-medium" style={{ color: colors.muted }}>Country</label>
+                <input
+                  type="text"
+                  value={form.country}
+                  onChange={(e) => handleChange("country", e.target.value)}
+                  placeholder="United States"
+                  className="px-3 py-2 rounded-md text-sm outline-none w-full"
+                  style={inputStyle}
+                />
+              </div>
+            </div>
+
+            {/* LinkedIn URL */}
+            <div className="space-y-1">
+              <label className="text-xs font-medium" style={{ color: colors.muted }}>LinkedIn URL</label>
+              <input
+                type="url"
+                value={form.linkedin_url}
+                onChange={(e) => handleChange("linkedin_url", e.target.value)}
+                placeholder="https://linkedin.com/in/yourprofile"
+                className="px-3 py-2 rounded-md text-sm outline-none w-full"
+                style={inputStyle}
+              />
+            </div>
+
+            {/* GitHub URL */}
+            <div className="space-y-1">
+              <label className="text-xs font-medium" style={{ color: colors.muted }}>GitHub URL</label>
+              <input
+                type="url"
+                value={form.github_url}
+                onChange={(e) => handleChange("github_url", e.target.value)}
+                placeholder="https://github.com/yourusername"
+                className="px-3 py-2 rounded-md text-sm outline-none w-full"
+                style={inputStyle}
+              />
+            </div>
+
+            {/* Portfolio URL */}
+            <div className="space-y-1">
+              <label className="text-xs font-medium" style={{ color: colors.muted }}>Portfolio URL</label>
+              <input
+                type="url"
+                value={form.portfolio_url}
+                onChange={(e) => handleChange("portfolio_url", e.target.value)}
+                placeholder="https://yourportfolio.dev"
+                className="px-3 py-2 rounded-md text-sm outline-none w-full"
+                style={inputStyle}
+              />
+            </div>
+
+            {/* Degree */}
+            <div className="space-y-1">
+              <label className="text-xs font-medium" style={{ color: colors.muted }}>Degree</label>
+              <input
+                type="text"
+                value={form.degree}
+                onChange={(e) => handleChange("degree", e.target.value)}
+                placeholder="e.g. B.S. Computer Science"
+                className="px-3 py-2 rounded-md text-sm outline-none w-full"
+                style={inputStyle}
+              />
+            </div>
+
+            {/* Years Experience */}
+            <div className="space-y-1">
+              <label className="text-xs font-medium" style={{ color: colors.muted }}>Years of Experience</label>
+              <input
+                type="text"
+                value={form.years_experience}
+                onChange={(e) => handleChange("years_experience", e.target.value)}
+                placeholder="e.g. 7"
+                className="px-3 py-2 rounded-md text-sm outline-none w-full"
+                style={inputStyle}
+              />
+            </div>
+
+            {/* Salary Expectation */}
+            <div className="space-y-1">
+              <label className="text-xs font-medium" style={{ color: colors.muted }}>Salary Expectation</label>
+              <input
+                type="text"
+                value={form.salary}
+                onChange={(e) => handleChange("salary", e.target.value)}
+                placeholder="e.g. $180,000"
+                className="px-3 py-2 rounded-md text-sm outline-none w-full"
+                style={inputStyle}
+              />
+            </div>
+
+            {/* Sponsorship */}
+            <div className="space-y-1">
+              <label className="text-xs font-medium" style={{ color: colors.muted }}>Work Authorization / Sponsorship</label>
+              <select
+                value={form.sponsorship}
+                onChange={(e) => handleChange("sponsorship", e.target.value)}
+                className="px-3 py-2 rounded-md text-sm outline-none w-full"
+                style={inputStyle}
+              >
+                <option value="">Select...</option>
+                <option value="Yes - Need H1B">Yes - Need H1B</option>
+                <option value="Yes - Have EAD/GC">Yes - Have EAD/GC</option>
+                <option value="No - US Citizen/PR">No - US Citizen/PR</option>
+                <option value="No">No</option>
+              </select>
+            </div>
+          </div>
+        )}
       </SectionCard>
 
       {/* Sticky save button */}
