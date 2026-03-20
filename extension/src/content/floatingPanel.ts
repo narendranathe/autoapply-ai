@@ -1038,95 +1038,119 @@ class FloatingPanel {
     }
   }
 
+  // ── Design tokens (obsidian dark, teal accent — Claude-quality) ───────────
   private css(): string {
     return `
       *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+      /* ── Design tokens ─────────────────────────────────────────────────── */
+      /* Obsidian: #0a0b0d  Surface: #111318  Surface2: #1a1d25            */
+      /* Teal: #00c4b4  Teal dark: #009688  Teal glow: rgba(0,196,180,0.15) */
+      /* Text primary: #e0e4ef  Text secondary: #8b92a8  Muted: #5a6278    */
+
       /* ── Keyframe Animations ───────────────────────────────────────────── */
+      @keyframes slideInRight {
+        from { transform: translateX(100%); }
+        to   { transform: translateX(0); }
+      }
+      @keyframes slideOutRight {
+        from { transform: translateX(0); }
+        to   { transform: translateX(100%); }
+      }
+      @keyframes fadeUp {
+        from { opacity: 0; transform: translateY(8px); }
+        to   { opacity: 1; transform: translateY(0); }
+      }
       @keyframes shimmer {
-        0%   { background-position: -400px 0; }
-        100% { background-position: 400px 0; }
+        from { background-position: -200% 0; }
+        to   { background-position: 200% 0; }
       }
-      @keyframes pulse-glow {
-        0%, 100% { box-shadow: 0 0 6px rgba(139,92,246,0.4), 0 0 14px rgba(99,102,241,0.2); }
-        50%       { box-shadow: 0 0 12px rgba(139,92,246,0.7), 0 0 28px rgba(99,102,241,0.4); }
-      }
-      @keyframes gradient-sweep {
-        0%   { background-position: 0% 50%; }
-        50%  { background-position: 100% 50%; }
-        100% { background-position: 0% 50%; }
+      @keyframes fabAppear {
+        from { transform: scale(0); opacity: 0; }
+        to   { transform: scale(1); opacity: 1; }
       }
       @keyframes spin {
-        to { transform: rotate(360deg); }
+        from { transform: rotate(0deg); }
+        to   { transform: rotate(360deg); }
       }
-      @keyframes dot-bounce {
-        0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
-        40%            { transform: scale(1);   opacity: 1;   }
-      }
-      @keyframes slide-in-right {
-        from { transform: translateX(100%); opacity: 0; }
-        to   { transform: translateX(0);   opacity: 1; }
-      }
-      @keyframes fade-up {
-        from { transform: translateY(6px); opacity: 0; }
-        to   { transform: translateY(0);   opacity: 1; }
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50%       { opacity: 0.4; }
       }
       @keyframes bar-grow {
         from { width: 0 !important; }
       }
+      @keyframes dot-bounce {
+        0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+        40%            { transform: scale(1);   opacity: 1; }
+      }
 
-      /* ── Toggle Tab ────────────────────────────────────────────────────── */
+      /* ── FAB Toggle Button ─────────────────────────────────────────────── */
       .toggle-tab {
         position: fixed;
-        right: 0;
-        top: 50%;
-        transform: translateY(-50%);
-        width: 42px;
-        background: linear-gradient(180deg, #13102b 0%, #0d0d1f 100%);
-        border: 1px solid rgba(139,92,246,0.35);
-        border-right: none;
-        border-radius: 10px 0 0 10px;
+        bottom: 24px;
+        right: 24px;
+        width: 52px;
+        height: 52px;
+        border-radius: 50%;
+        background: #111318;
+        border: 1.5px solid rgba(0,196,180,0.4);
+        box-shadow: 0 0 20px rgba(0,196,180,0.15), 0 4px 16px rgba(0,0,0,0.5);
         display: flex;
-        flex-direction: column;
         align-items: center;
-        padding: 12px 0;
-        gap: 5px;
+        justify-content: center;
         cursor: pointer;
         pointer-events: all;
-        z-index: 2;
-        transition: background 0.2s, border-color 0.2s, box-shadow 0.2s;
-        box-shadow: -3px 0 18px rgba(99,102,241,0.18), -1px 0 6px rgba(0,0,0,0.5);
+        z-index: 3;
+        transition: transform 0.2s cubic-bezier(0.34,1.56,0.64,1), border-color 0.2s, box-shadow 0.2s;
+        animation: fabAppear 0.4s cubic-bezier(0.34,1.56,0.64,1) both;
+        user-select: none;
+        position: fixed;
       }
       .toggle-tab:hover {
-        background: linear-gradient(180deg, #1a1540 0%, #10102a 100%);
-        border-color: rgba(139,92,246,0.65);
-        box-shadow: -4px 0 22px rgba(139,92,246,0.3), -1px 0 8px rgba(0,0,0,0.6);
+        transform: scale(1.05);
+        border-color: rgba(0,196,180,0.7);
+        box-shadow: 0 0 28px rgba(0,196,180,0.25), 0 6px 20px rgba(0,0,0,0.5);
       }
-      .tab-logo {
-        font-size: 17px;
+      .toggle-tab:active {
+        transform: scale(0.97);
+      }
+      .toggle-tab.panel-open {
+        border-color: rgba(0,196,180,0.6);
+        box-shadow: 0 0 24px rgba(0,196,180,0.2), 0 4px 16px rgba(0,0,0,0.5);
+      }
+      .fab-icon {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 20px;
+        color: #00c4b4;
+        filter: drop-shadow(0 0 6px rgba(0,196,180,0.5));
+        transition: transform 0.25s cubic-bezier(0.34,1.56,0.64,1);
         line-height: 1;
-        filter: drop-shadow(0 0 5px rgba(167,139,250,0.7));
-      }
-      .tab-label {
         font-family: system-ui, -apple-system, sans-serif;
-        font-size: 7.5px;
-        font-weight: 800;
-        background: linear-gradient(135deg, #a78bfa 0%, #67e8f9 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
-        text-align: center;
-        line-height: 1.25;
-        letter-spacing: 0.04em;
-        white-space: pre-line;
       }
-      .tab-score {
-        font-family: system-ui, -apple-system, sans-serif;
+      .toggle-tab.panel-open .fab-icon {
+        transform: rotate(45deg);
+      }
+      .fab-badge {
+        position: absolute;
+        top: -3px;
+        right: -3px;
+        min-width: 18px;
+        height: 18px;
+        border-radius: 9px;
+        background: #00c4b4;
+        color: #0a0b0d;
         font-size: 9px;
-        font-weight: 900;
-        text-align: center;
-        line-height: 1;
-        filter: drop-shadow(0 0 4px currentColor);
+        font-weight: 800;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0 4px;
+        border: 1.5px solid #111318;
+        letter-spacing: -0.02em;
+        font-family: system-ui, -apple-system, sans-serif;
       }
 
       /* ── Main Panel ────────────────────────────────────────────────────── */
@@ -1134,490 +1158,465 @@ class FloatingPanel {
         position: fixed;
         right: 0;
         top: 0;
-        width: 348px;
+        width: 380px;
         height: 100vh;
-        background: linear-gradient(160deg, #0c0c1e 0%, #080814 60%, #0a0a18 100%);
-        border-left: 1px solid rgba(99,102,241,0.2);
+        background: #0a0b0d;
+        border-left: 1px solid rgba(255,255,255,0.07);
+        box-shadow: -8px 0 32px rgba(0,0,0,0.6);
         transform: translateX(100%);
-        transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
-        overflow-y: auto;
-        overflow-x: hidden;
+        transition: transform 0.2s ease-in;
         display: flex;
         flex-direction: column;
         pointer-events: all;
-        z-index: 1;
+        z-index: 2;
         font-family: system-ui, -apple-system, sans-serif;
-        color: #f1f5f9;
-        box-shadow: -6px 0 40px rgba(0,0,0,0.7), -2px 0 0 rgba(99,102,241,0.08);
+        color: #e0e4ef;
+        will-change: transform;
       }
       .panel.open {
         transform: translateX(0);
-        animation: slide-in-right 0.28s cubic-bezier(0.4,0,0.2,1);
-      }
-      .panel::-webkit-scrollbar { width: 3px; }
-      .panel::-webkit-scrollbar-track { background: transparent; }
-      .panel::-webkit-scrollbar-thumb {
-        background: linear-gradient(180deg, #7c3aed, #4f46e5);
-        border-radius: 3px;
+        transition: transform 0.25s cubic-bezier(0.22,1,0.36,1);
+        animation: slideInRight 0.25s cubic-bezier(0.22,1,0.36,1) both;
       }
 
-      /* ── Header ────────────────────────────────────────────────────────── */
+      /* ── Panel Header ──────────────────────────────────────────────────── */
       .header {
+        flex-shrink: 0;
+        height: 56px;
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding: 13px 16px;
-        background: linear-gradient(135deg, rgba(20,16,45,0.98) 0%, rgba(12,12,30,0.98) 100%);
-        border-bottom: 1px solid rgba(99,102,241,0.18);
-        position: sticky;
-        top: 0;
-        z-index: 10;
+        padding: 0 16px;
+        background: rgba(10,11,13,0.95);
         backdrop-filter: blur(12px);
         -webkit-backdrop-filter: blur(12px);
+        border-bottom: 1px solid rgba(255,255,255,0.06);
+        z-index: 10;
       }
-      .header::after {
-        content: '';
-        position: absolute;
-        bottom: 0;
-        left: 16px;
-        right: 16px;
-        height: 1px;
-        background: linear-gradient(90deg, transparent, rgba(139,92,246,0.5), rgba(99,102,241,0.5), transparent);
-      }
-      .header-title {
+      .header-left {
         display: flex;
         align-items: center;
         gap: 8px;
-        font-size: 14px;
-        font-weight: 800;
-        background: linear-gradient(90deg, #c4b5fd 0%, #818cf8 50%, #67e8f9 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
-        letter-spacing: -0.02em;
       }
-      .header-title span {
-        font-size: 17px;
-        filter: drop-shadow(0 0 6px rgba(167,139,250,0.8));
-        -webkit-text-fill-color: initial;
-      }
-      .close-btn {
-        background: rgba(255,255,255,0.04);
-        border: 1px solid rgba(255,255,255,0.08);
-        color: #64748b;
-        cursor: pointer;
-        font-size: 14px;
+      .header-logo {
+        font-size: 18px;
+        color: #00c4b4;
+        filter: drop-shadow(0 0 4px rgba(0,196,180,0.4));
         line-height: 1;
-        padding: 5px 7px;
-        border-radius: 6px;
-        pointer-events: all;
-        transition: color 0.2s, background 0.2s, border-color 0.2s;
-      }
-      .close-btn:hover {
-        color: #f1f5f9;
-        background: rgba(255,255,255,0.09);
-        border-color: rgba(139,92,246,0.4);
-      }
-
-      /* ── Company Section ───────────────────────────────────────────────── */
-      .company-section {
         display: flex;
         align-items: center;
-        gap: 11px;
-        padding: 13px 16px;
-        border-bottom: 1px solid rgba(99,102,241,0.12);
-        background: rgba(255,255,255,0.015);
-        animation: fade-up 0.3s ease both;
       }
-      .company-avatar {
-        width: 38px;
-        height: 38px;
-        border-radius: 10px;
+      .header-title {
+        font-size: 14px;
+        font-weight: 600;
+        color: #e0e4ef;
+        letter-spacing: -0.01em;
+      }
+      .header-actions {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+      .header-btn {
+        width: 32px;
+        height: 32px;
+        border-radius: 8px;
+        background: transparent;
+        border: none;
+        color: #5a6278;
+        cursor: pointer;
+        pointer-events: all;
         display: flex;
         align-items: center;
         justify-content: center;
-        font-size: 17px;
-        font-weight: 900;
-        color: #fff;
+        font-size: 16px;
+        line-height: 1;
+        transition: background 0.15s, color 0.15s;
+        font-family: system-ui, -apple-system, sans-serif;
+      }
+      .header-btn:hover {
+        background: rgba(255,255,255,0.06);
+        color: #e0e4ef;
+      }
+      /* Legacy selector kept for wireEvents compatibility */
+      .close-btn {
+        width: 32px;
+        height: 32px;
+        border-radius: 8px;
+        background: transparent;
+        border: none;
+        color: #5a6278;
+        cursor: pointer;
+        pointer-events: all;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 16px;
+        line-height: 1;
+        transition: background 0.15s, color 0.15s;
+        font-family: system-ui, -apple-system, sans-serif;
+      }
+      .close-btn:hover {
+        background: rgba(255,255,255,0.06);
+        color: #e0e4ef;
+      }
+
+      /* ── Company Context Bar ───────────────────────────────────────────── */
+      .company-section {
+        flex-shrink: 0;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 16px;
+        border-bottom: 1px solid rgba(255,255,255,0.05);
+        background: rgba(255,255,255,0.015);
+        animation: fadeUp 0.3s ease both;
+      }
+      .company-avatar {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        background: rgba(0,196,180,0.15);
+        border: 1px solid rgba(0,196,180,0.3);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 12px;
+        font-weight: 700;
+        color: #00c4b4;
         flex-shrink: 0;
         letter-spacing: -0.02em;
-        border: 1.5px solid rgba(255,255,255,0.15);
-        box-shadow: 0 2px 12px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.1);
-        text-shadow: 0 1px 4px rgba(0,0,0,0.4);
       }
       .company-info { flex: 1; min-width: 0; }
       .company-name {
         font-size: 13px;
-        font-weight: 700;
-        color: #e2e8f0;
+        font-weight: 600;
+        color: #e0e4ef;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
-        letter-spacing: -0.01em;
       }
       .role-name {
         font-size: 11px;
-        color: #6b7a99;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        margin-top: 2px;
-      }
-      .score-chip {
-        flex-shrink: 0;
-        font-size: 12px;
-        font-weight: 900;
-        padding: 4px 9px;
-        border-radius: 20px;
-        border: 1.5px solid;
-        background: rgba(0,0,0,0.3);
-        line-height: 1.4;
-        backdrop-filter: blur(4px);
-        letter-spacing: -0.01em;
-        text-shadow: 0 0 8px currentColor;
-        animation: pulse-glow 3s ease-in-out infinite;
-      }
-
-      /* ── Score Bar ─────────────────────────────────────────────────────── */
-      .score-bar-wrap {
-        padding: 10px 16px 2px;
-      }
-      .score-bar-label {
-        display: flex;
-        justify-content: space-between;
-        font-size: 10px;
-        font-weight: 600;
-        color: #4b5878;
-        margin-bottom: 6px;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-      }
-      .score-bar-track {
-        height: 5px;
-        background: rgba(255,255,255,0.06);
-        border-radius: 3px;
-        overflow: hidden;
-        border: 1px solid rgba(255,255,255,0.04);
-      }
-      .score-bar-fill {
-        height: 100%;
-        border-radius: 3px;
-        transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1);
-        animation: bar-grow 0.9s cubic-bezier(0.4,0,0.2,1) both;
-        box-shadow: 0 0 8px currentColor;
-        position: relative;
-      }
-      .score-bar-fill::after {
-        content: '';
-        position: absolute;
-        top: 0; right: 0;
-        width: 20px; height: 100%;
-        background: linear-gradient(90deg, transparent, rgba(255,255,255,0.35));
-        border-radius: 3px;
-      }
-
-      /* ── CTA Button ────────────────────────────────────────────────────── */
-      .cta-section {
-        padding: 12px 16px 0;
-      }
-      .cta-btn {
-        width: 100%;
-        padding: 11px 16px;
-        background: linear-gradient(120deg, #7c3aed 0%, #6d28d9 25%, #4f46e5 60%, #06b6d4 100%);
-        background-size: 250% 250%;
-        border: none;
-        border-radius: 10px;
-        color: #fff;
-        font-size: 13px;
-        font-weight: 800;
-        cursor: pointer;
-        pointer-events: all;
-        letter-spacing: -0.01em;
-        transition: transform 0.15s, box-shadow 0.2s;
-        animation: gradient-sweep 4s ease infinite;
-        box-shadow: 0 2px 16px rgba(109,40,217,0.45), 0 1px 4px rgba(0,0,0,0.3);
-        position: relative;
-        overflow: hidden;
-      }
-      .cta-btn::before {
-        content: '';
-        position: absolute;
-        top: 0; left: -100%;
-        width: 60%;
-        height: 100%;
-        background: linear-gradient(90deg, transparent, rgba(255,255,255,0.18), transparent);
-        transition: left 0.5s ease;
-      }
-      .cta-btn:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 24px rgba(109,40,217,0.6), 0 2px 8px rgba(0,0,0,0.4);
-      }
-      .cta-btn:hover::before { left: 140%; }
-      .cta-btn:active { transform: translateY(0); box-shadow: 0 1px 8px rgba(109,40,217,0.4); }
-
-      /* ── Section Headings ──────────────────────────────────────────────── */
-      .section {
-        padding: 12px 16px 0;
-      }
-      .section-heading {
-        font-size: 10px;
-        font-weight: 800;
-        letter-spacing: 0.1em;
-        color: #3b4a6b;
-        text-transform: uppercase;
-        margin-bottom: 8px;
-        display: flex;
-        align-items: center;
-        gap: 6px;
-      }
-      .section-heading::after {
-        content: '';
-        flex: 1;
-        height: 1px;
-        background: linear-gradient(90deg, rgba(99,102,241,0.2), transparent);
-      }
-
-      /* ── Field Rows ────────────────────────────────────────────────────── */
-      .field-row {
-        display: flex;
-        align-items: center;
-        gap: 9px;
-        padding: 8px 11px;
-        background: rgba(255,255,255,0.025);
-        border: 1px solid rgba(99,102,241,0.12);
-        border-radius: 9px;
-        margin-bottom: 5px;
-        transition: background 0.2s, border-color 0.2s, box-shadow 0.2s;
-        animation: fade-up 0.25s ease both;
-        backdrop-filter: blur(4px);
-      }
-      .field-row:hover {
-        background: rgba(99,102,241,0.07);
-        border-color: rgba(99,102,241,0.28);
-        box-shadow: 0 0 0 1px rgba(99,102,241,0.1), 0 2px 10px rgba(0,0,0,0.2);
-      }
-      .field-info { flex: 1; min-width: 0; }
-      .field-label {
-        font-size: 11px;
-        font-weight: 500;
-        color: #94a3b8;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-      }
-      .field-value {
-        font-size: 11px;
-        color: #3d4f72;
+        color: #8b92a8;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
         margin-top: 1px;
       }
-      .fill-btn, .attach-btn {
+      .score-chip {
         flex-shrink: 0;
-        padding: 4px 10px;
-        border-radius: 6px;
+        display: flex;
+        align-items: center;
+        gap: 5px;
         font-size: 11px;
+        font-weight: 700;
+        padding: 3px 8px;
+        border-radius: 99px;
+        background: rgba(255,255,255,0.04);
+        border: 1px solid rgba(255,255,255,0.1);
+        color: #8b92a8;
+        letter-spacing: -0.01em;
+        white-space: nowrap;
+      }
+      .score-chip-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        flex-shrink: 0;
+        display: inline-block;
+      }
+
+      /* ── Scrollable Content Area ───────────────────────────────────────── */
+      .panel-body {
+        flex: 1;
+        overflow-y: auto;
+        overflow-x: hidden;
+        padding: 12px;
+        min-height: 0;
+      }
+      .panel-body::-webkit-scrollbar { width: 2px; }
+      .panel-body::-webkit-scrollbar-track { background: transparent; }
+      .panel-body::-webkit-scrollbar-thumb {
+        background: rgba(0,196,180,0.25);
+        border-radius: 1px;
+      }
+      .panel-body::-webkit-scrollbar-thumb:hover {
+        background: rgba(0,196,180,0.45);
+      }
+
+      /* ── Score Bar Card ────────────────────────────────────────────────── */
+      .score-bar-wrap {
+        margin-bottom: 8px;
+        padding: 12px;
+        background: #111318;
+        border-radius: 10px;
+        border: 1px solid rgba(255,255,255,0.07);
+        animation: fadeUp 0.3s ease both;
+      }
+      .score-bar-label {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 11px;
+        font-weight: 600;
+        color: #5a6278;
+        margin-bottom: 8px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .score-bar-label span:last-child {
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+        text-transform: none;
+      }
+      .score-bar-track {
+        height: 6px;
+        background: rgba(255,255,255,0.06);
+        border-radius: 3px;
+        overflow: hidden;
+      }
+      .score-bar-fill {
+        height: 100%;
+        border-radius: 3px;
+        animation: bar-grow 0.6s ease-out both;
+        position: relative;
+      }
+
+      /* ── CTA / Autofill Button ─────────────────────────────────────────── */
+      .cta-section {
+        margin-bottom: 8px;
+      }
+      .cta-btn {
+        width: 100%;
+        height: 44px;
+        background: linear-gradient(135deg, #00c4b4 0%, #009688 100%);
+        border: none;
+        border-radius: 10px;
+        color: #fff;
+        font-size: 14px;
         font-weight: 700;
         cursor: pointer;
         pointer-events: all;
-        border: 1px solid rgba(124,58,237,0.5);
-        background: rgba(124,58,237,0.1);
-        color: #a78bfa;
-        transition: background 0.2s, border-color 0.2s, box-shadow 0.2s, color 0.2s;
-        white-space: nowrap;
         letter-spacing: -0.01em;
+        transition: filter 0.15s, transform 0.15s, box-shadow 0.15s;
+        box-shadow: 0 2px 16px rgba(0,196,180,0.3), 0 1px 4px rgba(0,0,0,0.3);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        font-family: system-ui, -apple-system, sans-serif;
+      }
+      .cta-btn:hover {
+        filter: brightness(1.06);
+        transform: translateY(-1px);
+        box-shadow: 0 4px 24px rgba(0,196,180,0.4), 0 2px 8px rgba(0,0,0,0.3);
+      }
+      .cta-btn:active {
+        transform: scale(0.98);
+        filter: brightness(0.97);
+        box-shadow: 0 1px 8px rgba(0,196,180,0.2);
+      }
+
+      /* ── Section Cards ─────────────────────────────────────────────────── */
+      .section {
+        background: #111318;
+        border-radius: 10px;
+        border: 1px solid rgba(255,255,255,0.07);
+        padding: 12px;
+        margin-bottom: 8px;
+        animation: fadeUp 0.25s ease both;
+      }
+      .section-heading {
+        font-size: 11px;
+        font-weight: 600;
+        color: #5a6278;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-bottom: 10px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .section-count {
+        font-size: 10px;
+        font-weight: 600;
+        padding: 1px 6px;
+        border-radius: 99px;
+        background: rgba(255,255,255,0.06);
+        color: #8b92a8;
+        letter-spacing: 0;
+        text-transform: none;
+      }
+
+      /* ── Field Cards ───────────────────────────────────────────────────── */
+      .field-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 12px;
+        background: #1a1d25;
+        border-radius: 8px;
+        margin-bottom: 5px;
+        transition: background 0.15s;
+        cursor: default;
+      }
+      .field-row:last-child { margin-bottom: 0; }
+      .field-row:hover {
+        background: rgba(255,255,255,0.04);
+      }
+      .field-info { flex: 1; min-width: 0; }
+      .field-label {
+        font-size: 11px;
+        font-weight: 400;
+        color: #8b92a8;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .field-value {
+        font-size: 13px;
+        font-weight: 500;
+        color: #e0e4ef;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        margin-top: 2px;
+      }
+      .fill-btn, .attach-btn {
+        flex-shrink: 0;
+        height: 28px;
+        padding: 0 12px;
+        border-radius: 14px;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        pointer-events: all;
+        border: 1px solid rgba(0,196,180,0.4);
+        background: rgba(0,196,180,0.08);
+        color: #00c4b4;
+        transition: background 0.15s, border-color 0.15s;
+        white-space: nowrap;
+        display: flex;
+        align-items: center;
+        font-family: system-ui, -apple-system, sans-serif;
       }
       .fill-btn:hover, .attach-btn:hover {
-        background: rgba(124,58,237,0.22);
-        border-color: rgba(139,92,246,0.7);
-        color: #c4b5fd;
-        box-shadow: 0 0 10px rgba(124,58,237,0.25);
+        background: rgba(0,196,180,0.16);
+        border-color: rgba(0,196,180,0.65);
       }
 
       /* ── Question Cards ────────────────────────────────────────────────── */
       .question-card {
-        background: rgba(255,255,255,0.028);
-        border: 1px solid rgba(99,102,241,0.15);
-        border-radius: 11px;
+        background: #111318;
+        border: 1px solid rgba(255,255,255,0.07);
+        border-radius: 10px;
         padding: 12px;
-        margin-bottom: 7px;
-        transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
-        animation: fade-up 0.28s ease both;
-        backdrop-filter: blur(8px);
-        -webkit-backdrop-filter: blur(8px);
-        position: relative;
-        overflow: hidden;
+        margin-bottom: 6px;
+        transition: border-color 0.15s;
+        animation: fadeUp 0.28s ease both;
       }
-      .question-card::before {
-        content: '';
-        position: absolute;
-        top: 0; left: 0; right: 0;
-        height: 1px;
-        background: linear-gradient(90deg, transparent, rgba(139,92,246,0.4), rgba(99,102,241,0.3), transparent);
-      }
+      .question-card:last-child { margin-bottom: 0; }
       .question-card:hover {
-        background: rgba(99,102,241,0.05);
-        border-color: rgba(99,102,241,0.3);
-        box-shadow: 0 0 0 1px rgba(99,102,241,0.1), 0 4px 20px rgba(0,0,0,0.25);
+        border-color: rgba(255,255,255,0.12);
       }
       .question-text {
-        font-size: 12px;
-        color: #c8d4e8;
+        font-size: 13px;
+        color: #e0e4ef;
         line-height: 1.5;
         margin-bottom: 8px;
         font-weight: 400;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
       }
       .question-meta {
         display: flex;
         gap: 5px;
         flex-wrap: wrap;
         margin-bottom: 10px;
+        align-items: center;
       }
 
       /* ── Pills ─────────────────────────────────────────────────────────── */
       .pill {
-        font-size: 9px;
-        font-weight: 700;
+        font-size: 10px;
+        font-weight: 600;
         padding: 2px 8px;
-        border-radius: 20px;
+        border-radius: 99px;
         background: rgba(255,255,255,0.05);
-        color: #475569;
+        color: #5a6278;
         border: 1px solid rgba(255,255,255,0.07);
-        letter-spacing: 0.06em;
-        text-transform: uppercase;
-        backdrop-filter: blur(4px);
+        letter-spacing: 0;
       }
       .pill-cat {
-        color: #a78bfa;
-        border: 1px solid rgba(139,92,246,0.3);
-        background: rgba(139,92,246,0.1);
-        text-shadow: 0 0 8px rgba(167,139,250,0.5);
+        color: #00c4b4;
+        border: 1px solid rgba(0,196,180,0.3);
+        background: rgba(0,196,180,0.08);
       }
 
-      /* ── Generate Button ───────────────────────────────────────────────── */
-      .generate-btn {
-        width: 100%;
-        padding: 8px;
-        background: linear-gradient(120deg, rgba(109,40,217,0.15) 0%, rgba(79,70,229,0.15) 100%);
-        border: 1px solid rgba(109,40,217,0.4);
-        border-radius: 8px;
-        color: #a78bfa;
-        font-size: 11px;
-        font-weight: 700;
-        cursor: pointer;
-        pointer-events: all;
-        transition: background 0.2s, border-color 0.2s, box-shadow 0.2s, color 0.2s;
-        letter-spacing: -0.01em;
-        position: relative;
-        overflow: hidden;
-      }
-      .generate-btn::before {
-        content: '';
-        position: absolute;
-        top: 0; left: -100%;
-        width: 60%;
-        height: 100%;
-        background: linear-gradient(90deg, transparent, rgba(167,139,250,0.12), transparent);
-        transition: left 0.4s ease;
-      }
-      .generate-btn:hover {
-        background: linear-gradient(120deg, rgba(109,40,217,0.28) 0%, rgba(79,70,229,0.25) 100%);
-        border-color: rgba(139,92,246,0.65);
-        color: #c4b5fd;
-        box-shadow: 0 0 16px rgba(109,40,217,0.3), inset 0 0 12px rgba(139,92,246,0.06);
-      }
-      .generate-btn:hover::before { left: 140%; }
-      .generate-btn:disabled {
-        opacity: 0.4;
-        cursor: not-allowed;
-        box-shadow: none;
-      }
-
-      /* ── Draft Controls ────────────────────────────────────────────────── */
-      .copy-draft-btn {
-        background: rgba(255,255,255,0.04);
-        border: 1px solid rgba(255,255,255,0.1);
-        color: #64748b;
-        cursor: pointer;
-        padding: 5px 8px;
-        border-radius: 6px;
-        font-size: 13px;
-        line-height: 1;
-        transition: color 0.2s, border-color 0.2s, background 0.2s, box-shadow 0.2s;
-        pointer-events: all;
-      }
-      .copy-draft-btn:hover {
-        color: #a78bfa;
-        border-color: rgba(124,58,237,0.5);
-        background: rgba(124,58,237,0.1);
-        box-shadow: 0 0 8px rgba(124,58,237,0.2);
-      }
-      .regen-btn {
-        background: none;
-        border: none;
-        color: #3b4a6b;
-        cursor: pointer;
-        pointer-events: all;
-        font-size: 14px;
-        padding: 3px 5px;
-        border-radius: 5px;
-        transition: color 0.2s, background 0.2s;
-      }
-      .regen-btn:hover {
-        color: #a78bfa;
-        background: rgba(124,58,237,0.1);
-      }
+      /* ── Draft Tabs ────────────────────────────────────────────────────── */
       .draft-tabs {
         display: flex;
-        gap: 4px;
+        gap: 3px;
         margin-bottom: 8px;
+        background: rgba(255,255,255,0.03);
+        border-radius: 8px;
+        padding: 3px;
       }
       .draft-tab {
         flex: 1;
-        padding: 5px 4px;
-        background: rgba(255,255,255,0.04);
-        border: 1px solid rgba(255,255,255,0.06);
+        padding: 5px 6px;
+        background: transparent;
+        border: none;
         border-radius: 6px;
-        color: #475569;
-        font-size: 10px;
-        font-weight: 700;
+        color: #5a6278;
+        font-size: 11px;
+        font-weight: 600;
         cursor: pointer;
         pointer-events: all;
         text-align: center;
-        transition: all 0.2s;
-        letter-spacing: -0.01em;
+        transition: background 0.15s, color 0.15s;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        font-family: system-ui, -apple-system, sans-serif;
       }
       .draft-tab.active {
-        background: linear-gradient(135deg, rgba(109,40,217,0.3) 0%, rgba(79,70,229,0.25) 100%);
-        border-color: rgba(139,92,246,0.5);
-        color: #c4b5fd;
-        box-shadow: 0 0 10px rgba(109,40,217,0.2);
-        text-shadow: 0 0 6px rgba(196,181,253,0.5);
+        background: #1a1d25;
+        color: #00c4b4;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.3);
       }
+      .draft-tab:hover:not(.active) {
+        color: #8b92a8;
+        background: rgba(255,255,255,0.04);
+      }
+
+      /* ── Draft Text / Answer Preview ───────────────────────────────────── */
       .draft-text {
-        font-size: 11px;
-        color: #94a3b8;
-        line-height: 1.55;
+        font-size: 12px;
+        color: #8b92a8;
+        line-height: 1.6;
         background: rgba(0,0,0,0.3);
-        border: 1px solid rgba(99,102,241,0.12);
-        border-radius: 7px;
-        padding: 8px 10px;
-        margin-bottom: 7px;
-        max-height: 105px;
+        border: 1px solid rgba(255,255,255,0.07);
+        border-radius: 8px;
+        padding: 10px 12px;
+        margin-bottom: 8px;
+        max-height: 110px;
         overflow-y: auto;
         white-space: pre-wrap;
-        backdrop-filter: blur(4px);
-        transition: border-color 0.2s;
+        transition: border-color 0.15s;
       }
       .draft-text:hover {
-        border-color: rgba(99,102,241,0.25);
+        border-color: rgba(0,196,180,0.2);
       }
-      .draft-text::-webkit-scrollbar { width: 3px; }
+      .draft-text::-webkit-scrollbar { width: 2px; }
       .draft-text::-webkit-scrollbar-track { background: transparent; }
       .draft-text::-webkit-scrollbar-thumb {
-        background: rgba(99,102,241,0.3);
-        border-radius: 2px;
+        background: rgba(0,196,180,0.25);
+        border-radius: 1px;
       }
       .draft-actions {
         display: flex;
@@ -1625,89 +1624,148 @@ class FloatingPanel {
         gap: 6px;
       }
 
+      /* ── Generate Button ───────────────────────────────────────────────── */
+      .generate-btn {
+        width: 100%;
+        padding: 9px;
+        background: transparent;
+        border: 1px solid rgba(0,196,180,0.35);
+        border-radius: 8px;
+        color: #00c4b4;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        pointer-events: all;
+        transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+        letter-spacing: -0.01em;
+        font-family: system-ui, -apple-system, sans-serif;
+      }
+      .generate-btn:hover {
+        background: rgba(0,196,180,0.08);
+        border-color: rgba(0,196,180,0.6);
+        box-shadow: 0 0 12px rgba(0,196,180,0.1);
+      }
+      .generate-btn:active {
+        background: rgba(0,196,180,0.12);
+      }
+      .generate-btn:disabled {
+        opacity: 0.35;
+        cursor: not-allowed;
+      }
+
       /* ── Fill Answer Button ────────────────────────────────────────────── */
       .fill-answer-btn {
         flex: 1;
-        padding: 7px;
-        background: linear-gradient(120deg, #7c3aed 0%, #6d28d9 40%, #4f46e5 100%);
-        background-size: 200% 200%;
+        height: 34px;
+        background: linear-gradient(135deg, #00c4b4 0%, #009688 100%);
         border: none;
-        border-radius: 7px;
+        border-radius: 8px;
         color: #fff;
-        font-size: 11px;
-        font-weight: 800;
+        font-size: 12px;
+        font-weight: 700;
         cursor: pointer;
         pointer-events: all;
-        transition: transform 0.15s, box-shadow 0.2s;
-        animation: gradient-sweep 3s ease infinite;
-        box-shadow: 0 2px 10px rgba(109,40,217,0.4);
+        transition: filter 0.15s, transform 0.15s, box-shadow 0.15s;
+        box-shadow: 0 2px 10px rgba(0,196,180,0.25);
         letter-spacing: -0.01em;
-        position: relative;
-        overflow: hidden;
-      }
-      .fill-answer-btn::before {
-        content: '';
-        position: absolute;
-        top: 0; left: -100%;
-        width: 60%;
-        height: 100%;
-        background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
-        transition: left 0.4s ease;
-      }
-      .fill-answer-btn:hover {
-        transform: translateY(-1px);
-        box-shadow: 0 4px 18px rgba(109,40,217,0.55);
-      }
-      .fill-answer-btn:hover::before { left: 140%; }
-      .fill-answer-btn:active { transform: translateY(0); }
-
-      /* ── Error & Loading States ────────────────────────────────────────── */
-      .error-text {
-        font-size: 10px;
-        color: #f87171;
-        margin-top: 5px;
-        padding: 4px 8px;
-        background: rgba(248,113,113,0.08);
-        border: 1px solid rgba(248,113,113,0.2);
-        border-radius: 5px;
-        line-height: 1.4;
-      }
-      .loading-text {
-        font-size: 11px;
-        color: #4b5878;
-        text-align: center;
-        padding: 8px 0;
         display: flex;
         align-items: center;
         justify-content: center;
-        gap: 6px;
-        letter-spacing: 0.02em;
+        gap: 4px;
+        font-family: system-ui, -apple-system, sans-serif;
       }
-      .loading-text::before,
-      .loading-text::after {
-        content: '●';
-        font-size: 6px;
-        animation: dot-bounce 1.4s ease-in-out infinite both;
+      .fill-answer-btn:hover {
+        filter: brightness(1.08);
+        transform: translateY(-1px);
+        box-shadow: 0 4px 16px rgba(0,196,180,0.35);
       }
-      .loading-text::before { animation-delay: 0s; color: #7c3aed; }
-      .loading-text::after  { animation-delay: 0.28s; color: #4f46e5; }
+      .fill-answer-btn:active {
+        transform: scale(0.98);
+        filter: brightness(0.97);
+      }
+
+      /* ── Copy / Regen Buttons ──────────────────────────────────────────── */
+      .copy-draft-btn {
+        width: 34px;
+        height: 34px;
+        background: rgba(255,255,255,0.04);
+        border: 1px solid rgba(255,255,255,0.08);
+        color: #5a6278;
+        cursor: pointer;
+        border-radius: 8px;
+        font-size: 14px;
+        line-height: 1;
+        transition: color 0.15s, border-color 0.15s, background 0.15s;
+        pointer-events: all;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family: system-ui, -apple-system, sans-serif;
+      }
+      .copy-draft-btn:hover {
+        color: #00c4b4;
+        border-color: rgba(0,196,180,0.35);
+        background: rgba(0,196,180,0.06);
+      }
+      .regen-btn {
+        width: 34px;
+        height: 34px;
+        background: rgba(255,255,255,0.04);
+        border: 1px solid rgba(255,255,255,0.08);
+        color: #5a6278;
+        cursor: pointer;
+        pointer-events: all;
+        font-size: 15px;
+        border-radius: 8px;
+        transition: color 0.15s, background 0.15s, border-color 0.15s;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family: system-ui, -apple-system, sans-serif;
+      }
+      .regen-btn:hover {
+        color: #8b92a8;
+        background: rgba(255,255,255,0.06);
+        border-color: rgba(255,255,255,0.12);
+      }
+
+      /* ── Loading States ────────────────────────────────────────────────── */
+      .loading-text {
+        font-size: 12px;
+        color: #5a6278;
+        text-align: center;
+        padding: 10px 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+      }
+      .loading-spinner {
+        width: 16px;
+        height: 16px;
+        border: 2px solid rgba(0,196,180,0.15);
+        border-top-color: #00c4b4;
+        border-radius: 50%;
+        animation: spin 0.7s linear infinite;
+        flex-shrink: 0;
+        display: inline-block;
+      }
       .provider-badge {
         font-size: 9px;
         font-weight: 700;
-        letter-spacing: 0.08em;
+        letter-spacing: 0.06em;
         text-transform: uppercase;
         padding: 1px 6px;
         border-radius: 99px;
-        background: rgba(124,58,237,0.2);
-        border: 1px solid rgba(124,58,237,0.4);
-        color: #a78bfa;
-        margin-left: 2px;
+        background: rgba(0,196,180,0.1);
+        border: 1px solid rgba(0,196,180,0.25);
+        color: #00c4b4;
       }
       .elapsed-time {
         font-size: 9px;
-        color: #475569;
-        margin-left: 2px;
+        color: #5a6278;
         font-variant-numeric: tabular-nums;
+        font-family: ui-monospace, monospace;
       }
       .loading-spinner-wrap {
         display: flex;
@@ -1717,55 +1775,94 @@ class FloatingPanel {
       }
       .loading-spinner-wrap::before {
         content: '';
-        width: 18px;
-        height: 18px;
-        border: 2px solid rgba(99,102,241,0.2);
-        border-top-color: #7c3aed;
+        width: 16px;
+        height: 16px;
+        border: 2px solid rgba(0,196,180,0.15);
+        border-top-color: #00c4b4;
         border-radius: 50%;
-        animation: spin 0.75s linear infinite;
+        animation: spin 0.7s linear infinite;
         display: block;
+      }
+
+      /* ── Error ─────────────────────────────────────────────────────────── */
+      .error-text {
+        font-size: 11px;
+        color: #f87171;
+        margin-top: 6px;
+        padding: 6px 10px;
+        background: rgba(248,113,113,0.07);
+        border: 1px solid rgba(248,113,113,0.18);
+        border-radius: 7px;
+        line-height: 1.4;
       }
 
       /* ── Footer ────────────────────────────────────────────────────────── */
       .footer {
-        margin-top: auto;
+        flex-shrink: 0;
         padding: 12px 16px 16px;
-        border-top: 1px solid rgba(99,102,241,0.1);
-        background: linear-gradient(0deg, rgba(7,7,18,0.9) 0%, transparent 100%);
+        border-top: 1px solid rgba(255,255,255,0.05);
       }
       .auth-warn {
-        font-size: 10px;
-        color: #fbbf24;
-        background: rgba(251,191,36,0.07);
-        border: 1px solid rgba(251,191,36,0.2);
+        font-size: 11px;
+        color: #f59e0b;
+        background: rgba(245,158,11,0.07);
+        border: 1px solid rgba(245,158,11,0.18);
         border-radius: 8px;
-        padding: 8px 11px;
-        line-height: 1.45;
-        backdrop-filter: blur(4px);
+        padding: 8px 12px;
+        line-height: 1.5;
+        margin-bottom: 8px;
       }
       .footer-brand {
-        font-size: 9.5px;
-        background: linear-gradient(90deg, rgba(99,102,241,0.25), rgba(139,92,246,0.35), rgba(99,102,241,0.25));
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
+        font-size: 10px;
+        color: #5a6278;
         text-align: center;
-        margin-top: 8px;
-        letter-spacing: 0.1em;
+        letter-spacing: 0.08em;
         text-transform: uppercase;
-        font-weight: 700;
+        font-weight: 600;
       }
 
       /* ── AutoFill Banner ───────────────────────────────────────────────── */
       .aap-autofill-banner {
-        display: flex; align-items: center; justify-content: space-between;
-        background: rgba(0,206,209,0.1); border: 1px solid rgba(0,206,209,0.3);
-        border-radius: 6px; padding: 8px 12px; margin: 10px 16px 0;
-        font-size: 12px; color: #00CED1;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        background: rgba(0,196,180,0.08);
+        border: 1px solid rgba(0,196,180,0.25);
+        border-radius: 8px;
+        padding: 8px 12px;
+        margin-bottom: 8px;
+        font-size: 12px;
+        color: #00c4b4;
+        animation: fadeUp 0.2s ease both;
       }
-      .aap-autofill-actions { display: flex; gap: 6px; }
-      .aap-btn-undo { background: rgba(0,206,209,0.2); border: 1px solid #00CED1; color: #00CED1; border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 11px; pointer-events: all; }
-      .aap-btn-dismiss { background: transparent; border: none; color: #666; cursor: pointer; font-size: 14px; padding: 0 4px; pointer-events: all; }
+      .aap-autofill-actions { display: flex; gap: 6px; align-items: center; }
+      .aap-btn-undo {
+        background: rgba(0,196,180,0.15);
+        border: 1px solid rgba(0,196,180,0.4);
+        color: #00c4b4;
+        border-radius: 6px;
+        padding: 3px 10px;
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 600;
+        pointer-events: all;
+        transition: background 0.15s;
+        font-family: system-ui, -apple-system, sans-serif;
+      }
+      .aap-btn-undo:hover { background: rgba(0,196,180,0.25); }
+      .aap-btn-dismiss {
+        background: transparent;
+        border: none;
+        color: #5a6278;
+        cursor: pointer;
+        font-size: 16px;
+        padding: 0 2px;
+        pointer-events: all;
+        line-height: 1;
+        transition: color 0.15s;
+        font-family: system-ui, -apple-system, sans-serif;
+      }
+      .aap-btn-dismiss:hover { color: #8b92a8; }
 
       /* ── Similarity Badges ─────────────────────────────────────────────── */
       .aap-badge-vault {
@@ -1774,10 +1871,10 @@ class FloatingPanel {
         border-radius: 9999px;
         font-size: 10px;
         font-weight: 600;
-        background: rgba(0,206,209,0.15);
-        color: #00CED1;
-        border: 1px solid rgba(0,206,209,0.3);
-        margin-left: 6px;
+        background: rgba(0,196,180,0.1);
+        color: #00c4b4;
+        border: 1px solid rgba(0,196,180,0.25);
+        margin-left: 5px;
         vertical-align: middle;
       }
       .aap-badge-llm {
@@ -1786,10 +1883,10 @@ class FloatingPanel {
         border-radius: 9999px;
         font-size: 10px;
         font-weight: 600;
-        background: rgba(99,102,241,0.15);
-        color: #818cf8;
-        border: 1px solid rgba(99,102,241,0.3);
-        margin-left: 6px;
+        background: rgba(139,92,246,0.1);
+        color: #8b5cf6;
+        border: 1px solid rgba(139,92,246,0.25);
+        margin-left: 5px;
         vertical-align: middle;
       }
     `;
@@ -1797,176 +1894,187 @@ class FloatingPanel {
 
   private render(): void {
     const { isOpen, company, roleTitle, atsScore, loadingAts, fields, questionStates, clerkUserId } = this;
-    const hue = companyHue(company || "A");
-    const companyInitial = (company || "?").charAt(0).toUpperCase();
+    const companyInitial = (company || "A").charAt(0).toUpperCase();
     const fillableCount = fields.filter(
       (f) => f.fieldType !== "resume_upload" && f.fieldType !== "cover_letter_upload"
     ).length;
 
-    const scoreChipHtml =
-      atsScore !== null
-        ? `<div class="score-chip" style="color:${scoreColor(atsScore)};border-color:${scoreColor(atsScore)};">${atsScore}</div>`
-        : loadingAts
-        ? `<div class="score-chip" style="color:#475569;border-color:#1f1f38;font-size:10px;">…</div>`
-        : "";
+    // FAB badge: show ATS score if available
+    const fabBadgeHtml = atsScore !== null
+      ? `<div class="fab-badge" style="background:${scoreColor(atsScore)};color:#fff;">${atsScore}</div>`
+      : "";
 
-    const tabScoreHtml =
-      atsScore !== null
-        ? `<div class="tab-score" style="color:${scoreColor(atsScore)};">${atsScore}</div>`
-        : "";
+    // Score chip inside company context bar
+    const scoreChipHtml = atsScore !== null
+      ? `<div class="score-chip">
+           <span class="score-chip-dot" style="background:${scoreColor(atsScore)};"></span>
+           <span style="color:${scoreColor(atsScore)}">${atsScore}%</span>
+         </div>`
+      : loadingAts
+      ? `<div class="score-chip"><span style="animation:pulse 1.5s ease infinite;display:inline-block;">…</span></div>`
+      : "";
 
-    const scoreBarHtml =
-      atsScore !== null
-        ? `<div class="score-bar-wrap">
-            <div class="score-bar-label"><span>ATS Match</span><span style="color:${scoreColor(atsScore)}">${atsScore}%</span></div>
-            <div class="score-bar-track">
-              <div class="score-bar-fill" style="width:${atsScore}%;background:${scoreColor(atsScore)};"></div>
-            </div>
-           </div>`
-        : "";
+    // ATS score bar card
+    const scoreBarHtml = atsScore !== null
+      ? `<div class="score-bar-wrap">
+           <div class="score-bar-label">
+             <span>ATS Match</span>
+             <span style="color:${scoreColor(atsScore)}">${atsScore}%</span>
+           </div>
+           <div class="score-bar-track">
+             <div class="score-bar-fill" style="width:${atsScore}%;background:${scoreColor(atsScore)};box-shadow:0 0 8px ${scoreColor(atsScore)};"></div>
+           </div>
+         </div>`
+      : "";
 
-    const ctaHtml =
-      fillableCount > 0
-        ? `<div class="cta-section">
-            <button class="cta-btn" id="__aap_autofill__">&#9889; Autofill ${fillableCount} field${fillableCount !== 1 ? "s" : ""}</button>
-           </div>`
-        : "";
+    // Autofill CTA
+    const ctaHtml = fillableCount > 0
+      ? `<div class="cta-section">
+           <button class="cta-btn" id="__aap_autofill__">&#9889; Autofill ${fillableCount} field${fillableCount !== 1 ? "s" : ""}</button>
+         </div>`
+      : "";
 
+    // Autofill undo banner
     const autoFillBannerHtml = this.showAutoFillBanner
       ? `<div class="aap-autofill-banner">
-          <span>✓ Auto-filled from your profile (ATS match: ${Math.round((this.atsScore ?? 0) * 100)}%)</span>
-          <div class="aap-autofill-actions">
-            <button class="aap-btn-undo" data-action="undo-autofill">Undo</button>
-            <button class="aap-btn-dismiss" data-action="dismiss-autofill">✕</button>
-          </div>
-        </div>`
+           <span>&#10003; Auto-filled ${fillableCount} fields from profile</span>
+           <div class="aap-autofill-actions">
+             <button class="aap-btn-undo" data-action="undo-autofill">Undo</button>
+             <button class="aap-btn-dismiss" data-action="dismiss-autofill">&#x2715;</button>
+           </div>
+         </div>`
       : "";
 
-    const fieldsHtml =
-      fields.length > 0
-        ? `<div class="section">
-            <div class="section-heading">Form Fields ${fields.length}</div>
-            ${fields
-              .map((f, i) => {
-                const isFile = f.fieldType === "resume_upload" || f.fieldType === "cover_letter_upload";
-                const suggested = isFile ? "" : (profileValue(f.fieldType, this.profile) || "—");
-                const btn = isFile
-                  ? `<button class="attach-btn" data-field-idx="${i}">Attach</button>`
-                  : `<button class="fill-btn" data-field-idx="${i}">Fill</button>`;
-                return `<div class="field-row">
-                  <div class="field-info">
-                    <div class="field-label">${truncate(f.label || f.fieldType.replace(/_/g, " "), 36)}</div>
-                    ${!isFile ? `<div class="field-value">${truncate(suggested, 30)}</div>` : ""}
-                  </div>
-                  ${btn}
-                </div>`;
-              })
-              .join("")}
-           </div>`
-        : "";
+    // Fields section
+    const fieldsHtml = fields.length > 0
+      ? `<div class="section" style="animation-delay:${0 * 30}ms">
+           <div class="section-heading">Fields <span class="section-count">${fields.length}</span></div>
+           ${fields.map((f, i) => {
+             const isFile = f.fieldType === "resume_upload" || f.fieldType === "cover_letter_upload";
+             const suggested = isFile ? "" : (profileValue(f.fieldType, this.profile) || "");
+             const btn = isFile
+               ? `<button class="attach-btn" data-field-idx="${i}">Attach</button>`
+               : `<button class="fill-btn" data-field-idx="${i}">Fill</button>`;
+             return `<div class="field-row">
+               <div class="field-info">
+                 <div class="field-label">${truncate(f.label || f.fieldType.replace(/_/g, " "), 38)}</div>
+                 ${suggested ? `<div class="field-value">${truncate(suggested, 32)}</div>` : ""}
+               </div>
+               ${btn}
+             </div>`;
+           }).join("")}
+         </div>`
+      : "";
 
+    // Cover letter section
     const coverLetterHtml = this.coverLetter
-      ? `<div class="section">
-          <div class="section-heading">Cover Letter ${this.coverLetterSource === "vault" ? '<span class="aap-badge-vault" style="font-size:11px">Loaded from vault</span>' : ""}</div>
-          <div class="draft-text" style="max-height:120px">${this.coverLetter.replace(/</g, "&lt;")}</div>
-        </div>`
+      ? `<div class="section" style="animation-delay:${1 * 30}ms">
+           <div class="section-heading">
+             Cover Letter
+             ${this.coverLetterSource === "vault" ? `<span class="aap-badge-vault">From vault</span>` : ""}
+           </div>
+           <div class="draft-text" style="max-height:120px">${this.coverLetter.replace(/</g, "&lt;")}</div>
+         </div>`
       : "";
 
-    const questionsHtml =
-      questionStates.length > 0
-        ? `<div class="section">
-            <div class="section-heading">Questions ${questionStates.length}</div>
-            ${questionStates
-              .map((state, qi) => {
-                const q = state.question;
-                const hasDrafts = state.drafts.length > 0;
-                const selectedText = state.drafts[state.selectedDraft] ?? "";
+    // Questions section
+    const questionsHtml = questionStates.length > 0
+      ? `<div class="section" style="animation-delay:${2 * 30}ms">
+           <div class="section-heading">Questions <span class="section-count">${questionStates.length}</span></div>
+           ${questionStates.map((state, qi) => {
+             const q = state.question;
+             const hasDrafts = state.drafts.length > 0;
+             const selectedText = state.drafts[state.selectedDraft] ?? "";
 
-                const draftTabsHtml = hasDrafts
-                  ? `<div class="draft-tabs">
-                      ${state.drafts
-                        .map((_, di) => {
-                          const src = state.draftSources?.[di];
-                          const provName = state.draftProviders[di];
-                          const label = provName
-                            ? provName.charAt(0).toUpperCase() + provName.slice(1)
-                            : `Draft ${di + 1}`;
-                          const badge = src?.source === "vault"
-                            ? `<span class="aap-badge-vault">From Memory · ${Math.round((src.similarityScore ?? 0) * 100)}% match</span>`
-                            : `<span class="aap-badge-llm">Generated</span>`;
-                          return `<button class="draft-tab ${di === state.selectedDraft ? "active" : ""}" data-q-idx="${qi}" data-d-idx="${di}">${label}${badge}</button>`;
-                        })
-                        .join("")}
-                     </div>
-                     <div class="draft-text">${selectedText.replace(/</g, "&lt;")}</div>
-                     <div class="draft-actions">
-                       <button class="fill-answer-btn" data-q-idx="${qi}" data-draft-text="${encodeURIComponent(selectedText)}">Fill Answer &#8595;</button>
-                       <button class="copy-draft-btn" data-q-idx="${qi}" data-draft-text="${encodeURIComponent(selectedText)}" title="Copy to clipboard">&#9112;</button>
-                       <button class="regen-btn" title="Regenerate" data-q-idx="${qi}" id="__aap_regen_${qi}__">&#8635;</button>
-                     </div>`
-                  : state.loading
-                  ? (() => {
-                      const elapsedSec = state.loadingStartMs ? Math.floor((Date.now() - state.loadingStartMs) / 1000) : 0;
-                      const providerBadge = state.loadingProvider
-                        ? `<span class="provider-badge">${state.loadingProvider}</span>`
-                        : "";
-                      const elapsed = elapsedSec > 0 ? `<span class="elapsed-time">${elapsedSec}s</span>` : "";
-                      return `<div class="loading-text">Generating… ${providerBadge}${elapsed}</div>`;
-                    })()
-                  : `<button class="generate-btn" data-q-idx="${qi}" ${state.loading ? "disabled" : ""}>&#10022; Generate Answer</button>`;
+             let draftContent = "";
+             if (hasDrafts) {
+               const tabsHtml = `<div class="draft-tabs">
+                 ${state.drafts.map((_, di) => {
+                   const src = state.draftSources?.[di];
+                   const provName = state.draftProviders[di];
+                   const label = provName
+                     ? provName.charAt(0).toUpperCase() + provName.slice(1)
+                     : `Draft ${di + 1}`;
+                   const badge = src?.source === "vault"
+                     ? `<span class="aap-badge-vault">${Math.round((src.similarityScore ?? 0) * 100)}%</span>`
+                     : `<span class="aap-badge-llm">AI</span>`;
+                   return `<button class="draft-tab ${di === state.selectedDraft ? "active" : ""}" data-q-idx="${qi}" data-d-idx="${di}">${label}${badge}</button>`;
+                 }).join("")}
+               </div>`;
+               draftContent = `${tabsHtml}
+                 <div class="draft-text">${selectedText.replace(/</g, "&lt;")}</div>
+                 <div class="draft-actions">
+                   <button class="fill-answer-btn" data-q-idx="${qi}" data-draft-text="${encodeURIComponent(selectedText)}">Fill Answer &#8595;</button>
+                   <button class="copy-draft-btn" data-q-idx="${qi}" data-draft-text="${encodeURIComponent(selectedText)}" title="Copy">&#9112;</button>
+                   <button class="regen-btn" title="Regenerate" data-q-idx="${qi}" id="__aap_regen_${qi}__">&#8635;</button>
+                 </div>`;
+             } else if (state.loading) {
+               const elapsedSec = state.loadingStartMs ? Math.floor((Date.now() - state.loadingStartMs) / 1000) : 0;
+               const providerBadge = state.loadingProvider
+                 ? `<span class="provider-badge">${state.loadingProvider}</span>`
+                 : "";
+               const elapsed = elapsedSec > 0 ? `<span class="elapsed-time">${elapsedSec}s</span>` : "";
+               draftContent = `<div class="loading-text"><span class="loading-spinner"></span>Generating… ${providerBadge}${elapsed}</div>`;
+             } else {
+               draftContent = `<button class="generate-btn" data-q-idx="${qi}" ${state.loading ? "disabled" : ""}>&#10022; Generate Answer</button>`;
+             }
 
-                const errorHtml = state.error
-                  ? `<div class="error-text">${state.error}</div>`
-                  : "";
+             const errorHtml = state.error
+               ? `<div class="error-text">${state.error}</div>`
+               : "";
 
-                return `<div class="question-card">
-                  <div class="question-text">${truncate(q.questionText, 120).replace(/</g, "&lt;")}</div>
-                  <div class="question-meta">
-                    <span class="pill pill-cat">${categoryLabel(q.category)}</span>
-                    ${q.maxLength ? `<span class="pill">${q.maxLength} chars</span>` : ""}
-                  </div>
-                  ${draftTabsHtml}
-                  ${errorHtml}
-                </div>`;
-              })
-              .join("")}
-           </div>`
-        : "";
+             return `<div class="question-card">
+               <div class="question-text">${truncate(q.questionText, 120).replace(/</g, "&lt;")}</div>
+               <div class="question-meta">
+                 <span class="pill pill-cat">${categoryLabel(q.category)}</span>
+                 ${q.maxLength ? `<span class="pill">${q.maxLength} chars</span>` : ""}
+               </div>
+               ${draftContent}
+               ${errorHtml}
+             </div>`;
+           }).join("")}
+         </div>`
+      : "";
 
+    // Footer
     const footerHtml = `<div class="footer">
-      ${
-        !clerkUserId
-          ? `<div class="auth-warn">&#9888; Sign in via the extension options page to enable AI features (answer generation, ATS scoring).</div>`
-          : ""
-      }
+      ${!clerkUserId
+        ? `<div class="auth-warn">&#9888; Sign in via the extension options page to enable AI features (answer generation, ATS scoring).</div>`
+        : ""}
       <div class="footer-brand">AutoApply AI</div>
     </div>`;
 
     this.shadow.innerHTML = `<style>${this.css()}</style>
-      <div class="toggle-tab" id="__aap_toggle__">
-        <div class="tab-logo">&#9889;</div>
-        <div class="tab-label">AUTO\nAPPLY</div>
-        ${tabScoreHtml}
+      <div class="toggle-tab${isOpen ? " panel-open" : ""}" id="__aap_toggle__">
+        <div class="fab-icon">${isOpen ? "&#x2715;" : "&#9889;"}</div>
+        ${fabBadgeHtml}
       </div>
       <div class="panel ${isOpen ? "open" : ""}" id="__aap_panel__">
         <div class="header">
-          <div class="header-title"><span>&#9889;</span> AutoApply AI</div>
-          <button class="close-btn" id="__aap_close__">&#x2715;</button>
+          <div class="header-left">
+            <div class="header-logo">&#9889;</div>
+            <div class="header-title">AutoApply AI</div>
+          </div>
+          <div class="header-actions">
+            <button class="close-btn" id="__aap_close__">&#x2715;</button>
+          </div>
         </div>
-        <div class="company-section">
-          <div class="company-avatar" style="background:hsl(${hue},55%,35%);">${companyInitial}</div>
+        ${company ? `<div class="company-section">
+          <div class="company-avatar">${companyInitial}</div>
           <div class="company-info">
-            <div class="company-name">${company || "Detecting…"}</div>
+            <div class="company-name">${company}</div>
             <div class="role-name">${truncate(roleTitle, 52)}</div>
           </div>
           ${scoreChipHtml}
+        </div>` : ""}
+        <div class="panel-body">
+          ${scoreBarHtml}
+          ${ctaHtml}
+          ${autoFillBannerHtml}
+          ${fieldsHtml}
+          ${coverLetterHtml}
+          ${questionsHtml}
         </div>
-        ${scoreBarHtml}
-        ${ctaHtml}
-        ${autoFillBannerHtml}
-        ${fieldsHtml}
-        ${coverLetterHtml}
-        ${questionsHtml}
         ${footerHtml}
       </div>`;
 
@@ -2088,7 +2196,7 @@ class FloatingPanel {
         navigator.clipboard.writeText(text).then(() => {
           const orig = btn.innerHTML;
           btn.innerHTML = "&#10003;"; // checkmark
-          btn.style.color = "#22c55e";
+          btn.style.color = "#10b981";
           setTimeout(() => {
             btn.innerHTML = orig;
             btn.style.color = "";
@@ -2174,5 +2282,3 @@ window.addEventListener("popstate", () => {
     }
   }, 800);
 });
-
-export {};

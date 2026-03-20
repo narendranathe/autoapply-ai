@@ -312,8 +312,8 @@ export default function ApplyMode({ context }: Props) {
       {/* Company context bar */}
       <div style={{
         padding: "10px 14px",
-        background: "#0f0f1e",
-        borderBottom: "1px solid #1f1f38",
+        background: "#0a0b0d",
+        borderBottom: "1px solid #rgba(255,255,255,0.07)",
         display: "flex",
         alignItems: "center",
         gap: 10,
@@ -355,7 +355,7 @@ export default function ApplyMode({ context }: Props) {
             display: "flex",
             flexDirection: "column",
             alignItems: "center",
-            background: "#12121e",
+            background: "#111318",
             border: `1px solid ${scoreColor(ats.overallScore)}44`,
             borderRadius: 10,
             padding: "6px 10px",
@@ -391,7 +391,7 @@ export default function ApplyMode({ context }: Props) {
 
       {/* ATS bar (only when score exists) */}
       {ats && (
-        <div style={{ padding: "8px 14px", borderBottom: "1px solid #1a1a2e", background: "#0a0a14", flexShrink: 0 }}>
+        <div style={{ padding: "8px 14px", borderBottom: "1px solid rgba(255,255,255,0.07)", background: "#0a0b0d", flexShrink: 0 }}>
           <ATSScoreBar score={ats.overallScore} label={`Resume Match · ${ats.matchedKeywords}/${ats.totalJdKeywords} keywords`} />
         </div>
       )}
@@ -399,10 +399,8 @@ export default function ApplyMode({ context }: Props) {
       {/* Tab navigation */}
       <div style={{
         display: "flex",
-        gap: 4,
-        padding: "8px 14px",
-        borderBottom: "1px solid #1a1a2e",
-        background: "#0a0a14",
+        borderBottom: "1px solid rgba(255,255,255,0.07)",
+        background: "#0a0b0d",
         flexShrink: 0,
       }}>
         {tabs.map(({ key, label, count }) => (
@@ -411,27 +409,29 @@ export default function ApplyMode({ context }: Props) {
             onClick={() => setTab(key)}
             style={{
               flex: 1,
-              padding: "5px 4px",
-              borderRadius: 6,
+              padding: "10px 4px",
               border: "none",
+              borderBottom: tab === key ? "2px solid #00c4b4" : "2px solid transparent",
               cursor: "pointer",
               fontSize: 11,
-              fontWeight: 600,
+              fontWeight: tab === key ? 600 : 500,
               transition: "all 0.15s",
-              background: tab === key ? "#1e1335" : "transparent",
-              color: tab === key ? "#a78bfa" : "#475569",
-              outline: tab === key ? "1px solid #3d2b6e" : "none",
+              background: "transparent",
+              color: tab === key ? "#00c4b4" : "#5a6278",
+              outline: "none",
+              letterSpacing: "0.01em",
             }}
           >
             {label}
             {count > 0 && (
               <span style={{
-                marginLeft: 5,
-                background: tab === key ? "#2d1b69" : "#1a1a2e",
-                color: tab === key ? "#c4b5fd" : "#374151",
+                marginLeft: 4,
+                background: tab === key ? "rgba(0,196,180,0.15)" : "rgba(255,255,255,0.06)",
+                color: tab === key ? "#00c4b4" : "#5a6278",
                 borderRadius: 99,
-                padding: "1px 6px",
-                fontSize: 10,
+                padding: "1px 5px",
+                fontSize: 9,
+                fontWeight: 700,
               }}>
                 {count}
               </span>
@@ -452,12 +452,12 @@ export default function ApplyMode({ context }: Props) {
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
                   {ats.skillsGap.slice(0, 8).map((s) => (
                     <span key={s} style={{
-                      background: "#2d1b4e",
-                      color: "#c4b5fd",
+                      background: "rgba(0,196,180,0.1)",
+                      color: "#00c4b4",
                       borderRadius: 99,
                       fontSize: 10,
                       padding: "2px 8px",
-                      border: "1px solid #3d2560",
+                      border: "1px solid rgba(0,196,180,0.2)",
                     }}>
                       {s}
                     </span>
@@ -477,9 +477,9 @@ export default function ApplyMode({ context }: Props) {
                     color: "#94a3b8",
                     lineHeight: 1.5,
                     padding: "4px 0",
-                    borderBottom: i < Math.min(ats.suggestions.length, 3) - 1 ? "1px solid #1a1a2e" : "none",
+                    borderBottom: i < Math.min(ats.suggestions.length, 3) - 1 ? "1px solid rgba(255,255,255,0.07)" : "none",
                   }}>
-                    <span style={{ color: "#7c3aed", flexShrink: 0 }}>›</span>
+                    <span style={{ color: "#00c4b4", flexShrink: 0 }}>›</span>
                     <span>{s}</span>
                   </div>
                 ))}
@@ -511,8 +511,8 @@ export default function ApplyMode({ context }: Props) {
                 </div>
               )}
               {generatedSummary && (
-                <div style={{ marginTop: 6, background: "#0a0a14", border: "1px solid #1f1f38", borderRadius: 8, padding: "8px 10px" }}>
-                  <div style={{ fontSize: 10, color: "#7c3aed", fontWeight: 700, marginBottom: 4, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div style={{ marginTop: 6, background: "#0a0b0d", border: "1px solid #rgba(255,255,255,0.07)", borderRadius: 8, padding: "8px 10px" }}>
+                  <div style={{ fontSize: 10, color: "#00c4b4", fontWeight: 700, marginBottom: 4, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <span>Professional Summary</span>
                     <button
                       onClick={() => { navigator.clipboard.writeText(generatedSummary); setSummaryCopied(true); setTimeout(() => setSummaryCopied(false), 2000); }}
@@ -531,8 +531,8 @@ export default function ApplyMode({ context }: Props) {
                 </div>
               )}
               {generatedBullets.length > 0 && (
-                <div style={{ marginTop: 6, background: "#0a0a14", border: "1px solid #1f1f38", borderRadius: 8, padding: "8px 10px" }}>
-                  <div style={{ fontSize: 10, color: "#7c3aed", fontWeight: 700, marginBottom: 6, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div style={{ marginTop: 6, background: "#0a0b0d", border: "1px solid #rgba(255,255,255,0.07)", borderRadius: 8, padding: "8px 10px" }}>
+                  <div style={{ fontSize: 10, color: "#00c4b4", fontWeight: 700, marginBottom: 6, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <span>Resume Bullets</span>
                     <button
                       onClick={() => { navigator.clipboard.writeText(generatedBullets.map((b) => `• ${b}`).join("\n")); setBulletsCopied(true); setTimeout(() => setBulletsCopied(false), 2000); }}
@@ -542,8 +542,8 @@ export default function ApplyMode({ context }: Props) {
                     </button>
                   </div>
                   {generatedBullets.map((bullet, i) => (
-                    <div key={i} style={{ display: "flex", gap: 6, fontSize: 11, color: "#cbd5e1", lineHeight: 1.5, padding: "3px 0", borderBottom: i < generatedBullets.length - 1 ? "1px solid #1a1a2e" : "none" }}>
-                      <span style={{ color: "#7c3aed", flexShrink: 0 }}>•</span>
+                    <div key={i} style={{ display: "flex", gap: 6, fontSize: 11, color: "#cbd5e1", lineHeight: 1.5, padding: "3px 0", borderBottom: i < generatedBullets.length - 1 ? "1px solid rgba(255,255,255,0.07)" : "none" }}>
+                      <span style={{ color: "#00c4b4", flexShrink: 0 }}>•</span>
                       <span>{bullet}</span>
                     </div>
                   ))}
@@ -554,7 +554,7 @@ export default function ApplyMode({ context }: Props) {
             {/* RAG Document Upload */}
             <Section label="RAG Context Docs">
               <div style={{ fontSize: 10, color: "#94a3b8", marginBottom: 6, lineHeight: 1.5 }}>
-                Paste your <strong style={{ color: "#c4b5fd" }}>resume.md</strong> or <strong style={{ color: "#c4b5fd" }}>work history</strong> — used to ground cover letters &amp; answers with your real experience.
+                Paste your <strong style={{ color: "#00c4b4" }}>resume.md</strong> or <strong style={{ color: "#00c4b4" }}>work history</strong> — used to ground cover letters &amp; answers with your real experience.
               </div>
 
               {/* Existing docs */}
@@ -566,9 +566,9 @@ export default function ApplyMode({ context }: Props) {
               {ragDocsLoaded && ragDocList.length > 0 && (
                 <div style={{ marginBottom: 8 }}>
                   {ragDocList.map((doc) => (
-                    <div key={doc.source_filename} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 8px", background: "#0f0f23", border: "1px solid #1f1f38", borderRadius: 6, marginBottom: 3 }}>
+                    <div key={doc.source_filename} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 8px", background: "#111318", border: "1px solid #rgba(255,255,255,0.07)", borderRadius: 6, marginBottom: 3 }}>
                       <div>
-                        <div style={{ fontSize: 10, color: "#c4b5fd", fontWeight: 700 }}>{doc.source_filename}</div>
+                        <div style={{ fontSize: 10, color: "#00c4b4", fontWeight: 700 }}>{doc.source_filename}</div>
                         <div style={{ fontSize: 9, color: "#475569" }}>{doc.chunk_count} chunks · {doc.doc_type}{doc.has_dense_embeddings ? " · dense" : ""}</div>
                       </div>
                       <button
@@ -592,7 +592,7 @@ export default function ApplyMode({ context }: Props) {
                     setRagDocType(t);
                     setRagDocFilename(t === "resume" ? "resume.md" : "work_history.md");
                   }}
-                  style={{ fontSize: 10, background: "#0a0a14", border: "1px solid #1f1f38", color: "#c4b5fd", borderRadius: 5, padding: "3px 6px", flex: 1 }}
+                  style={{ fontSize: 10, background: "#0a0b0d", border: "1px solid #rgba(255,255,255,0.07)", color: "#00c4b4", borderRadius: 5, padding: "3px 6px", flex: 1 }}
                 >
                   <option value="resume">resume.md</option>
                   <option value="work_history">work_history.md</option>
@@ -600,7 +600,7 @@ export default function ApplyMode({ context }: Props) {
                 <input
                   value={ragDocFilename}
                   onChange={(e) => setRagDocFilename(e.target.value)}
-                  style={{ fontSize: 10, background: "#0a0a14", border: "1px solid #1f1f38", color: "#94a3b8", borderRadius: 5, padding: "3px 6px", flex: 1 }}
+                  style={{ fontSize: 10, background: "#0a0b0d", border: "1px solid #rgba(255,255,255,0.07)", color: "#94a3b8", borderRadius: 5, padding: "3px 6px", flex: 1 }}
                   placeholder="filename.md"
                 />
               </div>
@@ -609,7 +609,7 @@ export default function ApplyMode({ context }: Props) {
                 onChange={(e) => setRagDocContent(e.target.value)}
                 placeholder={"Paste your resume.md or work_history.md content here…"}
                 rows={4}
-                style={{ width: "100%", fontSize: 10, background: "#0a0a14", border: "1px solid #1f1f38", color: "#94a3b8", borderRadius: 6, padding: "6px 8px", resize: "vertical", boxSizing: "border-box", lineHeight: 1.5 }}
+                style={{ width: "100%", fontSize: 10, background: "#0a0b0d", border: "1px solid #rgba(255,255,255,0.07)", color: "#94a3b8", borderRadius: 6, padding: "6px 8px", resize: "vertical", boxSizing: "border-box", lineHeight: 1.5 }}
               />
               <button
                 onClick={handleUploadRagDoc}
@@ -695,7 +695,7 @@ export default function ApplyMode({ context }: Props) {
                         value={renameTag}
                         onChange={(e) => setRenameTag(e.target.value)}
                         placeholder="Version tag (e.g. v2, Q2-2025)"
-                        style={{ flex: 1, background: "#0a0a14", border: "1px solid #1f1f38", borderRadius: 6, color: "#e2e8f0", fontSize: 11, padding: "4px 8px", outline: "none" }}
+                        style={{ flex: 1, background: "#0a0b0d", border: "1px solid #rgba(255,255,255,0.07)", borderRadius: 6, color: "#e2e8f0", fontSize: 11, padding: "4px 8px", outline: "none" }}
                       />
                       <button
                         onClick={() => void handleRenameResume(r.resumeId, renameTag).catch(() => {})}
@@ -706,7 +706,7 @@ export default function ApplyMode({ context }: Props) {
                     </div>
                   )}
                   {viewingResumeId === r.resumeId && (
-                    <div style={{ marginBottom: 6, background: "#0a0a14", border: "1px solid #1f1f38", borderRadius: 8, padding: "8px 10px", maxHeight: 300, overflowY: "auto" }}>
+                    <div style={{ marginBottom: 6, background: "#0a0b0d", border: "1px solid #rgba(255,255,255,0.07)", borderRadius: 8, padding: "8px 10px", maxHeight: 300, overflowY: "auto" }}>
                       <pre style={{ margin: 0, fontSize: 10, color: "#94a3b8", whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "system-ui,sans-serif", lineHeight: 1.5 }}>
                         {resumeContent}
                       </pre>
@@ -773,8 +773,8 @@ export default function ApplyMode({ context }: Props) {
                       alignItems: "center",
                       gap: 8,
                       padding: "7px 10px",
-                      background: "#12121e",
-                      border: "1px solid #1f1f38",
+                      background: "#111318",
+                      border: "1px solid #rgba(255,255,255,0.07)",
                       borderRadius: 8,
                     }}>
                       <div style={{ flex: 1, minWidth: 0 }}>
@@ -838,21 +838,21 @@ export default function ApplyMode({ context }: Props) {
                 const isGenerating = generatingAnswer === q.questionId;
                 return (
                   <div key={q.questionId} style={{
-                    background: "#12121e",
-                    border: "1px solid #1f1f38",
+                    background: "#111318",
+                    border: "1px solid #rgba(255,255,255,0.07)",
                     borderRadius: 10,
                     padding: "10px 12px",
                     display: "flex",
                     flexDirection: "column",
                     gap: 8,
                   }}>
-                    <div style={{ fontSize: 12, color: "#c4b5fd", fontWeight: 600, lineHeight: 1.4 }}>
+                    <div style={{ fontSize: 12, color: "#00c4b4", fontWeight: 600, lineHeight: 1.4 }}>
                       {q.questionText.slice(0, 130)}{q.questionText.length > 130 ? "…" : ""}
                     </div>
                     <div style={{ display: "flex", gap: 6, fontSize: 10, color: "#475569" }}>
-                      <span style={{ background: "#1a1a2e", borderRadius: 4, padding: "1px 6px" }}>{q.category.replace(/_/g, " ")}</span>
+                      <span style={{ background: "rgba(255,255,255,0.07)", borderRadius: 4, padding: "1px 6px" }}>{q.category.replace(/_/g, " ")}</span>
                       {q.maxLength && (
-                        <span style={{ background: "#1a1a2e", borderRadius: 4, padding: "1px 6px" }}>max {q.maxLength}</span>
+                        <span style={{ background: "rgba(255,255,255,0.07)", borderRadius: 4, padding: "1px 6px" }}>max {q.maxLength}</span>
                       )}
                     </div>
 
@@ -905,7 +905,7 @@ export default function ApplyMode({ context }: Props) {
                             </div>
                           </div>
                         ))}
-                        <div style={{ height: 1, background: "#1a1a2e", margin: "2px 0" }} />
+                        <div style={{ height: 1, background: "rgba(255,255,255,0.07)", margin: "2px 0" }} />
                       </div>
                     )}
 
@@ -947,7 +947,7 @@ export default function ApplyMode({ context }: Props) {
                                 cursor: "pointer",
                                 fontSize: 11,
                                 fontWeight: 600,
-                                background: selectedIdx === i ? "#4f46e5" : "#1a1a2e",
+                                background: selectedIdx === i ? "#4f46e5" : "rgba(255,255,255,0.07)",
                                 color: selectedIdx === i ? "#fff" : "#64748b",
                               }}
                             >
@@ -973,10 +973,10 @@ export default function ApplyMode({ context }: Props) {
                             fontSize: 12,
                             color: "#d1d5db",
                             lineHeight: 1.6,
-                            background: "#0a0a14",
+                            background: "#0a0b0d",
                             borderRadius: 8,
                             padding: "8px 10px",
-                            border: "1px solid #1f1f38",
+                            border: "1px solid #rgba(255,255,255,0.07)",
                             resize: "vertical",
                             fontFamily: "system-ui, sans-serif",
                             outline: "none",
@@ -1067,8 +1067,8 @@ export default function ApplyMode({ context }: Props) {
                   { label: "Interviews", value: appStats.by_status?.interview ?? 0 },
                   { label: "Offers", value: appStats.by_status?.offer ?? 0 },
                 ].map(({ label, value }) => (
-                  <div key={label} style={{ flex: 1, textAlign: "center", background: "#12121e", border: "1px solid #1f1f38", borderRadius: 8, padding: "6px 4px" }}>
-                    <div style={{ fontSize: 16, fontWeight: 700, color: "#c4b5fd" }}>{value}</div>
+                  <div key={label} style={{ flex: 1, textAlign: "center", background: "#111318", border: "1px solid #rgba(255,255,255,0.07)", borderRadius: 8, padding: "6px 4px" }}>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: "#00c4b4" }}>{value}</div>
                     <div style={{ fontSize: 9, color: "#475569", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>{label}</div>
                   </div>
                 ))}
@@ -1082,9 +1082,9 @@ export default function ApplyMode({ context }: Props) {
                 <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
                   {[
                     { label: "Response Rate", value: `${appFunnel.response_rate_pct}%`, color: "#10b981" },
-                    { label: "Offer Rate", value: `${appFunnel.offer_rate_pct}%`, color: "#c4b5fd" },
+                    { label: "Offer Rate", value: `${appFunnel.offer_rate_pct}%`, color: "#00c4b4" },
                   ].map(({ label, value, color }) => (
-                    <div key={label} style={{ flex: 1, textAlign: "center", background: "#0a0a14", border: "1px solid #1f1f38", borderRadius: 8, padding: "5px 4px" }}>
+                    <div key={label} style={{ flex: 1, textAlign: "center", background: "#0a0b0d", border: "1px solid #rgba(255,255,255,0.07)", borderRadius: 8, padding: "5px 4px" }}>
                       <div style={{ fontSize: 14, fontWeight: 700, color }}>{value}</div>
                       <div style={{ fontSize: 8, color: "#475569", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>{label}</div>
                     </div>
@@ -1093,7 +1093,7 @@ export default function ApplyMode({ context }: Props) {
                 {/* Stage bars */}
                 {appFunnel.funnel.filter(s => s.count > 0).map(({ stage, count, pct_of_total }) => {
                   const stageColor: Record<string, string> = {
-                    discovered: "#475569", applied: "#3b82f6", tailored: "#8b5cf6",
+                    discovered: "#475569", applied: "#3b82f6", tailored: "#00c4b4",
                     phone_screen: "#f59e0b", interview: "#f97316", offer: "#10b981", rejected: "#f87171",
                   };
                   const barColor = stageColor[stage] ?? "#64748b";
@@ -1104,7 +1104,7 @@ export default function ApplyMode({ context }: Props) {
                         <span style={{ fontSize: 10, color: "#94a3b8", textTransform: "capitalize" }}>{stage.replace("_", " ")}</span>
                         <span style={{ fontSize: 10, color: "#64748b" }}>{count} ({pct_of_total}%)</span>
                       </div>
-                      <div style={{ height: 6, background: "#1a1a2e", borderRadius: 3, overflow: "hidden" }}>
+                      <div style={{ height: 6, background: "rgba(255,255,255,0.07)", borderRadius: 3, overflow: "hidden" }}>
                         <div style={{ height: "100%", width: `${barWidth}%`, background: barColor, borderRadius: 3, transition: "width 0.4s ease" }} />
                       </div>
                     </div>
@@ -1129,7 +1129,7 @@ export default function ApplyMode({ context }: Props) {
                           const h = Math.round((c / maxCount) * 26) + 2;
                           return (
                             <div key={key} title={`${key}: ${c}`} style={{
-                              flex: 1, height: h, background: c > 0 ? "#7c3aed" : "#1a1a2e",
+                              flex: 1, height: h, background: c > 0 ? "#00c4b4" : "rgba(255,255,255,0.07)",
                               borderRadius: 2, minWidth: 2, cursor: "default",
                             }} />
                           );
@@ -1151,8 +1151,8 @@ export default function ApplyMode({ context }: Props) {
                     { label: "Avg Reward", value: vaultAnalytics.answers.avg_reward_score != null ? vaultAnalytics.answers.avg_reward_score.toFixed(2) : "—" },
                     { label: "Accept Rate", value: (() => { const used = vaultAnalytics.answers.feedback_distribution["used_as_is"] ?? 0; const total = vaultAnalytics.answers.total; return total > 0 ? `${Math.round(used / total * 100)}%` : "—"; })() },
                   ].map(({ label, value }) => (
-                    <div key={label} style={{ flex: 1, textAlign: "center", background: "#0a0a14", border: "1px solid #1f1f38", borderRadius: 8, padding: "5px 2px" }}>
-                      <div style={{ fontSize: 14, fontWeight: 700, color: "#a78bfa" }}>{value}</div>
+                    <div key={label} style={{ flex: 1, textAlign: "center", background: "#0a0b0d", border: "1px solid #rgba(255,255,255,0.07)", borderRadius: 8, padding: "5px 2px" }}>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: "#00c4b4" }}>{value}</div>
                       <div style={{ fontSize: 8, color: "#475569", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>{label}</div>
                     </div>
                   ))}
@@ -1160,7 +1160,7 @@ export default function ApplyMode({ context }: Props) {
                 {vaultAnalytics.top_companies_by_answers.length > 0 && (
                   <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
                     {vaultAnalytics.top_companies_by_answers.slice(0, 5).map(({ company, answer_count }) => (
-                      <span key={company} style={{ background: "#12121e", border: "1px solid #1f1f38", borderRadius: 99, fontSize: 9, padding: "2px 7px", color: "#7c3aed" }}>
+                      <span key={company} style={{ background: "#111318", border: "1px solid #rgba(255,255,255,0.07)", borderRadius: 99, fontSize: 9, padding: "2px 7px", color: "#00c4b4" }}>
                         {company} <span style={{ color: "#475569" }}>({answer_count})</span>
                       </span>
                     ))}
@@ -1188,7 +1188,7 @@ export default function ApplyMode({ context }: Props) {
                       setAnswerBankSearching(false);
                     }
                   }}
-                  style={{ flex: 1, background: "#12121e", border: "1px solid #1f1f38", borderRadius: 6, color: "#e2e8f0", fontSize: 11, padding: "5px 8px", outline: "none" }}
+                  style={{ flex: 1, background: "#111318", border: "1px solid #rgba(255,255,255,0.07)", borderRadius: 6, color: "#e2e8f0", fontSize: 11, padding: "5px 8px", outline: "none" }}
                 />
                 <button
                   onClick={async () => {
@@ -1234,8 +1234,8 @@ export default function ApplyMode({ context }: Props) {
                 onChange={(e) => setHistorySearch(e.target.value)}
                 style={{
                   flex: 1,
-                  background: "#12121e",
-                  border: "1px solid #1f1f38",
+                  background: "#111318",
+                  border: "1px solid #rgba(255,255,255,0.07)",
                   borderRadius: 6,
                   color: "#e2e8f0",
                   fontSize: 11,
@@ -1247,8 +1247,8 @@ export default function ApplyMode({ context }: Props) {
                 value={historyStatusFilter}
                 onChange={(e) => setHistoryStatusFilter(e.target.value)}
                 style={{
-                  background: "#12121e",
-                  border: "1px solid #1f1f38",
+                  background: "#111318",
+                  border: "1px solid #rgba(255,255,255,0.07)",
                   borderRadius: 6,
                   color: "#9ca3af",
                   fontSize: 11,
@@ -1317,7 +1317,7 @@ export default function ApplyMode({ context }: Props) {
                 style={{
                   width: "100%",
                   padding: "10px",
-                  background: "linear-gradient(135deg,#6d28d9 0%,#4f46e5 100%)",
+                  background: "linear-gradient(135deg,#009688 0%,#4f46e5 100%)",
                   color: "#fff",
                   border: "none",
                   borderRadius: 8,
@@ -1352,8 +1352,8 @@ export default function ApplyMode({ context }: Props) {
                       key={cat}
                       onClick={() => { setPrepCategoryFilter(cat); setExpandedPrepIdx(null); }}
                       style={{
-                        background: isActive ? (CATEGORY_COLORS[cat] ?? "#475569") + "22" : "#12121e",
-                        border: `1px solid ${isActive ? (CATEGORY_COLORS[cat] ?? "#475569") : "#1f1f38"}`,
+                        background: isActive ? (CATEGORY_COLORS[cat] ?? "#475569") + "22" : "#111318",
+                        border: `1px solid ${isActive ? (CATEGORY_COLORS[cat] ?? "#475569") : "#rgba(255,255,255,0.07)"}`,
                         borderRadius: 99,
                         padding: "2px 8px",
                         fontSize: 9,
@@ -1432,7 +1432,7 @@ export default function ApplyMode({ context }: Props) {
               <select
                 value={coverTone}
                 onChange={(e) => setCoverTone(e.target.value as typeof coverTone)}
-                style={{ background: "#12121e", border: "1px solid #1f1f38", borderRadius: 6, color: "#9ca3af", fontSize: 11, padding: "5px 6px", outline: "none" }}
+                style={{ background: "#111318", border: "1px solid #rgba(255,255,255,0.07)", borderRadius: 6, color: "#9ca3af", fontSize: 11, padding: "5px 6px", outline: "none" }}
               >
                 <option value="professional">Professional</option>
                 <option value="enthusiastic">Enthusiastic</option>
@@ -1441,7 +1441,7 @@ export default function ApplyMode({ context }: Props) {
               <select
                 value={coverWordLimit}
                 onChange={(e) => setCoverWordLimit(Number(e.target.value) as typeof coverWordLimit)}
-                style={{ background: "#12121e", border: "1px solid #1f1f38", borderRadius: 6, color: "#9ca3af", fontSize: 11, padding: "5px 6px", outline: "none" }}
+                style={{ background: "#111318", border: "1px solid #rgba(255,255,255,0.07)", borderRadius: 6, color: "#9ca3af", fontSize: 11, padding: "5px 6px", outline: "none" }}
               >
                 <option value={300}>~300 words</option>
                 <option value={400}>~400 words</option>
@@ -1476,9 +1476,9 @@ export default function ApplyMode({ context }: Props) {
                         key={i}
                         onClick={() => { setCoverSelectedDraft(i); setCoverLetter(coverDrafts[i]); }}
                         style={{
-                          background: coverSelectedDraft === i ? "#3730a3" : "#12121e",
-                          color: coverSelectedDraft === i ? "#c4b5fd" : "#64748b",
-                          border: `1px solid ${coverSelectedDraft === i ? "#4f46e5" : "#1f1f38"}`,
+                          background: coverSelectedDraft === i ? "#3730a3" : "#111318",
+                          color: coverSelectedDraft === i ? "#00c4b4" : "#64748b",
+                          border: `1px solid ${coverSelectedDraft === i ? "#4f46e5" : "#rgba(255,255,255,0.07)"}`,
                           borderRadius: 6,
                           padding: "3px 10px",
                           fontSize: 10,
@@ -1499,7 +1499,7 @@ export default function ApplyMode({ context }: Props) {
                     <button
                       onClick={() => void handleSaveCoverLetter()}
                       disabled={savingCoverLetter}
-                      style={{ background: "#12121e", color: "#a78bfa", border: "1px solid #2d1b69", borderRadius: 6, padding: "3px 10px", fontSize: 10, fontWeight: 600, cursor: savingCoverLetter ? "wait" : "pointer", opacity: savingCoverLetter ? 0.6 : 1 }}
+                      style={{ background: "#111318", color: "#00c4b4", border: "1px solid rgba(0,196,180,0.15)", borderRadius: 6, padding: "3px 10px", fontSize: 10, fontWeight: 600, cursor: savingCoverLetter ? "wait" : "pointer", opacity: savingCoverLetter ? 0.6 : 1 }}
                     >
                       {savingCoverLetter ? "Saving…" : "Save"}
                     </button>
@@ -1507,7 +1507,7 @@ export default function ApplyMode({ context }: Props) {
                       onClick={handleCopyLetter}
                       style={{
                         background: coverCopied ? "#166534" : "#1e1e3a",
-                        color: coverCopied ? "#86efac" : "#c4b5fd",
+                        color: coverCopied ? "#86efac" : "#00c4b4",
                         border: `1px solid ${coverCopied ? "#166534" : "#3730a3"}`,
                         borderRadius: 6,
                         padding: "3px 10px",
@@ -1526,8 +1526,8 @@ export default function ApplyMode({ context }: Props) {
                   style={{
                     width: "100%",
                     minHeight: 320,
-                    background: "#0a0a14",
-                    border: "1px solid #1f1f38",
+                    background: "#0a0b0d",
+                    border: "1px solid #rgba(255,255,255,0.07)",
                     borderRadius: 8,
                     color: "#e2e8f0",
                     fontSize: 12,
@@ -1563,9 +1563,9 @@ export default function ApplyMode({ context }: Props) {
                     <div style={{ fontSize: 11, color: "#374151" }}>No saved cover letters yet.</div>
                   )}
                   {savedCoverLetters.map((cl) => (
-                    <div key={cl.id} style={{ background: "#12121e", border: "1px solid #1f1f38", borderRadius: 8, padding: "8px 10px" }}>
+                    <div key={cl.id} style={{ background: "#111318", border: "1px solid #rgba(255,255,255,0.07)", borderRadius: 8, padding: "8px 10px" }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                        <span style={{ fontSize: 11, color: "#c4b5fd", fontWeight: 600 }}>{cl.company_name}{cl.role_title ? ` — ${cl.role_title}` : ""}</span>
+                        <span style={{ fontSize: 11, color: "#00c4b4", fontWeight: 600 }}>{cl.company_name}{cl.role_title ? ` — ${cl.role_title}` : ""}</span>
                         <span style={{ fontSize: 9, color: "#374151" }}>{new Date(cl.created_at).toLocaleDateString()}</span>
                       </div>
                       <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 6, lineHeight: 1.5 }}>
@@ -1573,7 +1573,7 @@ export default function ApplyMode({ context }: Props) {
                       </div>
                       <button
                         onClick={() => { setCoverLetter(cl.answer_text); setCoverLettersSectionOpen(false); }}
-                        style={{ background: "#1a1a2e", border: "1px solid #2d1b69", borderRadius: 5, color: "#a78bfa", cursor: "pointer", fontSize: 10, fontWeight: 700, padding: "3px 10px" }}
+                        style={{ background: "rgba(255,255,255,0.07)", border: "1px solid rgba(0,196,180,0.15)", borderRadius: 5, color: "#00c4b4", cursor: "pointer", fontSize: 10, fontWeight: 700, padding: "3px 10px" }}
                       >
                         Load
                       </button>
@@ -1615,8 +1615,8 @@ function EmptyState({ message, hint }: { message: string; hint: string }) {
     <div style={{
       padding: "20px 16px",
       textAlign: "center",
-      background: "#12121e",
-      border: "1px dashed #1f1f38",
+      background: "#111318",
+      border: "1px dashed #rgba(255,255,255,0.07)",
       borderRadius: 10,
     }}>
       <div style={{ fontSize: 12, color: "#475569", marginBottom: 4 }}>{message}</div>
@@ -1631,9 +1631,9 @@ function LoadingRow() {
       {[1, 2].map((i) => (
         <div key={i} style={{
           height: 60,
-          background: "linear-gradient(90deg, #12121e 25%, #1a1a2e 50%, #12121e 75%)",
+          background: "linear-gradient(90deg, #111318 25%, rgba(255,255,255,0.07) 50%, #111318 75%)",
           borderRadius: 10,
-          border: "1px solid #1f1f38",
+          border: "1px solid #rgba(255,255,255,0.07)",
           animation: "pulse 1.5s ease infinite",
         }} />
       ))}
@@ -1670,12 +1670,12 @@ function TailoredResumeResult({ result }: { result: GenerateTailoredResponse }) 
       {result.skills_gap.length > 0 && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
           {result.skills_gap.slice(0, 5).map((s) => (
-            <span key={s} style={{ fontSize: 9, background: "#2d1b4e", color: "#c4b5fd", borderRadius: 99, padding: "1px 7px", border: "1px solid #3d2560" }}>{s}</span>
+            <span key={s} style={{ fontSize: 9, background: "rgba(0,196,180,0.1)", color: "#00c4b4", borderRadius: 99, padding: "1px 7px", border: "1px solid rgba(0,196,180,0.2)" }}>{s}</span>
           ))}
         </div>
       )}
       {expanded && result.markdown_preview && (
-        <div style={{ fontSize: 10, color: "#94a3b8", lineHeight: 1.6, maxHeight: 200, overflowY: "auto", whiteSpace: "pre-wrap", background: "#0a0a14", borderRadius: 6, padding: "8px", fontFamily: "monospace", border: "1px solid #1a1a2e" }}>
+        <div style={{ fontSize: 10, color: "#94a3b8", lineHeight: 1.6, maxHeight: 200, overflowY: "auto", whiteSpace: "pre-wrap", background: "#0a0b0d", borderRadius: 6, padding: "8px", fontFamily: "monospace", border: "1px solid rgba(255,255,255,0.07)" }}>
           {result.markdown_preview}
         </div>
       )}
@@ -1688,7 +1688,7 @@ function TailoredResumeResult({ result }: { result: GenerateTailoredResponse }) 
 
 const STATUS_ORDER = ["discovered", "applied", "tailored", "interview", "offer", "rejected"];
 const STATUS_COLORS: Record<string, { bg: string; text: string; border: string }> = {
-  discovered: { bg: "#12121e", text: "#475569", border: "#1f1f38" },
+  discovered: { bg: "#111318", text: "#475569", border: "#rgba(255,255,255,0.07)" },
   applied:    { bg: "#0a1628", text: "#60a5fa", border: "#1e3a5f" },
   tailored:   { bg: "#0d1a2e", text: "#818cf8", border: "#1e2d55" },
   interview:  { bg: "#071a12", text: "#34d399", border: "#064e3b" },
@@ -1720,7 +1720,7 @@ function ApplicationRow({
   };
 
   return (
-    <div style={{ background: "#12121e", border: "1px solid #1f1f38", borderRadius: 8, padding: "8px 10px" }}>
+    <div style={{ background: "#111318", border: "1px solid #rgba(255,255,255,0.07)", borderRadius: 8, padding: "8px 10px" }}>
       <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 12, color: "#e2e8f0", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -1775,8 +1775,8 @@ function ApplicationRow({
             position: "absolute",
             right: 0,
             top: "calc(100% + 4px)",
-            background: "#12121e",
-            border: "1px solid #1f1f38",
+            background: "#111318",
+            border: "1px solid #rgba(255,255,255,0.07)",
             borderRadius: 8,
             zIndex: 100,
             display: "flex",
@@ -1811,18 +1811,18 @@ function ApplicationRow({
       </div>
       {/* Inline notes editor */}
       {showNotes && (
-        <div style={{ marginTop: 6, borderTop: "1px solid #1f1f38", paddingTop: 6 }}>
+        <div style={{ marginTop: 6, borderTop: "1px solid #rgba(255,255,255,0.07)", paddingTop: 6 }}>
           <textarea
             autoFocus
             rows={3}
             value={notesText}
             onChange={(e) => setNotesText(e.target.value)}
             placeholder="Interview notes, contacts, follow-up reminders…"
-            style={{ width: "100%", boxSizing: "border-box", background: "#0a0a14", border: "1px solid #1f1f38", borderRadius: 6, color: "#d1d5db", fontSize: 11, padding: "5px 8px", resize: "vertical", fontFamily: "system-ui,sans-serif", outline: "none" }}
+            style={{ width: "100%", boxSizing: "border-box", background: "#0a0b0d", border: "1px solid #rgba(255,255,255,0.07)", borderRadius: 6, color: "#d1d5db", fontSize: 11, padding: "5px 8px", resize: "vertical", fontFamily: "system-ui,sans-serif", outline: "none" }}
           />
           <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", marginTop: 4 }}>
             <button onClick={() => setShowNotes(false)} style={{ background: "transparent", border: "none", color: "#64748b", cursor: "pointer", fontSize: 10, fontWeight: 600 }}>Cancel</button>
-            <button onClick={() => void handleSaveNotes()} disabled={savingNotes} style={{ background: "#1a1a2e", border: "1px solid #2d1b69", borderRadius: 5, color: "#a78bfa", cursor: savingNotes ? "wait" : "pointer", fontSize: 10, fontWeight: 700, padding: "3px 10px" }}>
+            <button onClick={() => void handleSaveNotes()} disabled={savingNotes} style={{ background: "rgba(255,255,255,0.07)", border: "1px solid rgba(0,196,180,0.15)", borderRadius: 5, color: "#00c4b4", cursor: savingNotes ? "wait" : "pointer", fontSize: 10, fontWeight: 700, padding: "3px 10px" }}>
               {savingNotes ? "Saving…" : "Save"}
             </button>
           </div>
@@ -1848,14 +1848,14 @@ function btnStyle(variant: "primary" | "ghost" | "generate" | "fill", disabled =
     opacity: disabled ? 0.6 : 1,
     transition: "opacity 0.15s",
   };
-  if (variant === "primary") return { ...base, background: "#6d28d9", color: "#fff", padding: "5px 14px" };
-  if (variant === "ghost") return { ...base, background: "#1a1a2e", color: "#8b5cf6", padding: "5px 12px" };
-  if (variant === "generate") return { ...base, background: "#1e1335", color: "#a78bfa", padding: "6px 12px", width: "100%", outline: "1px solid #2d1b69" };
+  if (variant === "primary") return { ...base, background: "#009688", color: "#fff", padding: "5px 14px" };
+  if (variant === "ghost") return { ...base, background: "rgba(255,255,255,0.07)", color: "#00c4b4", padding: "5px 12px" };
+  if (variant === "generate") return { ...base, background: "rgba(0,196,180,0.08)", color: "#00c4b4", padding: "6px 12px", width: "100%", outline: "1px solid rgba(0,196,180,0.15)" };
   return { ...base, background: "#1e1b4b", color: "#a5b4fc", padding: "3px 10px" };
 }
 
 const CATEGORY_COLORS: Record<string, string> = {
-  behavioral: "#7c3aed",
+  behavioral: "#00c4b4",
   motivation: "#0891b2",
   technical: "#059669",
   general: "#d97706",
@@ -1887,8 +1887,8 @@ function AnswerBankCard({
   };
 
   return (
-    <div style={{ background: "#0a0a14", border: "1px solid #1f1f38", borderRadius: 8, padding: "8px 10px" }}>
-      <div style={{ fontSize: 10, color: "#7c3aed", fontWeight: 700, marginBottom: 2, display: "flex", justifyContent: "space-between" }}>
+    <div style={{ background: "#0a0b0d", border: "1px solid #rgba(255,255,255,0.07)", borderRadius: 8, padding: "8px 10px" }}>
+      <div style={{ fontSize: 10, color: "#00c4b4", fontWeight: 700, marginBottom: 2, display: "flex", justifyContent: "space-between" }}>
         <span>{answer.company_name} · {answer.question_category}</span>
         <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
           {answer.reward_score != null && <span style={{ color: "#475569" }}>{(answer.reward_score * 100).toFixed(0)}%</span>}
@@ -1907,7 +1907,7 @@ function AnswerBankCard({
             value={editText}
             onChange={(e) => setEditText(e.target.value)}
             rows={4}
-            style={{ width: "100%", background: "#12121e", border: "1px solid #2d2d52", borderRadius: 6, color: "#e2e8f0", fontSize: 11, padding: "6px 8px", outline: "none", resize: "vertical", boxSizing: "border-box" }}
+            style={{ width: "100%", background: "#111318", border: "1px solid #2d2d52", borderRadius: 6, color: "#e2e8f0", fontSize: 11, padding: "6px 8px", outline: "none", resize: "vertical", boxSizing: "border-box" }}
           />
           <button
             onClick={() => void handleSaveEdit()}
@@ -1965,8 +1965,8 @@ function PrepQuestion({
 
   return (
     <div style={{
-      background: "#12121e",
-      border: "1px solid #1f1f38",
+      background: "#111318",
+      border: "1px solid #rgba(255,255,255,0.07)",
       borderRadius: 10,
       padding: "10px 12px",
       display: "flex",
@@ -1990,7 +1990,7 @@ function PrepQuestion({
       </div>
 
       {expanded && (
-        <div style={{ borderTop: "1px solid #1f1f38", paddingTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+        <div style={{ borderTop: "1px solid #rgba(255,255,255,0.07)", paddingTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
           <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.6 }}>{question.suggested_answer}</div>
           <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
             {onSaveToBank && (
