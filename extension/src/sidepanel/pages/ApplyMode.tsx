@@ -297,6 +297,24 @@ export default function ApplyMode({ context }: Props) {
     chrome.runtime.sendMessage({ type: "FILL_FIELD", payload: { fieldId, value } });
   };
 
+  // Answers vault tab state
+  const [vaultAnswers, setVaultAnswers] = useState<SavedAnswer[]>([]);
+  const [vaultAnswersLoading, setVaultAnswersLoading] = useState(false);
+  const [vaultAnswerSearch, setVaultAnswerSearch] = useState("");
+  const [vaultCategoryFilter, setVaultCategoryFilter] = useState<string>("all");
+  const [vaultEditingId, setVaultEditingId] = useState<string | null>(null);
+  const [vaultEditText, setVaultEditText] = useState("");
+  const [vaultExpandedIds, setVaultExpandedIds] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (tab !== "answers") return;
+    setVaultAnswersLoading(true);
+    vaultApi.searchAnswers({ q: "", limit: 50 })
+      .then((res) => setVaultAnswers(res.answers as SavedAnswer[]))
+      .catch(() => {})
+      .finally(() => setVaultAnswersLoading(false));
+  }, [tab]);
+
   const tabs: Array<{ key: Tab; label: string; count: number }> = [
     { key: "resumes", label: "Resumes", count: resumes.length },
     { key: "fields", label: "Fields", count: context.detectedFields.length },
@@ -304,6 +322,7 @@ export default function ApplyMode({ context }: Props) {
     { key: "cover", label: "Cover", count: coverLetter ? 1 : 0 },
     { key: "history", label: "History", count: allApplications.length },
     { key: "prep", label: "Prep", count: interviewQuestions.length },
+    { key: "answers", label: "Answers", count: vaultAnswers.length },
   ];
 
   return (
@@ -1585,6 +1604,26 @@ export default function ApplyMode({ context }: Props) {
           </>
         )}
 
+        {/* ANSWERS VAULT TAB */}
+        {tab === "answers" && (
+          <AnswersVaultTab
+            answers={vaultAnswers}
+            loading={vaultAnswersLoading}
+            searchQuery={vaultAnswerSearch}
+            setSearchQuery={setVaultAnswerSearch}
+            categoryFilter={vaultCategoryFilter}
+            setCategoryFilter={setVaultCategoryFilter}
+            editingId={vaultEditingId}
+            setEditingId={setVaultEditingId}
+            editText={vaultEditText}
+            setEditText={setVaultEditText}
+            expandedIds={vaultExpandedIds}
+            setExpandedIds={setVaultExpandedIds}
+            onDeleteAnswer={(id) => setVaultAnswers((prev) => prev.filter((a) => a.answer_id !== id))}
+            onEditAnswer={(id, text) => setVaultAnswers((prev) => prev.map((a) => a.answer_id === id ? { ...a, answer_text: text } : a))}
+          />
+        )}
+
       </div>
     </div>
   );
@@ -1928,6 +1967,355 @@ function AnswerBankCard({
           </button>
         </>
       )}
+    </div>
+  );
+}
+
+// ── Answers Vault Tab ─────────────────────────────────────────────────────
+
+interface SavedAnswer {
+  answer_id: string;
+  question_text: string;
+  answer_text: string;
+  company_name: string;
+  question_category: string;
+  reward_score: number | null;
+  feedback: string;
+  word_count: number;
+  created_at: string;
+}
+
+const VAULT_CATEGORY_COLORS: Record<string, string> = {
+  cover_letter: "#8b5cf6",
+  why_company: "#00c4b4",
+  why_hire: "#00c4b4",
+  about_yourself: "#f59e0b",
+  strength: "#10b981",
+  weakness: "#f87171",
+  challenge: "#f97316",
+  leadership: "#8b5cf6",
+  motivation: "#00c4b4",
+  five_years: "#f59e0b",
+  custom: "#8b92a8",
+};
+
+const FEEDBACK_COLORS: Record<string, string> = {
+  used_as_is: "#10b981",
+  edited: "#00c4b4",
+  regenerated: "#f59e0b",
+  skipped: "#5a6278",
+  pending: "#5a6278",
+};
+
+const VAULT_CATEGORY_PILLS = ["all", "cover_letter", "why_company", "strength", "weakness", "custom"];
+
+function AnswersVaultTab({
+  answers,
+  loading,
+  searchQuery,
+  setSearchQuery,
+  categoryFilter,
+  setCategoryFilter,
+  editingId,
+  setEditingId,
+  editText,
+  setEditText,
+  expandedIds,
+  setExpandedIds,
+  onDeleteAnswer,
+  onEditAnswer,
+}: {
+  answers: SavedAnswer[];
+  loading: boolean;
+  searchQuery: string;
+  setSearchQuery: (v: string) => void;
+  categoryFilter: string;
+  setCategoryFilter: (v: string) => void;
+  editingId: string | null;
+  setEditingId: (v: string | null) => void;
+  editText: string;
+  setEditText: (v: string) => void;
+  expandedIds: Set<string>;
+  setExpandedIds: React.Dispatch<React.SetStateAction<Set<string>>>;
+  onDeleteAnswer: (id: string) => void;
+  onEditAnswer: (id: string, text: string) => void;
+}) {
+  const [savingEdit, setSavingEdit] = useState(false);
+
+  const toggleExpand = (id: string) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const filtered = answers.filter((a) => {
+    const q = searchQuery.toLowerCase();
+    const matchSearch = !q || a.question_text.toLowerCase().includes(q) || a.answer_text.toLowerCase().includes(q);
+    const matchCat = categoryFilter === "all" || a.question_category === categoryFilter;
+    return matchSearch && matchCat;
+  });
+
+  const handleSaveEdit = async (answerId: string) => {
+    if (!editText.trim()) return;
+    setSavingEdit(true);
+    try {
+      await vaultApi.editAnswer(answerId, editText.trim());
+      onEditAnswer(answerId, editText.trim());
+      setEditingId(null);
+    } catch { /* ignore */ } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  const handleDelete = async (answerId: string) => {
+    onDeleteAnswer(answerId); // optimistic
+    try { await vaultApi.deleteAnswer(answerId); } catch { /* ignore */ }
+  };
+
+  if (loading) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {[1, 2, 3].map((i) => (
+          <div key={i} style={{
+            height: 90,
+            background: "linear-gradient(90deg, #111318 25%, rgba(255,255,255,0.07) 50%, #111318 75%)",
+            backgroundSize: "200% 100%",
+            borderRadius: 10,
+            border: "1px solid rgba(255,255,255,0.07)",
+            animation: "pulse 1.5s ease infinite",
+          }} />
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {/* Search input */}
+      <input
+        type="text"
+        placeholder="Search answers…"
+        value={searchQuery}
+        onChange={(e) => setSearchQuery(e.target.value)}
+        style={{
+          width: "100%",
+          boxSizing: "border-box",
+          background: "#111318",
+          border: "1px solid rgba(255,255,255,0.07)",
+          borderRadius: 7,
+          color: "#e0e4ef",
+          fontSize: 11,
+          padding: "7px 10px",
+          outline: "none",
+        }}
+      />
+
+      {/* Category filter pills */}
+      <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+        {VAULT_CATEGORY_PILLS.map((cat) => {
+          const isActive = categoryFilter === cat;
+          const color = VAULT_CATEGORY_COLORS[cat] ?? "#8b92a8";
+          return (
+            <button
+              key={cat}
+              onClick={() => setCategoryFilter(cat)}
+              style={{
+                background: isActive ? color + "22" : "#111318",
+                border: `1px solid ${isActive ? color : "rgba(255,255,255,0.07)"}`,
+                borderRadius: 99,
+                padding: "2px 9px",
+                fontSize: 9,
+                fontWeight: 700,
+                color: isActive ? color : "#5a6278",
+                cursor: "pointer",
+                textTransform: "capitalize",
+              }}
+            >
+              {cat === "all" ? "All" : cat.replace(/_/g, " ")}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Empty state */}
+      {filtered.length === 0 && !loading && (
+        <div style={{
+          padding: "28px 16px",
+          textAlign: "center",
+          background: "#111318",
+          border: "1px dashed rgba(255,255,255,0.07)",
+          borderRadius: 10,
+        }}>
+          <div style={{ fontSize: 22, marginBottom: 8, color: "#00c4b4" }}>⊘</div>
+          <div style={{ fontSize: 12, color: "#5a6278", lineHeight: 1.6 }}>
+            {answers.length === 0
+              ? "No saved answers yet. Generate answers on job pages and they'll appear here."
+              : "No matches — try a different search or category."}
+          </div>
+        </div>
+      )}
+
+      {/* Answer cards */}
+      {filtered.map((a) => {
+        const catColor = VAULT_CATEGORY_COLORS[a.question_category] ?? "#8b92a8";
+        const fbColor = FEEDBACK_COLORS[a.feedback] ?? "#5a6278";
+        const isExpanded = expandedIds.has(a.answer_id);
+        const isEditing = editingId === a.answer_id;
+        const dateStr = new Date(a.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+
+        return (
+          <div key={a.answer_id} style={{
+            background: "#111318",
+            borderRadius: 10,
+            padding: 12,
+            marginBottom: 0,
+            border: "1px solid rgba(255,255,255,0.07)",
+            display: "flex",
+            flexDirection: "column",
+            gap: 6,
+          }}>
+            {/* Header row */}
+            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+              <span style={{
+                background: catColor + "22",
+                border: `1px solid ${catColor}44`,
+                color: catColor,
+                borderRadius: 99,
+                fontSize: 9,
+                fontWeight: 700,
+                padding: "2px 8px",
+                textTransform: "capitalize",
+                flexShrink: 0,
+              }}>
+                {a.question_category.replace(/_/g, " ")}
+              </span>
+              <span style={{ flex: 1 }} />
+              <span style={{ fontSize: 10, color: "#00c4b4", fontWeight: 600 }}>{a.company_name}</span>
+              <span style={{ fontSize: 9, color: "#5a6278" }}>{dateStr}</span>
+            </div>
+
+            {/* Question text */}
+            <div style={{
+              fontSize: 11,
+              color: "#8b92a8",
+              fontStyle: "italic",
+              lineHeight: 1.5,
+              display: "-webkit-box",
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: "vertical",
+              overflow: "hidden",
+            }}>
+              {a.question_text}
+            </div>
+
+            {/* Answer preview / edit */}
+            {isEditing ? (
+              <>
+                <textarea
+                  autoFocus
+                  value={editText}
+                  onChange={(e) => setEditText(e.target.value)}
+                  rows={5}
+                  style={{
+                    width: "100%",
+                    boxSizing: "border-box",
+                    background: "#0a0b0d",
+                    border: "1px solid rgba(0,196,180,0.3)",
+                    borderRadius: 7,
+                    color: "#e0e4ef",
+                    fontSize: 12,
+                    padding: "7px 9px",
+                    resize: "vertical",
+                    fontFamily: "system-ui,sans-serif",
+                    outline: "none",
+                    lineHeight: 1.55,
+                  }}
+                />
+                <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                  <button
+                    onClick={() => setEditingId(null)}
+                    style={{ background: "transparent", border: "none", color: "#5a6278", cursor: "pointer", fontSize: 10, fontWeight: 600 }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => void handleSaveEdit(a.answer_id)}
+                    disabled={savingEdit}
+                    style={{ background: "rgba(0,196,180,0.1)", border: "1px solid rgba(0,196,180,0.25)", borderRadius: 6, color: "#00c4b4", cursor: savingEdit ? "wait" : "pointer", fontSize: 10, fontWeight: 700, padding: "3px 10px", opacity: savingEdit ? 0.6 : 1 }}
+                  >
+                    {savingEdit ? "Saving…" : "Save"}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={{
+                  fontSize: 13,
+                  color: "#e0e4ef",
+                  lineHeight: 1.55,
+                  display: "-webkit-box",
+                  WebkitLineClamp: isExpanded ? undefined : 3,
+                  WebkitBoxOrient: "vertical",
+                  overflow: isExpanded ? "visible" : "hidden",
+                }}>
+                  {a.answer_text}
+                </div>
+                {a.answer_text.length > 180 && (
+                  <button
+                    onClick={() => toggleExpand(a.answer_id)}
+                    style={{ background: "transparent", border: "none", color: "#00c4b4", cursor: "pointer", fontSize: 10, fontWeight: 600, padding: 0, textAlign: "left" }}
+                  >
+                    {isExpanded ? "Show less" : "Show more"}
+                  </button>
+                )}
+              </>
+            )}
+
+            {/* Footer row */}
+            {!isEditing && (
+              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginTop: 2 }}>
+                <span style={{
+                  background: "rgba(255,255,255,0.06)",
+                  borderRadius: 99,
+                  fontSize: 9,
+                  color: "#8b92a8",
+                  padding: "1px 7px",
+                  fontWeight: 600,
+                }}>
+                  {a.word_count} words
+                </span>
+                <span style={{
+                  background: fbColor + "18",
+                  border: `1px solid ${fbColor}44`,
+                  borderRadius: 99,
+                  fontSize: 9,
+                  color: fbColor,
+                  padding: "1px 7px",
+                  fontWeight: 700,
+                  textTransform: "capitalize",
+                }}>
+                  {a.feedback.replace(/_/g, " ")}
+                </span>
+                <span style={{ flex: 1 }} />
+                <button
+                  onClick={() => { setEditingId(a.answer_id); setEditText(a.answer_text); }}
+                  style={{ background: "rgba(255,255,255,0.06)", border: "none", borderRadius: 5, color: "#8b92a8", cursor: "pointer", fontSize: 9, fontWeight: 700, padding: "2px 8px" }}
+                >
+                  Edit
+                </button>
+                <button
+                  onClick={() => void handleDelete(a.answer_id)}
+                  style={{ background: "rgba(248,113,113,0.08)", border: "none", borderRadius: 5, color: "#f87171", cursor: "pointer", fontSize: 9, fontWeight: 700, padding: "2px 8px" }}
+                >
+                  Delete
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

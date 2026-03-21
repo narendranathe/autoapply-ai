@@ -34,6 +34,17 @@ function computeLabelHash(label: string): string {
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
+interface VaultResume {
+  resumeId: string;
+  filename: string;
+  versionTag: string | null;
+  targetCompany: string | null;
+  targetRole: string | null;
+  atsScore: number | null;
+  similarityScore: number;
+  isBaseTemplate: boolean;
+}
+
 interface Profile {
   firstName: string;
   lastName: string;
@@ -472,6 +483,8 @@ class FloatingPanel {
   private coverLetter: string = "";
   private coverLetterSource: "vault" | "generated" | "" = "";
   private _iframeMap = new Map<string, HTMLIFrameElement>();
+  private vaultResumes: VaultResume[] = [];
+  private vaultResumesLoaded: boolean = false;
 
   /** Build auth headers: prefer JWT Bearer, fall back to X-Clerk-User-Id. */
   private authHeaders(extraHeaders?: Record<string, string>): Record<string, string> {
@@ -587,6 +600,9 @@ class FloatingPanel {
 
     // Background sync profile from backend — non-blocking, silent fail
     this.syncProfileFromBackend().catch(() => {});
+
+    // Load vault resumes for resume section — fire-and-forget, non-blocking
+    void this.loadVaultResumes();
   }
 
   private async syncProfileFromBackend(): Promise<void> {
@@ -635,6 +651,147 @@ class FloatingPanel {
       await chrome.storage.local.set({ profile: merged });
     } catch {
       // silent fail — content script operates offline-first
+    }
+  }
+
+  private async loadVaultResumes(): Promise<void> {
+    const headers = this.authHeaders();
+    if (!headers["X-Clerk-User-Id"] && !headers["Authorization"]) return;
+
+    try {
+      const res = await fetch(`${this.apiBase}/vault/retrieve`, {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          company_name: this.company || "",
+          jd_text: this.jdText?.slice(0, 2000) || "",
+          top_k: 10,
+        }),
+      });
+      if (!res.ok) return;
+      const data = await res.json() as { company_history?: Array<{
+        resume_id: string;
+        filename: string;
+        version_tag?: string | null;
+        target_company?: string | null;
+        target_role?: string | null;
+        ats_score?: number | null;
+        similarity_score?: number;
+        is_base_template?: boolean;
+      }> };
+
+      this.vaultResumes = (data.company_history || []).map((r) => ({
+        resumeId: r.resume_id,
+        filename: r.filename,
+        versionTag: r.version_tag || null,
+        targetCompany: r.target_company || null,
+        targetRole: r.target_role || null,
+        atsScore: r.ats_score ?? null,
+        similarityScore: r.similarity_score ?? 0,
+        isBaseTemplate: r.is_base_template ?? false,
+      }));
+    } catch {
+      // non-fatal — resume section shows empty state
+    } finally {
+      this.vaultResumesLoaded = true;
+      this.updateResumeSection();
+    }
+  }
+
+  private updateResumeSection(): void {
+    const container = this.shadow.querySelector("#vault-resume-section");
+    if (!container) return;
+    container.innerHTML = this.buildResumeSection();
+    this.bindResumeEvents();
+  }
+
+  private buildResumeCard(r: VaultResume): string {
+    const atsScore = r.atsScore;
+    const isBestMatch = atsScore !== null && atsScore >= 95;
+    const isHighMatch = atsScore !== null && atsScore >= 80 && atsScore < 95;
+
+    let cardClass = "resume-card";
+    if (isBestMatch) cardClass += " best-match";
+    else if (isHighMatch) cardClass += " high-match";
+
+    let atsBadgeColor = "#5a6278";
+    if (atsScore !== null) {
+      if (atsScore >= 95) atsBadgeColor = "#10b981";
+      else if (atsScore >= 80) atsBadgeColor = "#00c4b4";
+      else if (atsScore >= 65) atsBadgeColor = "#f59e0b";
+      else atsBadgeColor = "#f87171";
+    }
+
+    const atsBadgeHtml = atsScore !== null
+      ? `<span class="resume-ats-badge" style="color:${atsBadgeColor};background:${atsBadgeColor}1a;border:1px solid ${atsBadgeColor}40;">${atsScore >= 95 ? "⭐ " : ""}${atsScore}%</span>`
+      : "";
+
+    const bestMatchPill = isBestMatch
+      ? `<div class="best-match-pill">✨ Best Match</div>`
+      : "";
+
+    const versionTagHtml = r.versionTag
+      ? `<span class="version-tag-pill">${r.versionTag}</span>`
+      : `<span></span>`;
+
+    return `${bestMatchPill}<div class="${cardClass}" data-resume-id="${r.resumeId}">
+      <div class="resume-card-top">
+        <span class="resume-name" title="${r.filename.replace(/"/g, "&quot;")}">${truncate(r.filename, 28)}</span>
+        ${atsBadgeHtml}
+      </div>
+      <div class="resume-card-bottom">
+        ${versionTagHtml}
+        <button class="attach-resume-btn" data-resume-id="${r.resumeId}">Attach</button>
+      </div>
+    </div>`;
+  }
+
+  private buildResumeSection(): string {
+    if (!this.vaultResumesLoaded) {
+      // Still loading — show skeleton
+      return `<div class="section-header-row">
+        <span class="section-label">RESUMES</span>
+      </div>
+      <div class="loading-spinner-wrap"></div>`;
+    }
+
+    if (this.vaultResumes.length === 0) {
+      return `<div class="section-header-row">
+        <span class="section-label">RESUMES</span>
+      </div>
+      <div class="empty-resume-state">
+        <div class="empty-icon">📄</div>
+        <div class="empty-text">No resumes in vault</div>
+        <div class="empty-sub">Upload a resume to enable smart autofill and ATS scoring</div>
+        <button class="upload-resume-btn" id="open-options-btn">+ Upload Resume</button>
+      </div>`;
+    }
+
+    return `<div class="section-header-row">
+      <span class="section-label">RESUMES</span>
+      <span class="resume-count">${this.vaultResumes.length} in vault</span>
+    </div>
+    ${this.vaultResumes.map((r) => this.buildResumeCard(r)).join("")}`;
+  }
+
+  private bindResumeEvents(): void {
+    // Attach resume buttons from vault
+    this.shadow.querySelectorAll<HTMLButtonElement>(".attach-resume-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const resumeId = btn.dataset.resumeId;
+        if (!resumeId) return;
+        chrome.runtime.sendMessage({ type: "ATTACH_RESUME", payload: { resumeId } });
+        btn.textContent = "✓ Attached";
+        setTimeout(() => { btn.textContent = "Attach"; }, 3000);
+      });
+    });
+
+    // Upload resume button — opens options page
+    const openOptionsBtn = this.shadow.getElementById("open-options-btn");
+    if (openOptionsBtn) {
+      openOptionsBtn.addEventListener("click", () => {
+        chrome.runtime.sendMessage({ type: "OPEN_OPTIONS" });
+      });
     }
   }
 
@@ -1941,6 +2098,169 @@ class FloatingPanel {
         margin-left: 5px;
         vertical-align: middle;
       }
+
+      /* ── Resume Vault Section ───────────────────────────────────────────── */
+      .section-card {
+        background: #111318;
+        border-radius: 10px;
+        border: 1px solid rgba(255,255,255,0.07);
+        padding: 12px;
+        margin-bottom: 8px;
+        animation: fadeUp 0.25s ease both;
+      }
+      .section-label {
+        font-size: 11px;
+        font-weight: 600;
+        color: #5a6278;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .section-header-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 8px;
+      }
+      .resume-count {
+        font-size: 10px;
+        color: #5a6278;
+      }
+      .empty-resume-state {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 6px;
+        padding: 16px 12px;
+        text-align: center;
+      }
+      .empty-icon { font-size: 24px; }
+      .empty-text {
+        font-size: 13px;
+        font-weight: 600;
+        color: #e0e4ef;
+      }
+      .empty-sub {
+        font-size: 11px;
+        color: #5a6278;
+        line-height: 1.5;
+      }
+      .upload-resume-btn {
+        margin-top: 6px;
+        background: rgba(0,196,180,0.1);
+        border: 1px solid rgba(0,196,180,0.3);
+        color: #00c4b4;
+        border-radius: 8px;
+        padding: 6px 14px;
+        font-size: 11px;
+        font-weight: 600;
+        cursor: pointer;
+        pointer-events: all;
+        font-family: system-ui, -apple-system, sans-serif;
+      }
+      .upload-resume-btn:hover { background: rgba(0,196,180,0.18); }
+      .resume-card {
+        background: #1a1d25;
+        border-radius: 8px;
+        padding: 10px 12px;
+        margin-bottom: 6px;
+        border: 1px solid rgba(255,255,255,0.07);
+        cursor: default;
+        transition: background 0.15s;
+      }
+      .resume-card:hover { background: rgba(255,255,255,0.04); }
+      .resume-card.best-match {
+        border-left: 3px solid #10b981;
+        box-shadow: 0 0 0 1px rgba(16,185,129,0.15);
+      }
+      .resume-card.high-match { border-left: 3px solid #00c4b4; }
+      .resume-name {
+        font-size: 12px;
+        font-weight: 600;
+        color: #e0e4ef;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        flex: 1;
+      }
+      .resume-ats-badge {
+        font-size: 10px;
+        font-weight: 700;
+        padding: 2px 7px;
+        border-radius: 99px;
+        flex-shrink: 0;
+      }
+      .resume-card-top {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 6px;
+      }
+      .resume-card-bottom {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .version-tag-pill {
+        font-size: 10px;
+        color: #8b92a8;
+        background: rgba(255,255,255,0.05);
+        padding: 2px 7px;
+        border-radius: 99px;
+        border: 1px solid rgba(255,255,255,0.07);
+      }
+      .attach-resume-btn {
+        font-size: 10px;
+        font-weight: 600;
+        color: #00c4b4;
+        background: rgba(0,196,180,0.1);
+        border: 1px solid rgba(0,196,180,0.25);
+        border-radius: 99px;
+        padding: 3px 10px;
+        cursor: pointer;
+        pointer-events: all;
+        font-family: system-ui, -apple-system, sans-serif;
+      }
+      .attach-resume-btn:hover { background: rgba(0,196,180,0.18); }
+      .best-match-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 9px;
+        font-weight: 700;
+        color: #10b981;
+        background: rgba(16,185,129,0.1);
+        border: 1px solid rgba(16,185,129,0.2);
+        border-radius: 99px;
+        padding: 2px 7px;
+        margin-bottom: 4px;
+      }
+
+      /* ── LLM Picker ─────────────────────────────────────────────────────── */
+      .llm-picker-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 6px;
+      }
+      .llm-picker-label {
+        font-size: 10px;
+        color: #5a6278;
+        font-weight: 600;
+        flex-shrink: 0;
+      }
+      .llm-picker-select {
+        flex: 1;
+        background: #1a1d25;
+        border: 1px solid rgba(255,255,255,0.1);
+        color: #e0e4ef;
+        border-radius: 6px;
+        padding: 4px 8px;
+        font-size: 11px;
+        cursor: pointer;
+        outline: none;
+        font-family: system-ui, -apple-system, sans-serif;
+      }
+      .llm-picker-select:focus { border-color: rgba(0,196,180,0.4); }
     `;
   }
 
@@ -1978,6 +2298,11 @@ class FloatingPanel {
            </div>
          </div>`
       : "";
+
+    // Resume vault section — always rendered (shows loading/empty/loaded state)
+    const resumeVaultHtml = `<div class="section-card" id="vault-resume-section" style="animation-delay:0ms">
+      ${this.buildResumeSection()}
+    </div>`;
 
     // Autofill CTA
     const ctaHtml = fillableCount > 0
@@ -2038,6 +2363,20 @@ class FloatingPanel {
              const hasDrafts = state.drafts.length > 0;
              const selectedText = state.drafts[state.selectedDraft] ?? "";
 
+             // LLM picker — shown when providers are configured
+             const llmPickerHtml = this.providers.length > 0
+               ? `<div class="llm-picker-row">
+                   <label class="llm-picker-label">LLM</label>
+                   <select class="llm-picker-select" data-q-idx="${qi}">
+                     ${this.providers.map((p) => `
+                       <option value="${p.name}" ${this.categoryModelRoutes[q.category] === p.name ? "selected" : ""}>
+                         ${p.name.charAt(0).toUpperCase() + p.name.slice(1)}
+                       </option>
+                     `).join("")}
+                   </select>
+                 </div>`
+               : "";
+
              let draftContent = "";
              if (hasDrafts) {
                const tabsHtml = `<div class="draft-tabs">
@@ -2068,7 +2407,7 @@ class FloatingPanel {
                const elapsed = elapsedSec > 0 ? `<span class="elapsed-time">${elapsedSec}s</span>` : "";
                draftContent = `<div class="loading-text"><span class="loading-spinner"></span>Generating… ${providerBadge}${elapsed}</div>`;
              } else {
-               draftContent = `<button class="generate-btn" data-q-idx="${qi}" ${state.loading ? "disabled" : ""}>&#10022; Generate Answer</button>`;
+               draftContent = `${llmPickerHtml}<button class="generate-btn" data-q-idx="${qi}" ${state.loading ? "disabled" : ""}>&#10022; Generate Answer</button>`;
              }
 
              const errorHtml = state.error
@@ -2121,6 +2460,7 @@ class FloatingPanel {
         </div>` : ""}
         <div class="panel-body">
           ${scoreBarHtml}
+          ${resumeVaultHtml}
           ${ctaHtml}
           ${autoFillBannerHtml}
           ${fieldsHtml}
@@ -2279,6 +2619,21 @@ class FloatingPanel {
         }
       });
     });
+
+    // LLM picker — persist selected provider for the question's category
+    this.shadow.querySelectorAll<HTMLSelectElement>(".llm-picker-select").forEach((sel) => {
+      sel.addEventListener("change", () => {
+        const qi = parseInt(sel.dataset.qIdx ?? "0", 10);
+        const state = this.questionStates[qi];
+        if (!state) return;
+        const selectedProvider = sel.value;
+        this.categoryModelRoutes[state.question.category] = selectedProvider;
+        chrome.storage.local.set({ categoryModelRoutes: this.categoryModelRoutes }).catch(() => {});
+      });
+    });
+
+    // Bind resume events (vault attach / open options)
+    this.bindResumeEvents();
   }
 }
 
