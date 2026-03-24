@@ -6,10 +6,11 @@ AI-powered job application assistant. Watches you browse job boards, scores role
 
 ## What It Is
 
-A full-stack system with two moving parts:
+A full-stack system with three surfaces:
 
-1. **Backend** — FastAPI service that stores your resume vault, scores resumes against job descriptions, generates tailored LaTeX resumes via LLM, and persists Q&A answers.
-2. **Chrome Extension (MV3)** — Sidepanel that activates on job boards and career pages. Two modes: Job Scout (browse + score jobs) and Apply Mode (form-fill + Q&A generation).
+1. **Backend** — FastAPI service on Fly.io. Stores the resume vault, scores resumes against job descriptions, generates tailored LaTeX resumes via LLM, persists Q&A answers, and exposes 40+ REST endpoints.
+2. **Chrome Extension (MV3)** — Floating panel + sidepanel that activates on job boards and career pages. Two modes: Job Scout (browse + score jobs) and Apply Mode (form-fill + Q&A generation).
+3. **Dashboard** — React + Vite web app (Vercel) with Clerk auth. Surfaces application kanban, resume vault, cover letters, answer vault, job scout, and profile settings — all synced with the backend.
 
 ---
 
@@ -18,27 +19,41 @@ A full-stack system with two moving parts:
 ```
 Chrome Extension (MV3)
 ├── Background worker      URL detection, sidepanel trigger, offline sync queue
-├── Content script         Form field detection, job card scraping, field injector
+├── Content script         Form field/question detection, job card scraping, field injector
+├── Floating Panel         Shadow DOM overlay on career pages — ATS bar, resume vault, Q&A
 └── Sidepanel (React+TS)
     ├── App.tsx            Mode dispatcher (idle / scout / apply)
     ├── JobScout.tsx       Job list with ATS scores per card
-    └── ApplyMode.tsx      3-tab form filler (resumes, fields, Q&A)
+    └── ApplyMode.tsx      4-tab form filler (resumes, fields, Q&A, answers vault)
 
-FastAPI Backend
-├── /api/v1/vault/         18 endpoints — upload, retrieve, score, generate, Q&A, history
-├── /api/v1/applications/  Application CRUD + stats
-├── /api/v1/auth/          Clerk webhook + user registration
+Dashboard (React + Vite — Vercel)
+├── /                      Home — stats, mini-kanban, activity feed
+├── /applications          Kanban board + table with status timeline
+├── /resumes               Resume vault — upload, preview, LaTeX editor
+├── /cover-letters         Cover letter library + SSE streaming generator
+├── /job-scout             Job discovery with fit score cards
+├── /vault                 Answer vault with category tabs + search
+└── /settings              Profile, provider configs, work history, extension status
+
+FastAPI Backend (Fly.io — always-on)
+├── /api/v1/vault/         40+ endpoints — upload, retrieve, score, generate, Q&A, answers, cover letters
+├── /api/v1/applications/  Application CRUD + stats + funnel metrics
+├── /api/v1/auth/          Clerk webhook, user profile GET/PATCH
+├── /api/v1/users/         Provider configs, GitHub token, work history
 └── /health                Liveness probe
 
-PostgreSQL
-├── users                  Clerk ID + encrypted GitHub PAT + LLM key
+PostgreSQL (Supabase)
+├── users                  Clerk ID + 14 profile fields + encrypted GitHub PAT
 ├── resumes                Parsed resume + TF-IDF/embedding vectors + ATS metadata
 ├── resume_usages          Every submission (company, role, outcome, ats_score)
-├── application_answers    Saved Q&A per company/role (recruiter callback reference)
-├── applications           Application lifecycle tracking
+├── application_answers    Saved Q&A per company/role + RL reward signal
+├── applications           Application lifecycle tracking + notes
+├── work_history_entries   Structured employment/education history
+├── user_provider_configs  Per-user LLM provider credentials (Fernet-encrypted)
+├── document_chunks        Chunked text with embeddings for RAG retrieval
 └── audit_logs             Immutable event log
 
-Redis
+Redis (Upstash)
 └── Rate limiting counters, JD embedding cache, circuit breaker state
 
 GitHub (private repo: resume-vault)
@@ -476,7 +491,7 @@ poetry run mypy app/
 cd ../extension && npx tsc --noEmit && npm run build
 ```
 
-Current status: **74/74 backend tests passing, 0 TypeScript errors, extension build clean.**
+Current status: **~355 backend tests across 39 files, 0 TypeScript errors, extension build clean.**
 
 ---
 
@@ -578,122 +593,168 @@ autoapply-ai/
 │   │   ├── dependencies.py        get_current_user, get_db, get_redis
 │   │   ├── main.py                App factory, middleware, lifespan
 │   │   ├── middleware/            circuit_breaker, rate_limit, logging, request_id
-│   │   ├── models/                user, resume, application, audit_log, base
-│   │   ├── routers/               health, auth, vault, applications, resume
-│   │   ├── schemas/               Pydantic I/O schemas
-│   │   ├── services/              llm, ats, embedding, retrieval_agent,
-│   │   │                          resume_generator, github, pdf, tailoring_pipeline,
-│   │   │                          application_service, resume_parser, resume_validator
-│   │   └── utils/                 encryption, hashing
-│   ├── alembic/versions/          15d0f847bcc2 (initial), a3f2e1d4c5b6 (vault)
-│   ├── tests/unit/                74 passing tests
+│   │   ├── models/                user, resume, application, work_history,
+│   │   │                          user_provider_config, document_chunk, audit_log, base
+│   │   ├── routers/               health, auth, vault/, applications, resume, users,
+│   │   │                          work_history, user_provider_config, reflect
+│   │   ├── schemas/               Pydantic I/O schemas (user, resume, application, vault)
+│   │   ├── services/              llm_gateway, llm_service, ats_service, embedding_service,
+│   │   │                          rag_service, retrieval_agent, resume_generator,
+│   │   │                          tailoring_pipeline, resume_parser, resume_validator,
+│   │   │                          github_service, email_classifier_service, application_service
+│   │   └── utils/                 encryption, hashing, audit
+│   ├── alembic/versions/          11 migrations (initial → vault → provider configs →
+│   │                              work history → document chunks → file hash →
+│   │                              answer feedback → notes → profile fields → merge)
+│   ├── tests/                     ~355 tests across 39 files (unit + E2E)
 │   ├── Dockerfile                 Multi-stage python:3.12-slim
+│   ├── fly.toml                   Fly.io config (always-on, shared-cpu-1x)
 │   ├── start.sh                   alembic upgrade head → uvicorn
 │   ├── pyproject.toml             Poetry, ruff, black, mypy config
 │   └── .env.example               All env vars documented
 ├── extension/
 │   ├── src/
-│   │   ├── background/worker.ts   URL detection, sidepanel, offline sync
-│   │   ├── content/detector.ts    Field/question detection, job card scraping
-│   │   ├── sidepanel/             App, ApplyMode, JobScout, ATSScoreBar, ResumeCard
-│   │   ├── options/               Settings page (API URL, LLM key, Clerk ID)
-│   │   └── shared/api.ts          Typed vault API client (reads URL from storage)
-│   ├── manifest.json              MV3, sidepanel, content scripts, permissions
-│   ├── vite.config.ts             Multi-entry build (sidepanel, background, content, options)
-│   └── store/                     Chrome Web Store description + privacy policy
+│   │   ├── background/worker.ts       URL detection, sidepanel, offline sync queue
+│   │   ├── content/
+│   │   │   ├── detector.ts            Field/question detection, job card scraping
+│   │   │   ├── floatingPanel.ts       Shadow DOM floating panel (2,691 lines)
+│   │   │   └── gmailContent.ts        Gmail email classifier
+│   │   ├── sidepanel/
+│   │   │   ├── App.tsx                Mode dispatcher (idle / scout / apply)
+│   │   │   ├── pages/ApplyMode.tsx    4-tab form filler + answers vault
+│   │   │   ├── pages/JobScout.tsx     Job scoring + fit cards
+│   │   │   ├── hooks/                 useTabNavigation, useApplicationTracker
+│   │   │   └── index.css              Global dark scrollbars, animations
+│   │   ├── options/options.ts         Settings — API URL, provider configs, profile sync
+│   │   └── shared/
+│   │       ├── api.ts                 Typed vault + profile API client
+│   │       └── types.ts               Shared TypeScript interfaces
+│   ├── manifest.json                  MV3, sidepanel, floating panel, permissions
+│   ├── vite.config.ts                 Main build (ES modules — sidepanel, background, options)
+│   ├── build-content.mjs              IIFE build for content scripts (no shared chunks)
+│   └── store/                         Chrome Web Store description + privacy policy
+├── dashboard/
+│   ├── src/
+│   │   ├── pages/                     Dashboard, Applications, Resumes, CoverLetters,
+│   │   │                              JobScout, Vault, Settings, Mirror, Reflection
+│   │   ├── providers/AuthProvider.tsx Clerk auth guard
+│   │   ├── api/                       applications, resumes, coverLetters clients
+│   │   └── components/                Shared UI components
+│   ├── e2e/dashboard.spec.ts          Playwright E2E tests (9 tests)
+│   ├── playwright.config.ts           Playwright config (Vite dev server)
+│   ├── vercel.json                    Vercel SPA routing + install config
+│   └── .env.local                     VITE_CLERK_PUBLISHABLE_KEY, VITE_API_BASE_URL
 ├── docs/
-│   ├── resume_instructions.md     General DE resume rules (user-editable)
-│   ├── resume_personal_config.md  Personal data + project config (user-editable)
+│   ├── resume_instructions.md         General DE resume rules (user-editable)
+│   ├── resume_personal_config.md      Personal data + project config (user-editable)
 │   └── templates/resume_template.tex  LaTeX base with {{PLACEHOLDERS}}
-├── .github/workflows/ci.yml       3-job CI pipeline
-├── docker-compose.yml             postgres, db_test, redis (+ ollama profile)
-├── render.yaml                    Render Blueprint
-└── DEPLOYMENT.md                  Step-by-step: Clerk + Render + Chrome Web Store
+├── UBIQUITOUS_LANGUAGE.md             DDD glossary — canonical terms for all domain concepts
+├── .github/workflows/ci.yml           3-job CI pipeline (backend + extension + docker)
+├── docker-compose.yml                 postgres, db_test, redis (+ ollama profile)
+├── render.yaml                        Render Blueprint (archived — Fly.io is production)
+└── DEPLOYMENT.md                      Step-by-step: Clerk + Fly.io + Chrome Web Store
 ```
 
 ---
 
 ## Current State
 
+> Branch: `feat/dashboard-v2` — last updated 2026-03-23
+
 | Component | Status |
 |-----------|--------|
-| Backend tests | 74/74 passing |
+| Backend tests | ~355 tests across 39 files |
 | TypeScript | 0 errors |
-| Extension build | Clean (41 modules) |
+| Extension build | Clean — two-build architecture (main + IIFE content scripts) |
 | ruff / black / mypy | All passing |
-| Docker (local) | postgres + db_test + redis up, both migrations applied |
-| GitHub repo | `narendranathe/autoapply-ai` — branch `feat/phase-4-vault-extension` |
-| GitHub Actions secrets | `DOCKERHUB_USERNAME` + `DOCKERHUB_TOKEN` + `FLY_API_TOKEN` uploaded |
-| Resume vault repo | `narendranathe/resume-vault` (private) — created |
+| Alembic migrations | 11 migrations applied (prod + local) |
+| GitHub repo | `narendranathe/autoapply-ai` |
+| GitHub Actions secrets | `DOCKERHUB_USERNAME` + `DOCKERHUB_TOKEN` + `FLY_API_TOKEN` |
+| Resume vault repo | `narendranathe/resume-vault` (private) |
 | Clerk | `feasible-liger-35.clerk.accounts.dev` (test instance) — JWKS verified |
-| **Fly.io deploy** | **Live** — `https://autoapply-ai-api.fly.dev` (always-on, 0s cold start) |
+| **Fly.io backend** | **Live** — `https://autoapply-ai-api.fly.dev` (always-on, 0s cold start) |
 | **Supabase DB** | **Live** — `aws-1-us-east-1.pooler.supabase.com` (session pooler, SSL) |
 | **Upstash Redis** | **Live** — `fly-autoapply-redis.upstash.io:6379` |
-| Production user | Registered — `user_3AB26PAgD82zYApFLsMeqaTQyDT` → `4c458e37-...` |
+| **Dashboard (Vercel)** | **Deployed** — Clerk auth, 9 pages, profile sync with backend |
 | Chrome extension | Loaded unpacked — ID `cepfanhjdjlhmfchelknemfmlodnmbfa` |
-| Extension sidepanel | **Fixed** — opens on toolbar icon click + badge click |
-| Extension UI | **Redesigned** — Simplify/Jobright AI style with company avatars + score chips |
+| Floating panel | **Live** — Shadow DOM, teal/obsidian design, ATS bar, resume vault, LLM picker |
+| Extension sidepanel | **Live** — 4 tabs: Resumes, Fields, Q&A, Answers vault |
+| Profile sync | **Live** — 14 profile fields synced extension ↔ dashboard ↔ backend |
+| E2E tests | Playwright (9 tests dashboard), pytest API integration (34 pass, 9 xfail) |
+| Open P0 issues | 6 security issues tracked in [#85](https://github.com/narendranathe/autoapply-ai/issues/85) — fix before public launch |
 
 ---
 
-## Next Steps (in order)
+## Roadmap
 
-### 1. Rebuild and reload the extension
-After the sidepanel fixes and UI redesign:
+Issues are tracked in GitHub. Grouped by priority.
+
+### P0 — Security (fix before public launch)
+
+| Issue | What |
+|-------|------|
+| [#85](https://github.com/narendranathe/autoapply-ai/issues/85) | Full architecture critique — 6 P0 + 7 P1 security/reliability issues |
+| [#89](https://github.com/narendranathe/autoapply-ai/issues/89) | Auth: `/auth/register` has no authentication — account takeover vector |
+| [#90](https://github.com/narendranathe/autoapply-ai/issues/90) | Auth: JWT validation only runs when `CLERK_FRONTEND_API_URL` is set |
+| [#91](https://github.com/narendranathe/autoapply-ai/issues/91) | Extension: `drainOfflineQueue` hardcodes `localhost:8000` — prod edits silently fail |
+| [#92](https://github.com/narendranathe/autoapply-ai/issues/92) | CORS: wildcard `chrome-extension://*` when `EXTENSION_ID` not set in production |
+
+### P1 — Dashboard v2 (in progress)
+
+| Issue | What |
+|-------|------|
+| [#69](https://github.com/narendranathe/autoapply-ai/issues/69) | PRD: Dashboard v2 full redesign |
+| [#71](https://github.com/narendranathe/autoapply-ai/issues/71) | Home dashboard — stats, mini-kanban, watchlist, activity feed |
+| [#72](https://github.com/narendranathe/autoapply-ai/issues/72) | Applications deep-dive drawer + job_id column + status timeline |
+| [#73](https://github.com/narendranathe/autoapply-ai/issues/73) | Job Scout discovery page with fit score cards |
+| [#74](https://github.com/narendranathe/autoapply-ai/issues/74) | Cover letters repository + SSE streaming generator |
+| [#75](https://github.com/narendranathe/autoapply-ai/issues/75) | Resumes page with Monaco LaTeX editor + PDF.js split-pane viewer |
+| [#76](https://github.com/narendranathe/autoapply-ai/issues/76) | Answer vault with category tabs, search, score badges |
+
+### P1 — Extension Intelligence (Strategy C)
+
+| Issue | What |
+|-------|------|
+| [#56](https://github.com/narendranathe/autoapply-ai/issues/56) | PRD: Strategy C — tiered field detection + vault recall + ATS auto-fill |
+| [#58](https://github.com/narendranathe/autoapply-ai/issues/58) | VaultRecallConnector — wire `/vault/answers/similar` into `redetect()` |
+| [#59](https://github.com/narendranathe/autoapply-ai/issues/59) | SimilarityBadgeUI — "From Memory" label + similarity % badge |
+| [#60](https://github.com/narendranathe/autoapply-ai/issues/60) | ATS Auto-Fill Banner — auto-fill when ATS score ≥ 0.75 + Undo |
+| [#61](https://github.com/narendranathe/autoapply-ai/issues/61) | CoverLetterPreFetcher — pre-load matching cover letter on page detection |
+| [#62](https://github.com/narendranathe/autoapply-ai/issues/62) | SPAResizeObserver — catch Workday/Greenhouse step transitions |
+| [#63](https://github.com/narendranathe/autoapply-ai/issues/63) | IframeFieldBridge — detect + fill fields inside same-origin iframes |
+
+### P2 — Growth & Monetization
+
+| Issue | What |
+|-------|------|
+| [#93](https://github.com/narendranathe/autoapply-ai/issues/93) | Stripe billing — subscription plans + `/api/v1/billing/webhook` |
+| [#94](https://github.com/narendranathe/autoapply-ai/issues/94) | Chrome Web Store submission checklist |
+| [#95](https://github.com/narendranathe/autoapply-ai/issues/95) | Email inbox monitoring — parse incoming emails → auto-update application status |
+
+### Chrome Web Store (when ready)
 ```bash
 cd extension && npm run build
-```
-In Chrome → `chrome://extensions` → **AutoApply AI** → click the refresh icon (↺).
-
-Navigate to a Greenhouse job page (e.g. `boards.greenhouse.io/...`) → click the AutoApply AI toolbar icon → sidepanel should open immediately.
-
-### 2. Smoke test production
-```bash
-# Health check
-curl https://autoapply-ai-api.fly.dev/health
-# → {"status":"alive","service":"autoapply-ai"}
-
-# Vault — should return empty list (no resumes yet)
-curl https://autoapply-ai-api.fly.dev/api/v1/vault/resumes \
-  -H "X-Clerk-User-Id: user_3AB26PAgD82zYApFLsMeqaTQyDT"
-# → {"items":[],"page":1,"per_page":20}
-```
-
-### 3. Extension options page — point to production
-In Chrome → right-click AutoApply AI icon → **Options**:
-- **API Base URL** → `https://autoapply-ai-api.fly.dev/api/v1` → **Save & Test**
-- **Clerk User ID** → `user_3AB26PAgD82zYApFLsMeqaTQyDT` → **Verify & Save**
-
-### 4. Upload your first resume
-```bash
-curl -X POST https://autoapply-ai-api.fly.dev/api/v1/vault/upload \
-  -H "X-Clerk-User-Id: user_3AB26PAgD82zYApFLsMeqaTQyDT" \
-  -F "file=@/path/to/your/resume.pdf" \
-  -F "target_company=Google" \
-  -F "target_role=Data Engineer"
-```
-
-### 5. Chrome Web Store (when ready to publish)
-```bash
-# Windows PowerShell — zip the dist folder
-cd extension
+# Windows PowerShell:
 Compress-Archive -Path dist\* -DestinationPath ..\autoapply-extension.zip
 ```
-- https://chrome.google.com/webstore/devconsole → pay $5 one-time fee → **New Item** → upload zip
-- Fill title, description (`extension/store/description.txt`), screenshots (1280×800 minimum)
-- After approval: copy the 32-char extension ID → set in Fly secrets:
+- Pay $5 one-time dev fee → **New Item** → upload zip
+- After approval, lock CORS to your extension:
   ```bash
-  fly secrets set EXTENSION_ID=<your-32-char-id> --app autoapply-ai-api
+  fly secrets set EXTENSION_ID=<32-char-id> --app autoapply-ai-api
   ```
-  This locks CORS to your extension only (rejects other origins in production).
 
-### 6. Merge to main
-```bash
-git checkout main
-git merge feat/phase-4-vault-extension
-git push origin main
-# GitHub Actions → CI passes → flyctl deploy auto-runs
-```
+---
+
+## Phase 8 — Dashboard v2 + Profile Sync + Floating Panel (2026-03-21)
+
+- **Dashboard v2** (`dashboard/`): 9-page React + Vite app on Vercel — Applications, Resumes, Cover letters, Answer vault, Job Scout, Mirror, Reflection, Settings
+- **Teal/obsidian design system**: `#0a0b0d` obsidian, `#00c4b4` teal, `#e0e4ef` mercury — consistent across extension + dashboard
+- **Two-build extension architecture**: `vite.config.ts` (ES modules) + `build-content.mjs` (IIFE via Vite programmatic API) — fixed "Cannot use import statement outside a module" crash in content scripts
+- **Floating panel redesign**: FAB toggle, full-height obsidian panel, spring slide-in, ATS bar, resume vault section, LLM picker per question, "Best Match" glow for ATS ≥ 0.95
+- **Profile sync**: 14 new `users` columns + `GET/PATCH /auth/me` — synced from extension options page and dashboard Settings tab
+- **Answers vault tab**: New "Answers" tab in `ApplyMode.tsx` — search, category filter, inline edit/delete
+- **QA agents (Track 1)**: Architecture critique (#85 — 6 P0 security), API integration tests (34/43 pass, #87), Playwright E2E (7/9 pass, #84) — all filed as GitHub issues
+- **Production fix**: Missing `notes` column migration applied to Supabase — all `/applications` routes restored
 
 ---
 
