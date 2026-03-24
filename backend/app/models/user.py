@@ -32,6 +32,22 @@ class User(Base, TimestampMixin):
     total_resumes_generated: Mapped[int] = mapped_column(default=0)
     total_applications_tracked: Mapped[int] = mapped_column(default=0)
 
+    # Profile fields
+    first_name: Mapped[str | None] = mapped_column(String(100))
+    last_name: Mapped[str | None] = mapped_column(String(100))
+    phone: Mapped[str | None] = mapped_column(String(50))
+    city: Mapped[str | None] = mapped_column(String(100))
+    state: Mapped[str | None] = mapped_column(String(100))
+    zip_code: Mapped[str | None] = mapped_column(String(20))
+    country: Mapped[str | None] = mapped_column(String(100))
+    linkedin_url: Mapped[str | None] = mapped_column(String(500))
+    github_url: Mapped[str | None] = mapped_column(String(500))
+    portfolio_url: Mapped[str | None] = mapped_column(String(500))
+    degree: Mapped[str | None] = mapped_column(String(200))
+    years_experience: Mapped[str | None] = mapped_column(String(50))
+    salary: Mapped[str | None] = mapped_column(String(100))
+    sponsorship: Mapped[str | None] = mapped_column(String(100))
+
     # Relationships
     applications: Mapped[list["Application"]] = relationship(back_populates="user")
     provider_configs: Mapped[list["UserProviderConfig"]] = relationship(

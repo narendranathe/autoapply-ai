@@ -45,15 +45,15 @@ function CompanyAvatar({ name }: { name: string }) {
     <div style={{
       width: 36,
       height: 36,
-      borderRadius: 8,
-      background: `hsl(${hue}, 45%, 22%)`,
-      border: `1px solid hsl(${hue}, 45%, 32%)`,
+      borderRadius: 9,
+      background: `hsl(${hue}, 40%, 18%)`,
+      border: `1px solid hsl(${hue}, 40%, 28%)`,
       display: "flex",
       alignItems: "center",
       justifyContent: "center",
       fontWeight: 700,
       fontSize: 14,
-      color: `hsl(${hue}, 70%, 80%)`,
+      color: `hsl(${hue}, 65%, 75%)`,
       flexShrink: 0,
     }}>
       {initial}
@@ -97,30 +97,30 @@ export default function JobScout({ context }: Props) {
   }, []);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 45px)" }}>
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
       {/* Header bar */}
       <div style={{
         padding: "10px 14px",
-        borderBottom: "1px solid #1f1f38",
-        background: "#0f0f1e",
+        borderBottom: "1px solid rgba(255,255,255,0.06)",
+        background: "#0a0b0d",
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",
         flexShrink: 0,
       }}>
         <div>
-          <div style={{ fontWeight: 600, fontSize: 13, color: "#f1f5f9" }}>Job Scout</div>
-          <div style={{ fontSize: 11, color: "#475569", marginTop: 1 }}>
+          <div style={{ fontWeight: 700, fontSize: 13, color: "#e0e4ef" }}>Job Scout</div>
+          <div style={{ fontSize: 11, color: "#5a6278", marginTop: 1 }}>
             {jobs.length} job{jobs.length !== 1 ? "s" : ""} detected
           </div>
         </div>
         <div style={{
-          background: "#1c1a2e",
-          border: "1px solid #2d2b4e",
+          background: "rgba(139,92,246,0.1)",
+          border: "1px solid rgba(139,92,246,0.2)",
           borderRadius: 99,
           padding: "3px 10px",
           fontSize: 10,
-          color: "#f59e0b",
+          color: "#8b5cf6",
           fontWeight: 600,
         }}>
           Scout Mode
@@ -128,7 +128,7 @@ export default function JobScout({ context }: Props) {
       </div>
 
       {/* Job list */}
-      <div style={{ flex: 1, overflowY: "auto", padding: "10px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ flex: 1, overflowY: "auto", padding: "10px 12px", display: "flex", flexDirection: "column", gap: 7 }}>
         {jobs.length === 0 ? (
           <div style={{
             flex: 1,
@@ -136,16 +136,26 @@ export default function JobScout({ context }: Props) {
             flexDirection: "column",
             alignItems: "center",
             justifyContent: "center",
-            gap: 10,
-            padding: "32px 24px",
+            gap: 12,
+            padding: "40px 24px",
             textAlign: "center",
           }}>
-            <div style={{ fontSize: 28 }}>🔍</div>
-            <div style={{ fontSize: 13, color: "#475569" }}>Scanning for job listings…</div>
+            <div style={{
+              width: 44,
+              height: 44,
+              borderRadius: 12,
+              background: "rgba(0,196,180,0.06)",
+              border: "1px solid rgba(0,196,180,0.15)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: 20,
+            }}>🔍</div>
+            <div style={{ fontSize: 12, color: "#5a6278" }}>Scanning for job listings…</div>
           </div>
         ) : (
           jobs.map((job, i) => (
-            <JobCard key={i} job={job} />
+            <JobCardItem key={i} job={job} index={i} />
           ))
         )}
       </div>
@@ -153,42 +163,76 @@ export default function JobScout({ context }: Props) {
   );
 }
 
-function JobCard({ job }: { job: JobEntry }) {
+function JobCardItem({ job, index }: { job: JobEntry; index: number }) {
   return (
     <div style={{
-      background: "#12121e",
-      border: "1px solid #1f1f38",
+      background: "#111318",
+      border: "1px solid rgba(255,255,255,0.07)",
       borderRadius: 10,
-      padding: "10px 12px",
+      padding: "11px 13px",
       display: "flex",
       flexDirection: "column",
       gap: 8,
+      animation: `fadeUp 180ms ${index * 40}ms both`,
     }}>
-      {/* Top row: avatar + company + role + score chip */}
+      {/* Top row */}
       <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
         <CompanyAvatar name={job.company} />
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontWeight: 700, fontSize: 13, color: "#f1f5f9", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          <div style={{
+            fontWeight: 700,
+            fontSize: 13,
+            color: "#e0e4ef",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}>
             {job.company}
           </div>
-          <div style={{ fontSize: 11, color: "#64748b", marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          <div style={{
+            fontSize: 11,
+            color: "#8b92a8",
+            marginTop: 2,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}>
             {job.role}
           </div>
         </div>
-        {/* Score chip or past count */}
         {job.loading ? (
-          <div style={{ fontSize: 11, color: "#334155", fontStyle: "italic" }}>Scoring…</div>
+          <div style={{
+            width: 40,
+            height: 40,
+            borderRadius: 8,
+            background: "#1a1d25",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}>
+            <div style={{
+              width: 14,
+              height: 14,
+              borderRadius: "50%",
+              border: "2px solid rgba(0,196,180,0.2)",
+              borderTopColor: "#00c4b4",
+              animation: "spin 0.8s linear infinite",
+            }} />
+          </div>
         ) : job.score != null ? (
           <div style={{
             flexShrink: 0,
-            background: "#12121e",
-            border: `1px solid ${scoreColor(job.score)}44`,
+            background: "#1a1d25",
+            border: `1px solid ${scoreColor(job.score)}33`,
             borderRadius: 8,
-            padding: "4px 8px",
+            padding: "5px 9px",
             textAlign: "center",
+            minWidth: 42,
           }}>
-            <div style={{ fontSize: 14, fontWeight: 800, color: scoreColor(job.score) }}>{job.score.toFixed(0)}</div>
-            <div style={{ fontSize: 9, color: "#475569", fontWeight: 600 }}>FIT</div>
+            <div style={{ fontSize: 15, fontWeight: 800, color: scoreColor(job.score) }}>
+              {job.score.toFixed(0)}
+            </div>
+            <div style={{ fontSize: 9, color: "#5a6278", fontWeight: 600, letterSpacing: "0.05em" }}>FIT</div>
           </div>
         ) : null}
       </div>
@@ -198,21 +242,21 @@ function JobCard({ job }: { job: JobEntry }) {
         <ATSScoreBar score={job.score} label="Resume fit" size="sm" />
       )}
 
-      {/* Bottom: past applications badge + open link */}
+      {/* Bottom row */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         {job.pastCount > 0 ? (
           <span style={{
             fontSize: 10,
-            background: "#1e1335",
-            color: "#a78bfa",
+            background: "rgba(0,196,180,0.08)",
+            color: "#00c4b4",
             borderRadius: 99,
             padding: "2px 8px",
-            border: "1px solid #2d1b69",
+            border: "1px solid rgba(0,196,180,0.2)",
           }}>
             {job.pastCount} past application{job.pastCount !== 1 ? "s" : ""}
           </span>
         ) : (
-          <span style={{ fontSize: 10, color: "#334155" }}>No past applications</span>
+          <span style={{ fontSize: 10, color: "#5a6278" }}>No past applications</span>
         )}
         {job.url && (
           <a
@@ -221,13 +265,14 @@ function JobCard({ job }: { job: JobEntry }) {
             rel="noreferrer"
             style={{
               fontSize: 10,
-              color: "#8b5cf6",
+              color: "#00c4b4",
               textDecoration: "none",
               fontWeight: 600,
-              padding: "3px 8px",
-              background: "#1e1335",
+              padding: "3px 10px",
+              background: "rgba(0,196,180,0.08)",
               borderRadius: 6,
-              border: "1px solid #2d1b69",
+              border: "1px solid rgba(0,196,180,0.2)",
+              transition: "all 0.15s",
             }}
           >
             Open →

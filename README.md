@@ -50,6 +50,32 @@ GitHub (private repo: resume-vault)
 
 ---
 
+## Domain Language
+
+All terms used in code, docs, and conversations are defined in [`UBIQUITOUS_LANGUAGE.md`](./UBIQUITOUS_LANGUAGE.md). When in doubt about what a term means, that file is the authority.
+
+**Application status lifecycle:**
+```
+discovered → draft → tailored → applied → phone_screen → interview → offer
+                                         ↘ rejected (from any stage)
+```
+
+**Key concepts at a glance:**
+
+| Term | Means |
+|---|---|
+| **Vault** | All stored resumes + answers for a user |
+| **Base Template** | User-uploaded master resume (foundation for generation) |
+| **ATS Score** | Float 0.0–1.0 — resume fit against a specific JD |
+| **Floating Panel** | Shadow DOM overlay injected on job application pages |
+| **Provider** | LLM service (`anthropic`, `openai`, `kimi`, `groq`, `ollama`, `fallback`) |
+| **Category** | Question type (`why_company`, `challenge`, `motivation`, etc.) |
+| **Feedback** | RL signal on an answer: `used_as_is` / `edited` / `regenerated` / `skipped` |
+| **RAG** | Injecting retrieved work history chunks into LLM prompts |
+| **Platform** | Job board / ATS (`linkedin`, `greenhouse`, `lever`, `workday`, `indeed`) |
+
+---
+
 ## Key Flows
 
 ### Job Scout Mode

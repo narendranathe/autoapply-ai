@@ -798,6 +798,53 @@ export const applicationsApi = {
   },
 };
 
+// ── Profile API ────────────────────────────────────────────────────────────
+
+export interface ProfileData {
+  user_id: string;
+  clerk_id: string;
+  first_name: string | null;
+  last_name: string | null;
+  phone: string | null;
+  city: string | null;
+  state: string | null;
+  zip_code: string | null;
+  country: string | null;
+  linkedin_url: string | null;
+  github_url: string | null;
+  portfolio_url: string | null;
+  degree: string | null;
+  years_experience: string | null;
+  salary: string | null;
+  sponsorship: string | null;
+  github_username: string | null;
+  has_github_token: boolean;
+  has_llm_key: boolean;
+  llm_provider: string | null;
+}
+
+export const profileApi = {
+  async getProfile(): Promise<ProfileData> {
+    await ensureInit();
+    const resp = await fetch(`${getApiBase()}/auth/me`, {
+      headers: authHeaders(),
+    });
+    if (!resp.ok) throw new Error(`Failed to fetch profile (${resp.status})`);
+    return resp.json() as Promise<ProfileData>;
+  },
+
+  async updateProfile(data: Partial<ProfileData>): Promise<ProfileData> {
+    await ensureInit();
+    const resp = await fetch(`${getApiBase()}/auth/me`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(data),
+    });
+    if (!resp.ok) throw new Error(`Failed to update profile (${resp.status})`);
+    return resp.json() as Promise<ProfileData>;
+  },
+};
+
 // ── Work History types ──────────────────────────────────────────────────────
 
 export interface WorkHistoryEntry {

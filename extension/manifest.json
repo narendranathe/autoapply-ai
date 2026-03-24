@@ -52,10 +52,7 @@
         "*://linkedin.com/jobs/*",
         "*://www.linkedin.com/jobs/*",
         "*://indeed.com/viewjob*",
-        "*://www.indeed.com/viewjob*",
-        "*://careers.*.*/*",
-        "*://jobs.*.*/*",
-        "*://apply.*.*/*"
+        "*://www.indeed.com/viewjob*"
       ],
       "js": ["content/floatingPanel.js"],
       "run_at": "document_idle"

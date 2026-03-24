@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-export type Tab = "resumes" | "fields" | "questions" | "history" | "prep" | "cover";
+export type Tab = "resumes" | "fields" | "questions" | "history" | "prep" | "cover" | "answers";
 
 export const DEFAULT_TAB: Tab = "resumes";
 
