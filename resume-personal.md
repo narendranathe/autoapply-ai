@@ -1,6 +1,6 @@
 # Narendranath Edara — Personal Resume Data
 
-**Senior Data Engineer · ML Engineer · AI Platform Builder**
+**Senior AI Platform Engineer · Applied AI Systems · LLM Infrastructure**
 
 Dallas, TX · edara.narendranath@gmail.com · (573) 466-6656
 [LinkedIn](https://linkedin.com/in/narendranathe) · [GitHub](https://github.com/narendranathe) · [Portfolio](https://narendranathe.github.io) · [Substack](https://narendranathe.substack.com)
@@ -14,15 +14,15 @@ Dallas, TX · edara.narendranath@gmail.com · (573) 466-6656
 
 ## Profile
 
-Data and ML Engineer with 4+ years building enterprise data platforms, streaming ML pipelines, and self-healing infrastructure. I shipped a CDC reengineering that cut ETL runtime from hours to minutes, compressed a 3-month deployment cycle to 14 days by owning CI/CD end-to-end, and built a zero-cost job discovery platform that scrapes 109 companies every 5 minutes on free-tier infrastructure. My systems monitor themselves, recover without pages, and expose governed metrics to both dashboards and AI agents. Open to Senior Data Engineer, ML Engineer, AI/ML Platform Engineer roles. Requires H1B transfer sponsorship.
+AI platform engineer building production LLM systems, retrieval pipelines, and governed AI-enabled data products. At ExponentHR I led enterprise data platform modernization across ETL, CI/CD, database automation, and analytics delivery supporting 400 enterprise clients. Outside work I shipped AutoApply AI and tailor-resume across FastAPI backends, Chrome extensions, RAG, multi-provider model routing, packaging, CI, and live deployments. I design and ship production AI systems, not just prototypes. Targeting Senior AI Platform Engineer, Applied AI Engineer, Backend Engineer, AI, and ML Platform Engineer roles. Requires H1B transfer sponsorship.
 
 ---
 
 ## Technical Skills
 
-**Languages & ML:** Python, SQL, T-SQL, PySpark, Bash, MLflow, Airflow, Feature Engineering, Model Serving, LangChain, RAG
-**Data & Cloud:** Spark, Kafka, Databricks, Delta Lake, Snowflake, PostgreSQL, ETL/ELT, Data Modeling (Star Schema), Azure (AKS, DevOps, Data Factory), AWS (S3, EC2), Microsoft Fabric, Docker, Kubernetes
-**Tools & Infrastructure:** FastAPI, Streamlit, Elasticsearch, Power BI, DAX, SSRS, Git, CI/CD (GitHub Actions, Azure DevOps), Prometheus, Grafana, Swagger/OpenAPI, MLflow
+**Languages & AI:** Python, SQL, T-SQL, TypeScript, PySpark, Bash, RAG, LLM Integration, Vector Search, Model Routing, Prompt/Context Engineering, Evaluation Loops
+**Platforms & Data:** FastAPI, PostgreSQL, pgvector, Kafka, Spark, Databricks, SQL Server, Supabase, Redis, ETL/ELT, Data Modeling, Azure (AKS, DevOps), AWS (S3, EC2), Docker, Kubernetes
+**Product & Infrastructure:** React, Chrome MV3, Streamlit, MLflow, CI/CD (GitHub Actions, Azure DevOps), Prometheus, Grafana, Swagger/OpenAPI, Claude API, MCP Servers
 
 ---
 
@@ -31,16 +31,14 @@ Data and ML Engineer with 4+ years building enterprise data platforms, streaming
 ### Data Engineer
 **ExponentHR** · Dallas, TX · Jul 2024 – Present
 
-*Enterprise HR/payroll data platform. Own data infrastructure, deployment pipelines, AI analytics layer, and developer tooling across multi-tenant SQL Server environments.*
+*Enterprise HR/payroll data platform. Own data infrastructure, deployment pipelines, and developer tooling across multi-tenant SQL Server environments.*
 
-- **Architected AI-powered embedded analytics on Microsoft Fabric** by migrating legacy SQL reporting to DAX-based semantic models and building AI agents that translate natural-language business questions into optimized SQL — cut client-facing support tickets tied to report requests by ~40% and brought average query response from 12s down to under 4s across Power BI embedded dashboards.
-- **Built and deployed an Azure DevOps–driven database copy-down automation framework** for Contained Always-On Availability Groups, automating the full lifecycle: restore, security configuration, recovery model switch to FULL, AAG listener registration, and CDC instance setup — eliminated ~1 hour of manual IT effort per request across 20+ daily database refresh requests from dev, test, and business validation teams, turning a multi-step ops process into a single parameterized pipeline trigger.
+- **Built and deployed an Azure DevOps-driven database copy-down automation framework** for Contained Always-On Availability Groups, automating the full lifecycle: restore, security configuration, recovery model switch to FULL, AAG listener registration, and CDC instance setup — eliminated ~1 hour of manual IT effort per request across 20+ daily database refresh requests from dev, test, and business validation teams, turning a multi-step ops process into a single parameterized pipeline trigger.
 - **Compressed deployment cycles from 3 months to 14 days** by implementing Scrum sprints, aligning four cross-functional teams (dev/test/IT/business), and owning end-to-end CI/CD through Azure DevOps — the bottleneck was handoffs between teams, not code; restructuring the process removed 11 weeks of waiting.
 - **Reengineered CDC-based SSIS ETL pipelines** from full-table reloads to incremental change capture, reducing nightly batch runtime from ~30 minutes to under 8 minutes and cutting SQL Server compute costs by roughly 67% — the key was switching from `TRUNCATE → INSERT` to CDC log-based extraction with merge upserts, which eliminates full-table I/O overhead and unnecessary data shuffling across the payroll schema.
-- **Designed AI-driven sprint automation agents** integrating Git commit logs and Azure DevOps OData APIs to generate real-time velocity dashboards — replaced 15+ hours/sprint of manual status reporting with auto-generated burndown and deployment tracking.
 - **Owned production recovery for payroll-critical databases** using containerized AAG failover, maintaining 98% uptime SLA with sub-hour restore targets — this included diagnosing and resolving CDC capture job failures caused by missing SQL Agent jobs after failover events.
 
-*Technologies: SQL Server, T-SQL, SSIS/CDC, Azure DevOps, Microsoft Fabric, Power BI, DAX, SSRS, Contained AAG, CI/CD, AI Agents, Python*
+*Technologies: SQL Server, T-SQL, SSIS/CDC, Azure DevOps, Contained AAG, CI/CD, Python*
 
 ### Data Engineer
 **Missouri S&T** · Rolla, MO · Aug 2023 – Jul 2024
@@ -85,25 +83,20 @@ Data and ML Engineer with 4+ years building enterprise data platforms, streaming
 
 ## Featured Projects
 
-### JobScout — Automated Job Discovery & Application Platform
-**GitHub:** [narendranathe/job-scout](https://github.com/narendranathe/job-scout) · **Live:** Render + GitHub Pages · **Cost:** $0/month
+### AutoApply AI — AI-Powered Job Application Platform
+**Live:** [autoapply-ai-api.fly.dev](https://autoapply-ai-api.fly.dev) · Chrome MV3 Extension · Supabase + Upstash Redis · **Stack:** FastAPI + Claude Sonnet + PostgreSQL
 
-- Scrapes 109 company career pages across 6 ATS platforms every 5 minutes via tiered scheduling
-- Multi-signal relevance engine: core skills (40%) + secondary (20%) + title (15%) + location (10%) + experience (10%) + H1B (5%)
-- 95+ tailored resume PDFs indexed with pure-Python TF-IDF — `find_best_resume_for_job()` ranks all resumes vs any JD
-- Dream job alerts via Discord + Telegram when high-scoring role appears at target company
-- Application tracker: saved → applied → interview → offer → rejected, synced localStorage + Render API
-- **Architecture decisions:** Batch over streaming (jobs post hourly) · SQLite WAL over Postgres ($0) · TF-IDF over embeddings (pure Python) · GitHub Actions + Render free tier (~1,080 min/month)
-- **Next phase (AutoApply AI):** Chrome MV3 extension + multi-LLM pipeline (Claude behavioral, GPT short, direct lookup factual) + PostgreSQL work history + Redis cache
+- Production AI platform with FastAPI backend, Chrome MV3 extension, React dashboard, Supabase PostgreSQL, and Upstash Redis — 40+ endpoints, 11 ATS adapters, and 355+ backend tests across resume tailoring, Q&A generation, vault search, and application tracking
+- Multi-provider routing layer (Claude Sonnet → GPT-4o → Gemini → Groq → Kimi → Ollama → keyword fallback) grounds generations in pgvector + TF-IDF retrieval, persists feedback with a reward layer, and supports live job-page autofill through a Shadow DOM UI
+
+### tailor-resume — Resume Tailoring Engine, MCP Server, and PyPI Package
+**GitHub:** [narendranathe/tailor-resume](https://github.com/narendranathe/tailor-resume) · **Live:** Streamlit + Fly.io · **PyPI:** `tailor-resume`
+
+- Built a developer-facing applied AI tool with four surfaces — CLI, Streamlit app, typed MCP server, and Python package — for ATS gap analysis, profile extraction, and LaTeX resume rendering
+- Shipped a zero-config core pipeline with 190 tests, hosted MCP on Fly.io, packaged distribution via PyPI metadata, and clean interfaces for `extract_profile`, `analyze_gap`, `render_latex`, and `run_pipeline`
 
 ### Real-Time Fraud Detection ML Platform
 - 100+ TPS, sub-ms P99 latency · Kafka + LightGBM + MLflow · Prometheus + Grafana · Airflow orchestration · Docker
-
-### Real-Time Portfolio Risk Analytics Platform
-- 47.8 TPS · 15K+ records · <5s VaR latency · Kafka + Spark Structured Streaming + FastAPI + Streamlit
-
-### Sentiment Analysis Research
-- Published Taylor & Francis 2025 · VADER vs RoBERTa · 92% classification accuracy · TF-IDF + PCA + K-Means/DBSCAN
 
 ---
 
@@ -126,17 +119,13 @@ Data and ML Engineer with 4+ years building enterprise data platforms, streaming
 
 ---
 
-## Engineering Philosophy
+## Positioning Notes
 
-**Self-Recovery Systems.** I design systems that detect, diagnose, and heal without human pages. At ExponentHR, the database copy-down automation tool handles 20+ daily requests end-to-end with a single parameterized pipeline trigger. Containerized AAG failover restores payroll databases in under an hour. In JobScout, dual-source data hooks keep the dashboard alive when the backend sleeps.
+**Enterprise platform ownership.** ExponentHR is the anchor story for ETL modernization, CI/CD acceleration, database automation, and measurable operational impact across 400 clients.
 
-**Monitoring & Observability.** Prometheus + Grafana for ML platforms. Discord + Telegram for dream job detection. Dashboard monitor tabs for pipeline status. Every production system exposes its vitals.
+**Applied AI product shipping.** AutoApply AI and tailor-resume prove I can ship user-facing AI systems end to end: backend APIs, model routing, retrieval, packaging, browser surfaces, persistence, CI, and production deployment.
 
-**Platform Thinking.** Not pipelines — platforms. Semantic layers for dashboards and LLMs. TF-IDF vault indexing 95+ documents. Relevance engine scoring every job against multi-signal weights.
-
-**Cost-Conscious Architecture.** $0/month for a 109-company scraper. CDC over full-table reload — 30min → 8min, 67% compute savings. Batch over streaming when the SLA allows.
-
-**AI Infrastructure Over AI Buzzwords.** AI agents querying production SQL. LLM pipelines routing to the cheapest model meeting quality bar. Resume matching on TF-IDF, not black-box embeddings.
+**Operational depth.** My best systems combine AI with platform fundamentals: observability, cost control, fault tolerance, tests, and infrastructure choices that can survive production use.
 
 ---
 
@@ -144,10 +133,11 @@ Data and ML Engineer with 4+ years building enterprise data platforms, streaming
 
 | Version Key | Target | Emphasis |
 |-------------|--------|----------|
-| `_DE` / `_data` | Senior Data Engineer | ETL/CDC, Spark/Kafka, pipeline arch, data modeling |
-| `_ML` / `_ml` | ML Engineer | MLflow, LightGBM, feature eng, model deployment |
-| `_AI` / `_ai` | AI/ML Platform Engineer | LLM integration, RAG, AI agents, semantic layers |
-| `_AE` / `_ae` | Analytics Engineer | dbt, Power BI, DAX, semantic models, data quality |
+| `_AIP` / `_ai_platform` | AI Platform Engineer | LLM backends, retrieval/RAG, model routing, governance, observability |
+| `_AAI` / `_applied_ai` | Applied AI Engineer | user-facing AI products, product integration, extension/dashboard surfaces |
+| `_ML` / `_ml` | ML Platform / ML Engineer | MLflow, inference, streaming, monitoring, model deployment |
+| `_DE` / `_data` | Data Platform / Senior Data Engineer | ETL/CDC, Spark/Kafka, platform architecture, data modeling |
+| `_AE` / `_ae` | Analytics / Semantic Layer Engineer | metrics, governance, semantic models, BI modernization |
 | `_GS` | Goldman Sachs | Quant/Finance DE focus |
 | `_Amazon` | Amazon | Scale + reliability |
 | `_{Company}_{Role}` | Company-specific | Full JD customization |
@@ -265,10 +255,10 @@ Data and ML Engineer with 4+ years building enterprise data platforms, streaming
       {Data Engineer}{July 2024 -- Present}
       {ExponentHR}{Dallas, TX}
       \resumeItemListStart
-        \resumeItem{Architected AI-powered embedded analytics on Microsoft Fabric, migrating legacy SQL to DAX-based semantic models and building AI agents that translate business questions to optimized SQL — cut report-related support tickets by \textasciitilde 40\% and brought query response from 12s to under 4s}
         \resumeItem{Built and deployed Azure DevOps--driven Contained AAG automation framework with parameterized restore, security, recovery-model, and CDC setup — eliminated \textasciitilde 1 hour of manual effort per request across 20+ daily database refreshes for dev, test, and business validation teams}
         \resumeItem{Compressed deployment cycles from 3 months to 14 days by owning CI/CD end-to-end through Azure DevOps and restructuring cross-team handoffs that accounted for 11 weeks of idle time}
         \resumeItem{Reengineered CDC-based ETL from full-table reloads to incremental change capture with merge upserts, cutting nightly batch runtime from \textasciitilde 30 minutes to under 8 minutes and reducing compute costs by \textasciitilde 67\%}
+        \resumeItem{Owned production recovery for payroll-critical databases using containerized AAG failover, restoring CDC-dependent workloads with sub-hour targets and tighter operational playbooks}
       \resumeItemListEnd
 
     \resumeSubheading
@@ -318,8 +308,8 @@ Data and ML Engineer with 4+ years building enterprise data platforms, streaming
  \begin{itemize}[leftmargin=0.15in, label={}]
     \small{\item{
      \textbf{Languages \& ML}{: Python, SQL, Bash, MLflow, Airflow, Feature Engineering, Model Serving, LangChain, RAG} \\
-     \textbf{Data \& Cloud}{: Spark, Kafka, Databricks, Delta Lake, PostgreSQL, ETL/ELT, Data Modeling, Azure (AKS, DevOps), AWS (S3), Microsoft Fabric, Docker, Kubernetes} \\
-     \textbf{Tools}{: FastAPI, Streamlit, Elasticsearch, Power BI, DAX, Git, CI/CD, Prometheus, Grafana, Swagger/OpenAPI} \\
+     \textbf{Data \& Cloud}{: Spark, Kafka, Databricks, Delta Lake, PostgreSQL, SQL Server, ETL/ELT, Data Modeling, Azure (AKS, DevOps), AWS (S3), Docker, Kubernetes} \\
+     \textbf{Tools}{: FastAPI, Streamlit, Elasticsearch, pgvector, Git, CI/CD, Prometheus, Grafana, Swagger/OpenAPI, Claude API} \\
     }}
  \end{itemize}
 
