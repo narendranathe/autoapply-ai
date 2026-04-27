@@ -17,25 +17,27 @@ from app.dependencies import get_current_user, get_db
 from app.models.resume import ApplicationAnswer
 from app.models.user import User
 from app.models.work_history import WorkHistoryEntry
-from app.services.rag_service import get_rag_context_for_query
-from app.services.resume_generator import (
-    _PROVIDER_RANK,
+from app.services.llm_gateway import (
     _call_anthropic,
     _call_gemini,
     _call_groq,
     _call_kimi,
     _call_openai,
+)
+from app.services.qa_generation_service import (
+    _PROVIDER_RANK,
     generate_answer_drafts,
     generate_answer_drafts_cascade,
     generate_answer_drafts_parallel,
 )
+from app.services.rag_service import get_rag_context_for_query
 
 from ._shared import _resolve_providers
 
 
 def _agent():
-    """Late lookup so tests can patch app.routers.vault._retrieval_agent."""
-    return sys.modules["app.routers.vault"]._retrieval_agent
+    """Late lookup so tests can patch app.routers.vault._shared._retrieval_agent."""
+    return sys.modules["app.routers.vault._shared"]._retrieval_agent
 
 
 router = APIRouter()
