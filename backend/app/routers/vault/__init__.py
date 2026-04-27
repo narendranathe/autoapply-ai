@@ -19,6 +19,7 @@ Sub-modules (route order matters — FastAPI first-match wins):
   documents — documents/upload-md, documents, documents/{filename}, documents/retrieve
   interview — interview-prep
   stories   — stories, stories/match, stories/import, stories/{story_id}
+  offer     — offer/evaluate
 """
 
 from fastapi import APIRouter
@@ -29,6 +30,7 @@ from .generate import router as generate_router
 from .github import router as github_router
 from .history import router as history_router
 from .interview import router as interview_router
+from .offer import router as offer_router
 from .resumes import router as resumes_router
 from .retrieve import router as retrieve_router
 from .stories import router as stories_router
@@ -43,5 +45,6 @@ router.include_router(github_router)
 router.include_router(documents_router)
 router.include_router(interview_router)
 router.include_router(stories_router)
+router.include_router(offer_router)
 
 __all__ = ["router"]
