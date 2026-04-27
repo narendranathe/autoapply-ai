@@ -10,9 +10,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_current_user, get_db
+from app.models.story import StoryEntry
 from app.models.user import User
 from app.models.work_history import WorkHistoryEntry
-from app.services.resume_generator import (
+from app.services.llm_gateway import (
     _call_anthropic,
     _call_gemini,
     _call_groq,
@@ -73,6 +74,27 @@ async def generate_interview_prep(
     wh_entries = list(wh_result.scalars().all())
     work_history_text = "\n\n".join(e.to_text_block() for e in wh_entries)
 
+    # Fetch matched stories for grounding
+    stories_stmt = (
+        select(StoryEntry)
+        .where(StoryEntry.user_id == user.id)
+        .order_by(StoryEntry.quality_score.desc())
+        .limit(20)
+    )
+    stories_result = await db.execute(stories_stmt)
+    all_stories = list(stories_result.scalars().all())
+
+    from app.services.story_service import match_stories_to_jd
+
+    matched_stories = match_stories_to_jd(jd_text, all_stories)[:3] if jd_text else []
+
+    stories_block = ""
+    if matched_stories:
+        lines = ["Proven narratives to draw from (use as grounding, do not fabricate):"]
+        for i, s in enumerate(matched_stories, 1):
+            lines.append(f"{i}. Action: {s.action} | Result: {s.result_text}")
+        stories_block = "\n".join(lines)
+
     # Parse providers list
     providers_list: list[dict] = []
     if providers_json.strip():
@@ -83,6 +105,8 @@ async def generate_interview_prep(
 
     user_prompt = f"""Candidate work history:
 {work_history_text or "Not provided."}
+
+{stories_block}
 
 Target company: {company_name}
 Target role: {role_title or "Software Engineer"}
