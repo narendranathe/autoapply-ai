@@ -2,6 +2,7 @@ from app.models.application import Application
 from app.models.audit_log import AuditLog
 from app.models.base import Base, TimestampMixin, async_session_factory, engine
 from app.models.document_chunk import DocumentChunk
+from app.models.offer_evaluation import OfferEvaluation
 from app.models.resume import ApplicationAnswer, Resume, ResumeUsage
 from app.models.story import StoryEntry
 from app.models.user import User
@@ -17,6 +18,7 @@ __all__ = [
     "Application",
     "AuditLog",
     "DocumentChunk",
+    "OfferEvaluation",
     "Resume",
     "ResumeUsage",
     "ApplicationAnswer",
