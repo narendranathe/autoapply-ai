@@ -6,6 +6,7 @@ Fixes: 'operation in progress', 'different loop', and foreign key issues.
 import asyncio
 import uuid
 from collections.abc import AsyncGenerator
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
@@ -82,6 +83,27 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
         yield db_session
 
     app.dependency_overrides[get_db] = override_get_db
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c
+
+
+@pytest_asyncio.fixture
+async def no_db_client() -> AsyncGenerator[AsyncClient, None]:
+    """
+    Lightweight ASGI client with a mocked DB — for smoke/mount tests only.
+    Does not require a real database connection.
+    """
+    from app.dependencies import get_db
+    from app.main import create_app
+
+    app = create_app()
+
+    async def mock_get_db():
+        yield AsyncMock(spec=AsyncSession)
+
+    app.dependency_overrides[get_db] = mock_get_db
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
