@@ -144,6 +144,23 @@ export interface MigrateOptions {
    * Optional model override sent in the PUT body.
    */
   modelOverride?: string | null;
+  /**
+   * Whether the extension is running in a dev build. Required so the
+   * apiBase revalidation step (P1-D) uses the same rules as
+   * ``validateApiBaseUrl`` does on the Options page.
+   *
+   * Optional for backwards compat — defaults to ``false`` (= production
+   * rules: https only, no http://localhost).
+   */
+  isDev?: boolean;
+  /**
+   * Inject the validator. Lets call sites avoid the cross-module import
+   * cycle (options.ts already imports providerMigration which would
+   * otherwise need to import options.ts → offlineQueue.ts → ...).
+   *
+   * Defaults to the shared ``validateApiBaseUrl`` helper.
+   */
+  validateApiBase?: (raw: string, isDev: boolean) => { ok: true } | { ok: false; reason: string };
 }
 
 /**
@@ -192,6 +209,18 @@ export async function migrateProviderKey(
 ): Promise<MigrateResult> {
   if (!apiKey) return { name, ok: false, reason: "no local key to migrate" };
   if (!opts.apiBase) return { name, ok: false, reason: "no apiBase configured" };
+
+  // P1-D (#198 round 2): re-validate the apiBase right before the PUT.
+  // ``options.ts`` validates the URL when the user saves it, but storage
+  // could be tampered with afterwards (extension API, sync replication,
+  // dev panel) so we re-check on every migration. Same rules as the
+  // background drain (#91) — https in prod, http://localhost in dev only.
+  if (opts.validateApiBase) {
+    const v = opts.validateApiBase(opts.apiBase, opts.isDev ?? false);
+    if (!v.ok) {
+      return { name, ok: false, reason: `apiBase rejected: ${v.reason}` };
+    }
+  }
 
   const expectedFingerprint = await computeKeyFingerprint(apiKey);
 

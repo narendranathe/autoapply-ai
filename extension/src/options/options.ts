@@ -1250,10 +1250,16 @@ async function migrateProviderKeysOnClick(): Promise<void> {
       const entry = configs[name];
       const key = entry?.apiKey ?? "";
       if (!key) continue;
+      // P1-D (#198 round 2): pass the validator so migrateProviderKey
+      // re-checks the apiBase immediately before the PUT. Catches the
+      // case where storage was tampered with after ``saveApi`` validated.
+      const isDev = Boolean((import.meta as { env?: { DEV?: boolean } }).env?.DEV);
       const res = await migrateProviderKey(name, key, fetch.bind(globalThis), {
         apiBase,
         authHeaders,
         modelOverride: entry?.model ?? null,
+        isDev,
+        validateApiBase: validateApiBaseUrl,
       });
       if (res.ok) {
         // P1-B (#198 round 2): two-tab race — chrome.storage.local.set is

@@ -356,6 +356,79 @@ test("migrateProviderKey: GET missing key_fingerprint → ok:false", async () =>
   assert.match(res.reason, /verification: missing key_fingerprint/);
 });
 
+// ── P1-D: apiBase revalidation right before PUT (#198 round 2) ─────────────
+
+test("P1-D: invalid apiBase (javascript:) rejected at migration time, no PUT issued", async () => {
+  const { fetchFn, calls } = makeFetchSequence([]); // no fetches expected
+  const res = await migrateProviderKey("anthropic", "sk-ant", fetchFn, {
+    apiBase: "javascript:alert(1)",
+    authHeaders: AUTH,
+    isDev: false,
+    validateApiBase: (raw) => {
+      // Local copy of the real validator's logic for the test.
+      if (raw.startsWith("https://")) return { ok: true };
+      if (raw.startsWith("http://localhost")) return { ok: true };
+      return { ok: false, reason: "not https" };
+    },
+  });
+  assert.equal(res.ok, false);
+  assert.match(res.reason, /apiBase rejected: not https/);
+  assert.equal(calls.length, 0, "no PUT should be issued for a bad apiBase");
+});
+
+test("P1-D: http://attacker.example.com rejected even when isDev=true", async () => {
+  const { fetchFn, calls } = makeFetchSequence([]);
+  const res = await migrateProviderKey("anthropic", "sk-ant", fetchFn, {
+    apiBase: "http://attacker.example.com/api",
+    authHeaders: AUTH,
+    isDev: true,
+    validateApiBase: (raw, isDev) => {
+      const u = new URL(raw);
+      if (u.protocol === "https:") return { ok: true };
+      if (u.protocol === "http:" && (u.hostname === "localhost" || u.hostname === "127.0.0.1")) {
+        return isDev ? { ok: true } : { ok: false, reason: "prod" };
+      }
+      return { ok: false, reason: "http only allowed for localhost" };
+    },
+  });
+  assert.equal(res.ok, false);
+  assert.match(res.reason, /apiBase rejected/);
+  assert.equal(calls.length, 0);
+});
+
+test("P1-D: valid https apiBase passes through to PUT", async () => {
+  const { fetchFn, calls } = makeFetchSequence([
+    okResponse({ provider_name: "anthropic", has_key: true, key_fingerprint: FP_SK_ANT }),
+    okResponse({
+      configs: [{ provider_name: "anthropic", has_key: true, key_fingerprint: FP_SK_ANT }],
+    }),
+  ]);
+  const res = await migrateProviderKey("anthropic", "sk-ant", fetchFn, {
+    apiBase: BASE,
+    authHeaders: AUTH,
+    isDev: false,
+    validateApiBase: () => ({ ok: true }),
+  });
+  assert.equal(res.ok, true);
+  assert.equal(calls.length, 2);
+});
+
+test("P1-D: no validator means no revalidation (backwards compat)", async () => {
+  // Tests that didn't migrate to the new option still work.
+  const { fetchFn } = makeFetchSequence([
+    okResponse({ provider_name: "anthropic", has_key: true, key_fingerprint: FP_SK_ANT }),
+    okResponse({
+      configs: [{ provider_name: "anthropic", has_key: true, key_fingerprint: FP_SK_ANT }],
+    }),
+  ]);
+  const res = await migrateProviderKey("anthropic", "sk-ant", fetchFn, {
+    apiBase: BASE,
+    authHeaders: AUTH,
+    // no validateApiBase
+  });
+  assert.equal(res.ok, true);
+});
+
 test("computeKeyFingerprint: deterministic + 8 hex chars + matches backend sha256[:8]", async () => {
   const fp = await computeKeyFingerprint("sk-ant-xyz");
   assert.equal(fp.length, 8);
