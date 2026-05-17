@@ -14,6 +14,7 @@ Usage in routes:
         ...
 """
 
+import asyncio
 import time
 from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING, Any
@@ -21,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 from fastapi import Depends, Header, HTTPException, Request, status
 from jose import JWTError, jwt
+from loguru import logger
 from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,6 +37,14 @@ if TYPE_CHECKING:
 # Module-level JWKS cache: {"keys": list, "fetched_at": float}
 _jwks_cache: dict[str, Any] = {}
 _JWKS_TTL = 900  # seconds (15 minutes)
+
+# Negative cache for kids that miss even after a forced refresh. Prevents an
+# attacker from amplifying random-kid requests into upstream JWKS fetches.
+_jwks_unknown_kids: dict[str, float] = {}
+_JWKS_UNKNOWN_KID_TTL = 60  # seconds
+
+# Coalesce concurrent force-refreshes so we hit Clerk at most once per stampede.
+_jwks_refresh_lock = asyncio.Lock()
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
@@ -99,13 +109,94 @@ def _find_jwk_by_kid(keys: list[dict], kid: str) -> dict | None:
 
 
 async def _resolve_jwk_for_kid(kid: str) -> dict | None:
-    """Return the JWK matching ``kid``, force-refreshing once on cache miss."""
-    keys = await _get_clerk_jwks()
+    """Return the JWK matching ``kid``, force-refreshing once on cache miss.
+
+    Protections:
+    * Short negative cache for unknown kids (DoS amplification mitigation).
+    * ``asyncio.Lock`` coalesces concurrent refreshes (thundering-herd guard).
+    * Clerk outages fall back to stale cache when possible, else raise 503
+      so the auth handler does not leak ``httpx`` errors as 500s.
+    """
+    # Negative-cache hit: skip the upstream call entirely.
+    now = time.monotonic()
+    miss_ts = _jwks_unknown_kids.get(kid)
+    if miss_ts is not None:
+        if now - miss_ts < _JWKS_UNKNOWN_KID_TTL:
+            return None
+        # Expired — drop the entry and fall through to a normal lookup.
+        _jwks_unknown_kids.pop(kid, None)
+
+    # Initial (non-forced) lookup. Wrap in the same try/except so a Clerk
+    # outage on a cold cache surfaces as 503, not a 500.
+    try:
+        keys = await _get_clerk_jwks()
+    except (TimeoutError, httpx.HTTPError) as exc:
+        cached_keys = _jwks_cache.get("keys")
+        if cached_keys:
+            logger.warning(
+                "JWKS fetch failed ({}); serving stale cache with {} keys",
+                exc.__class__.__name__,
+                len(cached_keys),
+            )
+            keys = cached_keys
+        else:
+            logger.error(
+                "JWKS fetch failed ({}) and no cached keys available",
+                exc.__class__.__name__,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Authentication service unavailable",
+            ) from exc
+
     key = _find_jwk_by_kid(keys, kid)
     if key is not None:
         return key
-    keys = await _get_clerk_jwks(force_refresh=True)
-    return _find_jwk_by_kid(keys, kid)
+
+    # Cache miss — coalesce concurrent force-refreshes.
+    async with _jwks_refresh_lock:
+        # Re-check the cache directly: another coroutine may have refreshed
+        # while we waited on the lock. Avoid calling _get_clerk_jwks() here,
+        # which could trigger an unrelated TTL-driven fetch.
+        cached_keys = _jwks_cache.get("keys") or []
+        key = _find_jwk_by_kid(cached_keys, kid)
+        if key is not None:
+            return key
+
+        # Still missing — also re-check the negative cache (a sibling coroutine
+        # may have just recorded the miss).
+        miss_ts = _jwks_unknown_kids.get(kid)
+        if miss_ts is not None and (time.monotonic() - miss_ts) < _JWKS_UNKNOWN_KID_TTL:
+            return None
+
+        logger.warning("JWKS force-refreshed due to unknown kid={}", kid)
+        try:
+            keys = await _get_clerk_jwks(force_refresh=True)
+        except (TimeoutError, httpx.HTTPError) as exc:
+            cached_keys = _jwks_cache.get("keys")
+            if cached_keys:
+                logger.warning(
+                    "JWKS refresh failed ({}); serving stale cache with {} keys",
+                    exc.__class__.__name__,
+                    len(cached_keys),
+                )
+                keys = cached_keys
+            else:
+                logger.error(
+                    "JWKS refresh failed ({}) and no cached keys available",
+                    exc.__class__.__name__,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Authentication service unavailable",
+                ) from exc
+        else:
+            logger.info("JWKS refresh succeeded; {} keys cached", len(keys))
+
+        key = _find_jwk_by_kid(keys, kid)
+        if key is None:
+            _jwks_unknown_kids[kid] = time.monotonic()
+        return key
 
 
 async def get_current_user(

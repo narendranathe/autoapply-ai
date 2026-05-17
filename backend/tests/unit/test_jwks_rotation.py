@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import HTTPException
@@ -69,8 +71,10 @@ def _ensure_dependencies_intact() -> None:
 def _clear_jwks_cache():
     _ensure_dependencies_intact()
     dependencies._jwks_cache.clear()
+    dependencies._jwks_unknown_kids.clear()
     yield
     dependencies._jwks_cache.clear()
+    dependencies._jwks_unknown_kids.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -265,3 +269,106 @@ async def test_get_current_user_rejects_token_without_kid():
         )
 
     assert exc_info.value.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Negative cache: repeated unknown-kid requests within TTL skip the upstream
+# fetch entirely (DoS amplification mitigation).
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_unknown_kid_uses_negative_cache_on_repeat():
+    keys = [_jwk_from_private(_rsa_keypair(), "kid-current")]
+    fetch_mock = AsyncMock(return_value=keys)
+
+    with patch.object(dependencies, "_fetch_clerk_jwks", fetch_mock):
+        first = await dependencies._resolve_jwk_for_kid("kid-bogus")
+        # First request: initial fetch + force-refresh = 2 upstream calls.
+        assert first is None
+        assert fetch_mock.await_count == 2
+        assert "kid-bogus" in dependencies._jwks_unknown_kids
+
+        second = await dependencies._resolve_jwk_for_kid("kid-bogus")
+        # Second request within TTL: zero additional upstream calls.
+        assert second is None
+        assert fetch_mock.await_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Graceful degradation: Clerk outage with a populated cache serves stale keys.
+# Stale cache contains the requested kid, but TTL has expired so the natural
+# fetch fires and raises — we fall back to the cached keys and resolve the kid.
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_clerk_jwks_outage_with_cache_serves_stale():
+    jwk = _jwk_from_private(_rsa_keypair(), "kid-stale")
+    dependencies._jwks_cache["keys"] = [jwk]
+    # Force TTL expiry so _get_clerk_jwks() actually calls _fetch_clerk_jwks().
+    dependencies._jwks_cache["fetched_at"] = time.monotonic() - dependencies._JWKS_TTL - 10
+
+    async def boom() -> list[dict]:
+        raise httpx.ConnectError("clerk down")
+
+    with patch.object(dependencies, "_fetch_clerk_jwks", side_effect=boom):
+        result = await dependencies._resolve_jwk_for_kid("kid-stale")
+
+    # Stale cache had kid-stale → returned via fallback after the failed refresh.
+    assert result is not None
+    assert result["kid"] == "kid-stale"
+
+
+# ---------------------------------------------------------------------------
+# Clerk outage with no cache at all → 503 (not a leaked 500).
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_clerk_jwks_outage_without_cache_raises_503():
+    async def boom() -> list[dict]:
+        raise httpx.ConnectError("clerk down")
+
+    with (
+        patch.object(dependencies, "_fetch_clerk_jwks", side_effect=boom),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await dependencies._resolve_jwk_for_kid("kid-anything")
+
+    assert exc_info.value.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# Thundering-herd guard: concurrent unknown-kid requests coalesce into a
+# single force-refresh upstream call.
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_concurrent_refreshes_coalesce():
+    jwk = _jwk_from_private(_rsa_keypair(), "kid-current")
+    # Pre-populate a fresh cache so only the force-refresh path can fetch.
+    dependencies._jwks_cache["keys"] = [jwk]
+    dependencies._jwks_cache["fetched_at"] = time.monotonic()
+
+    call_count = 0
+    refresh_started = asyncio.Event()
+    release_refresh = asyncio.Event()
+
+    async def slow_fetch() -> list[dict]:
+        nonlocal call_count
+        call_count += 1
+        refresh_started.set()
+        # Hold the lock long enough for the second coroutine to queue up.
+        await release_refresh.wait()
+        return [jwk]
+
+    async def driver(kid: str) -> dict | None:
+        return await dependencies._resolve_jwk_for_kid(kid)
+
+    with patch.object(dependencies, "_fetch_clerk_jwks", side_effect=slow_fetch):
+        task_a = asyncio.create_task(driver("kid-missing"))
+        # Wait until the first task is inside the locked force-refresh.
+        await refresh_started.wait()
+        task_b = asyncio.create_task(driver("kid-missing"))
+        # Yield so task_b can attempt to acquire the lock and queue.
+        await asyncio.sleep(0)
+        release_refresh.set()
+        results = await asyncio.gather(task_a, task_b)
+
+    # Only one upstream force-refresh fired despite two concurrent callers.
+    assert call_count == 1
+    assert results == [None, None]
