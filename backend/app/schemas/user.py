@@ -37,7 +37,18 @@ class RegisterRequest(BaseModel):
     in the body is rejected with 422 rather than silently ignored.
     """
 
-    email_hash: str = Field(..., min_length=1, max_length=128)
+    # ``email_hash`` is a SHA-256 hex digest: exactly 64 lowercase hex chars.
+    # The DB column is ``String(64)`` — bounding both ends here prevents a
+    # 65-128 char value from passing Pydantic and then failing the DB write
+    # with a 500. The hex regex also rules out non-hex payloads (which would
+    # never collide with a real digest anyway).
+    email_hash: str = Field(
+        ...,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-fA-F]{64}$",
+        description="SHA-256 hex digest of the user's email (64 hex chars).",
+    )
     github_username: str = Field(default="", max_length=255)
 
     model_config = {"extra": "forbid"}

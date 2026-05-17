@@ -169,17 +169,45 @@ def test_register_request_schema_forbids_clerk_id():
     from pydantic import ValidationError
 
     # Sanity: minimal valid payload constructs.
-    valid = RegisterRequest(email_hash="x" * 64)
-    assert valid.email_hash == "x" * 64
+    valid = RegisterRequest(email_hash="0" * 64)
+    assert valid.email_hash == "0" * 64
     assert valid.github_username == ""
 
     # ``clerk_id`` must be rejected.
     with pytest.raises(ValidationError) as exc_info:
-        RegisterRequest(email_hash="x" * 64, clerk_id="clerk_should_be_forbidden")
+        RegisterRequest(email_hash="0" * 64, clerk_id="clerk_should_be_forbidden")
     assert "clerk_id" in str(exc_info.value)
 
     # And ``clerk_id`` is not even a declared field on the model.
     assert "clerk_id" not in RegisterRequest.model_fields
+
+
+def test_register_request_email_hash_must_be_sha256_hex():
+    """``email_hash`` must be exactly 64 hex chars — the DB column is
+    ``String(64)`` and the field is a SHA-256 hex digest.
+
+    Regression guard: previously the schema allowed up to 128 chars, so a
+    65-128 char value would pass Pydantic and then 500 on the DB write.
+    """
+    from pydantic import ValidationError
+
+    # 64 hex chars → accepted.
+    RegisterRequest(email_hash="a" * 64)
+    RegisterRequest(email_hash="0123456789abcdef" * 4)
+
+    # Too short → rejected.
+    with pytest.raises(ValidationError):
+        RegisterRequest(email_hash="a" * 63)
+
+    # Too long (the old upper bound, exceeds the DB column) → rejected.
+    with pytest.raises(ValidationError):
+        RegisterRequest(email_hash="a" * 65)
+    with pytest.raises(ValidationError):
+        RegisterRequest(email_hash="a" * 128)
+
+    # Non-hex chars → rejected (``g`` is not a hex digit).
+    with pytest.raises(ValidationError):
+        RegisterRequest(email_hash="g" * 64)
 
 
 # ---------------------------------------------------------------------------
@@ -266,7 +294,7 @@ async def test_register_user_creates_new_user_when_clerk_id_unknown():
 
     db.refresh = AsyncMock(side_effect=_refresh)
 
-    body = RegisterRequest(email_hash="h" * 64, github_username="octocat")
+    body = RegisterRequest(email_hash="d" * 64, github_username="octocat")
     result = await register_user(
         body=body,
         clerk_id="clerk_new_caller",
@@ -282,7 +310,7 @@ async def test_register_user_creates_new_user_when_clerk_id_unknown():
     new_user = captured_user["obj"]
     assert isinstance(new_user, User)
     assert new_user.clerk_id == "clerk_new_caller"
-    assert new_user.email_hash == "h" * 64
+    assert new_user.email_hash == "d" * 64
     assert new_user.github_username == "octocat"
     assert new_user.is_active is True
 
@@ -297,7 +325,7 @@ async def test_register_user_is_idempotent_for_existing_clerk_id():
     existing = User(
         id=uuid.uuid4(),
         clerk_id="clerk_existing",
-        email_hash="i" * 64,
+        email_hash="c" * 64,
         github_username="old_handle",
         resume_repo_name="resume-vault",
         is_active=True,
@@ -311,7 +339,7 @@ async def test_register_user_is_idempotent_for_existing_clerk_id():
     db.commit = AsyncMock()
     db.refresh = AsyncMock()
 
-    body = RegisterRequest(email_hash="i" * 64, github_username="new_handle")
+    body = RegisterRequest(email_hash="c" * 64, github_username="new_handle")
     result = await register_user(
         body=body,
         clerk_id="clerk_existing",
@@ -345,12 +373,12 @@ async def test_register_user_ignores_clerk_id_attempted_via_body_overload():
     db.commit = AsyncMock()
     db.refresh = AsyncMock()
 
-    body = RegisterRequest(email_hash="j" * 64)
+    body = RegisterRequest(email_hash="f" * 64)
     # Pydantic v2 ``extra='forbid'`` rejects this at construction. Verify that:
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError):
-        RegisterRequest(email_hash="j" * 64, clerk_id="clerk_smuggled")
+        RegisterRequest(email_hash="f" * 64, clerk_id="clerk_smuggled")
 
     # And even if a downstream caller attaches the attribute post-hoc, the
     # route code never reads it — it only references ``body.email_hash`` and
