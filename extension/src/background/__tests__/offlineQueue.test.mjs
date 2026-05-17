@@ -18,8 +18,13 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const queueModulePath = path.resolve(__dirname, "../offlineQueue.ts");
 
-const { processOfflineQueue, MAX_OFFLINE_RETRY, resolveDrainEndpoint, DEV_FALLBACK_API_BASE } =
-  await import(queueModulePath);
+const {
+  processOfflineQueue,
+  MAX_OFFLINE_RETRY,
+  resolveDrainEndpoint,
+  DEV_FALLBACK_API_BASE,
+  validateApiBaseUrl,
+} = await import(queueModulePath);
 
 // Tests pass an explicit endpoint — there is no module-level default any more.
 const TEST_ENDPOINT = "https://test.example.com/api/v1/vault/sync-markdown";
@@ -261,6 +266,110 @@ test("resolveDrainEndpoint: missing URL in PROD → ok:false (preserve queue)", 
 
 test("resolveDrainEndpoint: empty URL in PROD → ok:false", () => {
   const r = resolveDrainEndpoint("", false);
+  assert.equal(r.ok, false);
+});
+
+// ── validateApiBaseUrl: scheme allowlist (issue #91 round-2) ──────────────
+
+test("validateApiBaseUrl: https URL accepted in prod and dev", () => {
+  assert.equal(validateApiBaseUrl("https://api.example.com/api/v1", false).ok, true);
+  assert.equal(validateApiBaseUrl("https://api.example.com/api/v1", true).ok, true);
+});
+
+test("validateApiBaseUrl: http://localhost accepted in dev only", () => {
+  const dev = validateApiBaseUrl("http://localhost:8000/api/v1", true);
+  assert.equal(dev.ok, true);
+
+  const prod = validateApiBaseUrl("http://localhost:8000/api/v1", false);
+  assert.equal(prod.ok, false);
+  assert.match(prod.reason, /dev/);
+});
+
+test("validateApiBaseUrl: http://127.0.0.1 accepted in dev only", () => {
+  assert.equal(validateApiBaseUrl("http://127.0.0.1:8000/api/v1", true).ok, true);
+  assert.equal(validateApiBaseUrl("http://127.0.0.1:8000/api/v1", false).ok, false);
+});
+
+test("validateApiBaseUrl: http://attacker.example.com rejected in prod", () => {
+  const r = validateApiBaseUrl("http://attacker.example.com/api", false);
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /localhost/);
+});
+
+test("validateApiBaseUrl: http://attacker.example.com rejected even in dev", () => {
+  // Loopback gate applies regardless of build mode — a phishing site doesn't
+  // get a free pass just because the extension was built in dev mode.
+  const r = validateApiBaseUrl("http://attacker.example.com/api", true);
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /localhost/);
+});
+
+test("validateApiBaseUrl: javascript: scheme rejected", () => {
+  const r = validateApiBaseUrl("javascript:alert(1)", false);
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /scheme/);
+});
+
+test("validateApiBaseUrl: data: scheme rejected", () => {
+  const r = validateApiBaseUrl("data:text/html,foo", false);
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /scheme/);
+});
+
+test("validateApiBaseUrl: file: scheme rejected", () => {
+  const r = validateApiBaseUrl("file:///etc/passwd", false);
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /scheme/);
+});
+
+test("validateApiBaseUrl: malformed input (URL constructor throws) rejected", () => {
+  const r = validateApiBaseUrl("not a url", false);
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /valid URL/);
+});
+
+test("validateApiBaseUrl: empty/whitespace not a valid URL", () => {
+  // Bare "" / "   " also fail the URL constructor — caller is responsible for
+  // the "empty means missing" branch before invoking the validator.
+  assert.equal(validateApiBaseUrl("", false).ok, false);
+  assert.equal(validateApiBaseUrl("   ", false).ok, false);
+});
+
+// ── resolveDrainEndpoint: scheme rejection treated as missing_in_prod ─────
+
+test("resolveDrainEndpoint: javascript: URL → missing_in_prod (queue preserved)", () => {
+  const r = resolveDrainEndpoint("javascript:alert(1)", false);
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, "missing_in_prod");
+});
+
+test("resolveDrainEndpoint: http://attacker.com in prod → missing_in_prod", () => {
+  const r = resolveDrainEndpoint("http://attacker.example.com/api/v1", false);
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, "missing_in_prod");
+});
+
+test("resolveDrainEndpoint: http://attacker.com in DEV → still missing_in_prod (no fallback rescue)", () => {
+  // A bad configured URL must NOT silently fall back to the dev localhost —
+  // otherwise a phishing campaign could exfiltrate edits in dev builds too.
+  const r = resolveDrainEndpoint("http://attacker.example.com/api/v1", true);
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, "missing_in_prod");
+});
+
+test("resolveDrainEndpoint: data: URL → missing_in_prod", () => {
+  const r = resolveDrainEndpoint("data:text/html,foo", false);
+  assert.equal(r.ok, false);
+});
+
+test("resolveDrainEndpoint: http://localhost in dev → accepted", () => {
+  const r = resolveDrainEndpoint("http://localhost:8000/api/v1", true);
+  assert.equal(r.ok, true);
+  assert.equal(r.endpoint, "http://localhost:8000/api/v1/vault/sync-markdown");
+});
+
+test("resolveDrainEndpoint: http://localhost in prod → rejected", () => {
+  const r = resolveDrainEndpoint("http://localhost:8000/api/v1", false);
   assert.equal(r.ok, false);
 });
 
