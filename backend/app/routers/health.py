@@ -6,7 +6,7 @@ Health check endpoints — the MOST important routes in your API.
 /metrics → Prometheus scrape endpoint
 """
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,9 +17,31 @@ router = APIRouter()
 
 
 @router.get("/health")
-async def health():
-    """Liveness probe."""
-    return {"status": "alive", "service": "autoapply-ai"}
+async def health(
+    response: Response,
+    db: AsyncSession = Depends(get_db),  # noqa: B008
+    redis=Depends(get_redis),  # noqa: B008
+):
+    """Liveness probe with DB + Redis validation (Fly.io health check)."""
+    db_status = "ok"
+    try:
+        await db.execute(text("SELECT 1"))
+    except Exception as e:
+        db_status = f"error: {type(e).__name__}: {e}"
+
+    redis_status = "ok"
+    try:
+        pong = await redis.ping()
+        if not pong:
+            redis_status = "error: no pong"
+    except Exception as e:
+        redis_status = f"error: {type(e).__name__}: {e}"
+
+    healthy = db_status == "ok" and redis_status == "ok"
+    if not healthy:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return {"status": "degraded", "db": db_status, "redis": redis_status}
+    return {"status": "ok", "db": db_status, "redis": redis_status}
 
 
 @router.get("/ready")
