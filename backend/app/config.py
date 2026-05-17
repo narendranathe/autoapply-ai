@@ -10,8 +10,9 @@ Usage:
 """
 
 from functools import lru_cache
+from typing import Self
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -76,6 +77,12 @@ class Settings(BaseSettings):
     CLERK_FRONTEND_API_URL: str = ""
     # JWT audience — set to your backend API domain in production
     CLERK_JWT_AUDIENCE: str = ""
+
+    # ── Dev auth bypass ───────────────────────────────────
+    # Clerk user id used by get_current_user when ENVIRONMENT=development and
+    # no JWT / X-Clerk-User-Id header is present. Must be explicitly set —
+    # there is no implicit "first DB user" fallback. Never set in production.
+    DEV_TEST_USER_ID: str = ""
 
     # ── Encryption (for storing user API keys) ────────────
     FERNET_KEY: str = ""
@@ -168,6 +175,15 @@ class Settings(BaseSettings):
                 f"FERNET_KEY is invalid: {e}. Generate one with Fernet.generate_key().decode()"
             ) from e
         return v
+
+    @model_validator(mode="after")
+    def forbid_dev_test_user_in_production(self) -> Self:
+        if self.ENVIRONMENT == "production" and self.DEV_TEST_USER_ID:
+            raise ValueError(
+                "DEV_TEST_USER_ID must not be set when ENVIRONMENT=production "
+                "(dev auth bypass is unsafe in production)."
+            )
+        return self
 
     @property
     def is_production(self) -> bool:
