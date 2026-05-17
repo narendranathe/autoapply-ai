@@ -214,6 +214,15 @@ async def classify_email_status(
     )
 
     # Step 3: try LLM
+    #
+    # NOTE (Issue #107 / Phase 2): this call site intentionally keeps the
+    # ``PROVIDERS[provider].complete()`` abstraction rather than going
+    # through ``LLMGateway.generate()``. The provider classes already wrap
+    # their HTTP calls in the in-process ``llm_circuit`` decorator, and
+    # routing through the gateway would require updating every existing
+    # test that patches ``PROVIDERS`` to instead patch the gateway's
+    # internal ``_call_*`` helpers — far more invasive than the value
+    # added here. Tracked as a follow-up for a dedicated migration PR.
     llm_provider = PROVIDERS.get(provider, PROVIDERS.get("fallback"))
     if llm_provider is None:
         logger.warning(f"Unknown LLM provider '{provider}' — using keyword fallback")

@@ -27,16 +27,65 @@ fallback   | Keyword-based offline scoring
 from __future__ import annotations
 
 import re
+import time
 from abc import ABC, abstractmethod
 from enum import StrEnum
+from typing import Any
 
 import httpx
 from loguru import logger
 
 from app.config import settings
 from app.middleware.circuit_breaker import CircuitOpenError, llm_circuit
+from app.services import llm_circuit_redis
 from app.services.resume_parser import ResumeAST
 from app.utils.encryption import decrypt_value
+
+# -- Prometheus metrics (optional) --
+# Use ``prometheus_client`` if available — it ships as a transitive dep of
+# ``prometheus-fastapi-instrumentator``. We fall back to structured loguru
+# logs when the import fails so the gateway works in minimal environments.
+try:  # pragma: no cover - import guard
+    from prometheus_client import Counter, Histogram
+
+    _llm_request_duration_seconds = Histogram(
+        "llm_request_duration_seconds",
+        "Duration of LLM provider requests in seconds.",
+        labelnames=("provider",),
+    )
+    _llm_request_total = Counter(
+        "llm_request_total",
+        "Total LLM provider requests.",
+        labelnames=("provider", "status"),
+    )
+    _HAS_PROMETHEUS = True
+except Exception:  # pragma: no cover - prometheus_client missing
+    _llm_request_duration_seconds = None  # type: ignore[assignment]
+    _llm_request_total = None  # type: ignore[assignment]
+    _HAS_PROMETHEUS = False
+
+
+def _emit_metric(provider: str, status: str, duration_ms: float) -> None:
+    """Record a request metric for ``provider`` (``success`` or ``failure``).
+
+    Always emits a structured loguru info event so log-based dashboards
+    keep working when prometheus_client is unavailable.
+    """
+    logger.info(
+        "llm.request",
+        provider=provider,
+        duration_ms=round(duration_ms, 2),
+        status=status,
+    )
+    if _HAS_PROMETHEUS:
+        try:
+            _llm_request_total.labels(provider=provider, status=status).inc()  # type: ignore[union-attr]
+            _llm_request_duration_seconds.labels(provider=provider).observe(  # type: ignore[union-attr]
+                duration_ms / 1000.0
+            )
+        except Exception as exc:  # pragma: no cover - never let metrics break a request
+            logger.debug(f"prometheus emit failed: {exc}")
+
 
 # -- LLMProvider Protocol --
 
@@ -587,6 +636,43 @@ class LLMUnavailableError(Exception):
     pass
 
 
+class LLMGenerationError(Exception):
+    """Raised when an individual LLM provider attempt fails inside the gateway cascade.
+
+    The cascade catches this internally and continues to the next provider —
+    callers will only see it if they invoke a single provider directly via
+    ``LLMGateway._attempt_single`` or similar low-level helper.
+
+    Attributes
+    ----------
+    provider:
+        Logical provider name that failed (``"anthropic"``, ``"openai"``…).
+    attempt_number:
+        1-indexed position inside the gateway cascade.
+    cause:
+        Underlying exception captured when the attempt raised, if any.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider: str,
+        attempt_number: int,
+        cause: Exception | None = None,
+    ):
+        super().__init__(message)
+        self.provider = provider
+        self.attempt_number = attempt_number
+        self.cause = cause
+
+    def __repr__(self) -> str:
+        return (
+            f"LLMGenerationError(provider={self.provider!r}, "
+            f"attempt_number={self.attempt_number}, cause={self.cause!r})"
+        )
+
+
 # -- Constants & registry --
 
 
@@ -733,8 +819,16 @@ class LLMGateway:
         -------
         tuple[str, str]
             ``(content, provider_name_used)``
+
+        Notes
+        -----
+        * Each provider attempt is wrapped with a Redis-backed circuit
+          breaker (``llm_circuit_redis``). When a provider's circuit is
+          open the gateway skips it without making an HTTP call.
+        * Successful and failed attempts emit Prometheus metrics and a
+          structured ``llm.request`` log event.
         """
-        cascade: list[tuple[str, object]] = []
+        cascade: list[tuple[str, Any]] = []
 
         # Build ordered cascade — primary provider first (only if key is present)
         if provider == "anthropic" and api_key:
@@ -765,18 +859,65 @@ class LLMGateway:
                 ("ollama", lambda: _call_ollama(system_prompt, user_prompt, ollama_model))
             )
 
-        # Try each provider in order
-        for name, call in cascade:
-            try:
-                result = await call()  # type: ignore[operator]
-                if result and len(result) > _MIN_RESPONSE_LEN:
-                    return result, name
+        # Try each provider in order, recording metrics + breaker state.
+        for attempt_number, (name, call) in enumerate(cascade, start=1):
+            # Redis-backed circuit breaker — skip immediately if open.
+            if await llm_circuit_redis.is_open(name):
                 logger.warning(
-                    f"LLMGateway: provider '{name}' returned a short response "
-                    f"({len(result)} chars) — skipping"
+                    "LLMGateway: provider '{}' circuit OPEN (attempt {}) — skipping",
+                    name,
+                    attempt_number,
                 )
+                _emit_metric(name, "circuit_open", 0.0)
+                continue
+
+            start = time.monotonic()
+            try:
+                result = await call()
+                duration_ms = (time.monotonic() - start) * 1000.0
+                if result and len(result) > _MIN_RESPONSE_LEN:
+                    await llm_circuit_redis.record_success(name)
+                    _emit_metric(name, "success", duration_ms)
+                    logger.info(
+                        "LLMGateway: provider '{}' succeeded (attempt {}, {:.1f}ms)",
+                        name,
+                        attempt_number,
+                        duration_ms,
+                    )
+                    return result, name
+                # Short response — treat as a soft failure for metrics
+                logger.warning(
+                    "LLMGateway: provider '{}' returned a short response "
+                    "({} chars, attempt {}) — skipping",
+                    name,
+                    len(result) if result else 0,
+                    attempt_number,
+                )
+                _emit_metric(name, "failure", duration_ms)
+                err = LLMGenerationError(
+                    f"Provider '{name}' returned short response",
+                    provider=name,
+                    attempt_number=attempt_number,
+                )
+                await llm_circuit_redis.record_failure(name)
+                logger.debug(repr(err))
             except Exception as exc:
-                logger.warning(f"LLMGateway: provider '{name}' failed: {exc}")
+                duration_ms = (time.monotonic() - start) * 1000.0
+                _emit_metric(name, "failure", duration_ms)
+                err = LLMGenerationError(
+                    f"Provider '{name}' raised: {exc}",
+                    provider=name,
+                    attempt_number=attempt_number,
+                    cause=exc,
+                )
+                logger.warning(
+                    "LLMGateway: provider '{}' failed (attempt {}, {:.1f}ms): {}",
+                    name,
+                    attempt_number,
+                    duration_ms,
+                    exc,
+                )
+                await llm_circuit_redis.record_failure(name)
 
         return "", "fallback"
 

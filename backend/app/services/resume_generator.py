@@ -383,6 +383,35 @@ async def _llm_generate(
     )
 
 
+async def _dispatch_provider_entry(
+    p: dict,
+    system_prompt: str,
+    user_prompt: str,
+    ollama_model: str = "llama3.1:8b",
+) -> tuple[str, str]:
+    """Route a ``{name, api_key, model}`` dict through ``LLMGateway``.
+
+    Issue #107 — collapses the repeated provider-specific ``if/elif`` chains
+    in the multi-provider helpers below to a single gateway call. Returns
+    ``(raw_text, provider_used)``. An empty string for the text means the
+    gateway exhausted its cascade for this provider entry.
+    """
+    name = p.get("name", "")
+    api_key = p.get("api_key", "")
+    if not name:
+        return ("", "")
+    # Ollama does not need a key; every other provider does.
+    if name != "ollama" and not api_key:
+        return ("", name)
+    return await _llm_gateway.generate(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        provider=name,
+        api_key=api_key,
+        ollama_model=ollama_model,
+    )
+
+
 # ── Answer generation (Q&A) ────────────────────────────────────────────────
 
 _ANSWER_SYSTEM_PROMPT = """You generate compelling, honest answers to job application questions.
@@ -599,31 +628,13 @@ Write exactly 1 compelling draft answer (180-220 words). Return only the answer 
 
     async def _call_one(p: dict) -> tuple[str, str]:
         name = p.get("name", "")
-        api_key = p.get("api_key", "")
-        model = p.get("model", "")
         try:
-            if name == "anthropic" and api_key:
-                raw = await _call_anthropic(_ANSWER_SYSTEM_PROMPT, user_prompt, api_key)
-            elif name == "openai" and api_key:
-                raw = await _call_openai(_ANSWER_SYSTEM_PROMPT, user_prompt, api_key)
-            elif name == "gemini" and api_key:
-                raw = await _call_gemini(
-                    _ANSWER_SYSTEM_PROMPT, user_prompt, api_key, model or "gemini-1.5-flash"
-                )
-            elif name == "groq" and api_key:
-                raw = await _call_groq(
-                    _ANSWER_SYSTEM_PROMPT, user_prompt, api_key, model or "llama-3.3-70b-versatile"
-                )
-            elif name == "perplexity" and api_key:
-                raw = await _call_perplexity(
-                    _ANSWER_SYSTEM_PROMPT, user_prompt, api_key, model or "sonar"
-                )
-            elif name == "kimi" and api_key:
-                raw = await _call_kimi(_ANSWER_SYSTEM_PROMPT, user_prompt, api_key)
-            elif name == "ollama":
-                raw = await _call_ollama(_ANSWER_SYSTEM_PROMPT, user_prompt, model or "llama3.1:8b")
-            else:
-                return ("", name)
+            raw, _ = await _dispatch_provider_entry(
+                p,
+                _ANSWER_SYSTEM_PROMPT,
+                user_prompt,
+                ollama_model=p.get("model", "") or "llama3.1:8b",
+            )
             return (raw.strip(), name) if raw and len(raw) > 50 else ("", name)
         except Exception as e:
             logger.warning(f"Multi-LLM: provider '{name}' failed: {e}")
@@ -756,36 +767,18 @@ DRAFT_3:
 
     for p in sorted_providers:
         name = p.get("name", "")
-        api_key = p.get("api_key", "")
-        model = p.get("model", "")
+        # Ollama only works with a local backend — skip on cloud deployments
+        if name == "ollama":
+            continue
         try:
-            if name == "ollama":
-                # Ollama only works with a local backend — skip on cloud deployments
-                continue
-            elif name == "anthropic" and api_key:
-                raw = await _call_anthropic(system_prompt, user_prompt, api_key)
-            elif name == "openai" and api_key:
-                raw = await _call_openai(system_prompt, user_prompt, api_key)
-            elif name == "gemini" and api_key:
-                raw = await _call_gemini(
-                    system_prompt, user_prompt, api_key, model or "gemini-1.5-flash"
-                )
-            elif name == "groq" and api_key:
-                raw = await _call_groq(
-                    system_prompt, user_prompt, api_key, model or "llama-3.3-70b-versatile"
-                )
-            elif name == "perplexity" and api_key:
-                raw = await _call_perplexity(system_prompt, user_prompt, api_key, model or "sonar")
-            elif name == "kimi" and api_key:
-                raw = await _call_kimi(system_prompt, user_prompt, api_key)
-            else:
-                continue
+            raw, _ = await _dispatch_provider_entry(p, system_prompt, user_prompt)
             min_len = 200 if is_cover_letter else 100
             if raw and len(raw) > min_len:
                 drafts = _parse_answer_drafts(raw)
                 if drafts:
                     logger.info(
-                        f"Cascade: used provider '{name}' for {'cover letter' if is_cover_letter else 'answer'} drafts"
+                        f"Cascade: used provider '{name}' for "
+                        f"{'cover letter' if is_cover_letter else 'answer'} drafts"
                     )
                     return drafts, name
         except Exception as e:
@@ -811,24 +804,13 @@ async def _call_single_provider(
     try:
         if name == "ollama":
             return "", name
-        elif name == "anthropic" and api_key:
-            raw = await _call_anthropic(system_prompt, user_prompt, api_key)
-        elif name == "openai" and api_key:
-            raw = await _call_openai(system_prompt, user_prompt, api_key)
-        elif name == "gemini" and api_key:
-            raw = await _call_gemini(
-                system_prompt, user_prompt, api_key, model or "gemini-1.5-flash"
-            )
-        elif name == "groq" and api_key:
-            raw = await _call_groq(
-                system_prompt, user_prompt, api_key, model or "llama-3.3-70b-versatile"
-            )
-        elif name == "perplexity" and api_key:
-            raw = await _call_perplexity(system_prompt, user_prompt, api_key, model or "sonar")
-        elif name == "kimi" and api_key:
-            raw = await _call_kimi(system_prompt, user_prompt, api_key)
-        else:
+        if not name or not api_key:
             return "", name
+        raw, _ = await _dispatch_provider_entry(
+            {"name": name, "api_key": api_key, "model": model},
+            system_prompt,
+            user_prompt,
+        )
 
         min_len = 200 if is_cover_letter else 80
         if raw and len(raw) > min_len:
@@ -1386,24 +1368,9 @@ async def generate_cover_letter(
             rag_context=rag_context,
         )
         name = p.get("name", "")
-        api_key = p.get("api_key", "")
-        model = p.get("model", "")
         try:
-            if name == "anthropic" and api_key:
-                raw = await _call_anthropic(system_prompt, user_prompt, api_key)
-            elif name == "openai" and api_key:
-                raw = await _call_openai(system_prompt, user_prompt, api_key)
-            elif name == "gemini" and api_key:
-                raw = await _call_gemini(
-                    system_prompt, user_prompt, api_key, model or "gemini-1.5-flash"
-                )
-            elif name == "groq" and api_key:
-                raw = await _call_groq(
-                    system_prompt, user_prompt, api_key, model or "llama-3.3-70b-versatile"
-                )
-            elif name == "kimi" and api_key:
-                raw = await _call_kimi(system_prompt, user_prompt, api_key)
-            else:
+            raw, _ = await _dispatch_provider_entry(p, system_prompt, user_prompt)
+            if not raw:
                 return ("", "")
             # Strip any DRAFT_1: prefix the model may echo back
             text = re.sub(r"^DRAFT_\d+:\s*", "", raw.strip(), flags=re.IGNORECASE).strip()
@@ -1473,24 +1440,9 @@ Lead with years of experience or key expertise. End with value proposition for t
     sorted_providers = sorted(providers, key=lambda p: _PROVIDER_RANK.get(p.get("name", ""), 50))
     for p in sorted_providers:
         name = p.get("name", "")
-        api_key = p.get("api_key", "")
-        model = p.get("model", "")
         try:
-            if name == "anthropic" and api_key:
-                raw = await _call_anthropic(system_prompt, user_prompt, api_key)
-            elif name == "openai" and api_key:
-                raw = await _call_openai(system_prompt, user_prompt, api_key)
-            elif name == "gemini" and api_key:
-                raw = await _call_gemini(
-                    system_prompt, user_prompt, api_key, model or "gemini-1.5-flash"
-                )
-            elif name == "groq" and api_key:
-                raw = await _call_groq(
-                    system_prompt, user_prompt, api_key, model or "llama-3.3-70b-versatile"
-                )
-            elif name == "kimi" and api_key:
-                raw = await _call_kimi(system_prompt, user_prompt, api_key)
-            else:
+            raw, _ = await _dispatch_provider_entry(p, system_prompt, user_prompt)
+            if not raw:
                 continue
             text = raw.strip()
             if text and len(text) > 50:
@@ -1562,26 +1514,10 @@ Return EXACTLY {num_bullets} bullets, one per line, each starting with "• ".""
     sorted_providers = sorted(providers, key=lambda p: _PROVIDER_RANK.get(p.get("name", ""), 50))
     for p in sorted_providers:
         name = p.get("name", "")
-        api_key = p.get("api_key", "")
-        model = p.get("model", "")
         try:
-            if name == "anthropic" and api_key:
-                raw = await _call_anthropic(system_prompt, user_prompt, api_key)
-            elif name == "openai" and api_key:
-                raw = await _call_openai(system_prompt, user_prompt, api_key)
-            elif name == "gemini" and api_key:
-                raw = await _call_gemini(
-                    system_prompt, user_prompt, api_key, model or "gemini-1.5-flash"
-                )
-            elif name == "groq" and api_key:
-                raw = await _call_groq(
-                    system_prompt, user_prompt, api_key, model or "llama-3.3-70b-versatile"
-                )
-            elif name == "kimi" and api_key:
-                raw = await _call_kimi(system_prompt, user_prompt, api_key)
-            else:
+            raw, _ = await _dispatch_provider_entry(p, system_prompt, user_prompt)
+            if not raw:
                 continue
-            import re as _re
 
             lines = [
                 line.lstrip("•- ").strip()

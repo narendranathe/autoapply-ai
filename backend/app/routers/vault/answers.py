@@ -19,13 +19,7 @@ from app.dependencies import get_current_user, get_db
 from app.models.resume import ApplicationAnswer
 from app.models.user import User
 from app.models.work_history import WorkHistoryEntry
-from app.services.llm_gateway import (
-    _call_anthropic,
-    _call_gemini,
-    _call_groq,
-    _call_kimi,
-    _call_openai,
-)
+from app.services.llm_gateway import LLMGateway
 from app.services.rag_service import get_rag_context_for_query
 from app.services.resume_generator import (
     _PROVIDER_RANK,
@@ -213,28 +207,23 @@ TEXT TO SHORTEN:
     provider_used = "truncation"
 
     if providers_list:
+        # Issue #107 — uniform dispatch via LLMGateway (per-provider Redis
+        # circuit breaker + metrics). Keep the priority-rank ordering so
+        # we still try the user's preferred provider first.
         sorted_p = sorted(providers_list, key=lambda p: _PROVIDER_RANK.get(p.get("name", ""), 50))
+        gateway = LLMGateway()
         for p in sorted_p:
             name = p.get("name", "")
             api_key = p.get("api_key", "")
-            model = p.get("model", "")
+            if not name or not api_key:
+                continue
             try:
-                if name == "anthropic" and api_key:
-                    raw = await _call_anthropic(system_prompt, user_prompt, api_key)
-                elif name == "openai" and api_key:
-                    raw = await _call_openai(system_prompt, user_prompt, api_key)
-                elif name == "gemini" and api_key:
-                    raw = await _call_gemini(
-                        system_prompt, user_prompt, api_key, model or "gemini-1.5-flash"
-                    )
-                elif name == "groq" and api_key:
-                    raw = await _call_groq(
-                        system_prompt, user_prompt, api_key, model or "llama-3.3-70b-versatile"
-                    )
-                elif name == "kimi" and api_key:
-                    raw = await _call_kimi(system_prompt, user_prompt, api_key)
-                else:
-                    continue
+                raw, _provider_used = await gateway.generate(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    provider=name,
+                    api_key=api_key,
+                )
                 if raw and len(raw.strip()) > 20:
                     trimmed = raw.strip()[:max_chars]
                     provider_used = name
