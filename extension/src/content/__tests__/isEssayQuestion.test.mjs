@@ -1,103 +1,30 @@
 /**
  * Tests for isEssayQuestion / NON_QUESTION_PATTERNS / MIN_ESSAY_LABEL_LENGTH.
  *
- * Test infrastructure: node --test (built-in) + esbuild (already a transitive
- * dep of vite, available in node_modules) + node:vm.
- *
- * detector.ts runs browser-only side effects at module load (chrome.runtime,
- * MutationObserver, document.body, history.pushState patching, etc.), so we
- * bundle it with esbuild into a CJS string and execute it inside a vm context
- * pre-populated with minimal stubs. The exports we care about are pure
- * functions and constants — they work fine under stubbed globals.
+ * Imports directly from the pure sibling module `../essay-detection.ts`,
+ * which has no browser side effects. Node strips TS types via
+ * --experimental-strip-types (Node 22+).
  *
  * Run:
- *   cd extension && node --test src/content/__tests__/isEssayQuestion.test.mjs
+ *   cd extension && npm test
+ *   # or: node --test --experimental-strip-types src/content/__tests__/isEssayQuestion.test.mjs
  */
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import vm from "node:vm";
-import * as esbuild from "esbuild";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const detectorPath = path.resolve(__dirname, "../detector.ts");
-
-async function loadDetectorExports() {
-  const result = await esbuild.build({
-    entryPoints: [detectorPath],
-    bundle: true,
-    format: "cjs",
-    platform: "neutral",
-    write: false,
-    logLevel: "silent",
-  });
-  const code = result.outputFiles[0].text;
-
-  const noopEl = {
-    addEventListener: () => {},
-    removeEventListener: () => {},
-    querySelector: () => null,
-    querySelectorAll: () => [],
-    getAttribute: () => null,
-    appendChild: () => {},
-  };
-  const sandbox = {
-    module: { exports: {} },
-    exports: {},
-    require: () => ({}),
-    console,
-    setTimeout, clearTimeout, setInterval, clearInterval,
-    document: {
-      addEventListener: () => {},
-      querySelector: () => null,
-      querySelectorAll: () => [],
-      getElementById: () => null,
-      createElement: () => noopEl,
-      title: "",
-      body: null,
-    },
-    window: { addEventListener: () => {}, location: { href: "" } },
-    history: { pushState: () => {}, replaceState: () => {} },
-    chrome: {
-      runtime: {
-        onMessage: { addListener: () => {} },
-        sendMessage: () => Promise.resolve(),
-      },
-    },
-    MutationObserver: function MutationObserver() { return { observe: () => {} }; },
-    HTMLElement: function HTMLElement() {},
-    HTMLInputElement: function HTMLInputElement() {},
-    HTMLTextAreaElement: function HTMLTextAreaElement() {},
-    HTMLSelectElement: function HTMLSelectElement() {},
-    Event: function Event() {},
-    InputEvent: function InputEvent() {},
-    DataTransfer: function DataTransfer() {},
-    File: function File() {},
-    fetch: () => Promise.resolve({}),
-  };
-  sandbox.window.self = sandbox.window;
-  sandbox.window.top = sandbox.window;
-  sandbox.globalThis = sandbox;
-
-  vm.createContext(sandbox);
-  vm.runInContext(code, sandbox);
-
-  return sandbox.module.exports;
-}
-
-const detector = await loadDetectorExports();
-const { isEssayQuestion, NON_QUESTION_PATTERNS, MIN_ESSAY_LABEL_LENGTH } = detector;
+import {
+  isEssayQuestion,
+  NON_QUESTION_PATTERNS,
+  MIN_ESSAY_LABEL_LENGTH,
+} from "../essay-detection.ts";
 
 test("MIN_ESSAY_LABEL_LENGTH is 15", () => {
   assert.equal(MIN_ESSAY_LABEL_LENGTH, 15);
 });
 
-test("NON_QUESTION_PATTERNS is a RegExp", () => {
-  // Built in a separate vm context, so instanceof fails — duck-type instead.
-  assert.equal(typeof NON_QUESTION_PATTERNS.test, "function");
-  assert.equal(typeof NON_QUESTION_PATTERNS.source, "string");
+test("NON_QUESTION_PATTERNS is a case-insensitive RegExp", () => {
+  assert.ok(NON_QUESTION_PATTERNS instanceof RegExp);
   assert.equal(NON_QUESTION_PATTERNS.flags, "i");
 });
 

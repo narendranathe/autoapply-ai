@@ -13,6 +13,7 @@
 import type { DetectedField, DetectedQuestion, FieldType, JobCard, Message, PageContext, QuestionCategory } from "../shared/types";
 import { FIELD_PATTERNS, QUESTION_CATEGORY_PATTERNS } from "../shared/detection-patterns";
 import { isAllowedAtsOrigin } from "../shared/ats-origins";
+import { isEssayQuestion } from "./essay-detection";
 
 // ── Label hashing ──────────────────────────────────────────────────────────
 
@@ -115,16 +116,6 @@ function detectFields(): DetectedField[] {
     });
   }
   return fields;
-}
-
-export const NON_QUESTION_PATTERNS = /^(url|website|link|linkedin|github|portfolio|email|phone|name|first\s?name|last\s?name|full\s?name|address|city|zip|country|salary|start\s?date)/i;
-export const MIN_ESSAY_LABEL_LENGTH = 15;
-
-export function isEssayQuestion(label: string): boolean {
-  const normalized = label.trim();
-  if (normalized.length < MIN_ESSAY_LABEL_LENGTH) return false;
-  if (NON_QUESTION_PATTERNS.test(normalized)) return false;
-  return true;
 }
 
 function detectQuestions(): DetectedQuestion[] {

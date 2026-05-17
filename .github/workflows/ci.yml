@@ -103,13 +103,15 @@ jobs:
           file: backend/coverage.xml
           flags: backend
 
-  # ── Extension: typecheck + build ──────────────────────────────────────────
+  # ── Extension: typecheck + build + unit tests ─────────────────────────────
   extension:
     name: Extension (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node-version: ["20"]
+        # Node 22 required for `--experimental-strip-types` used by `npm test`
+        # to load .ts modules directly without a separate build step.
+        node-version: ["22"]
 
     steps:
       - uses: actions/checkout@v4
@@ -132,6 +134,10 @@ jobs:
       - name: Build extension
         working-directory: extension
         run: npm run build
+
+      - name: Unit tests
+        working-directory: extension
+        run: npm test
 
       - name: Upload extension artifact
         if: github.ref == 'refs/heads/main'

@@ -6,7 +6,8 @@
     "dev": "vite build --watch",
     "build": "vite build && node build-content.mjs",
     "build:content": "node build-content.mjs",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test --experimental-strip-types --no-warnings src/content/__tests__/*.test.mjs"
   },
   "dependencies": {
     "@clerk/clerk-js": "^6.3.1",
