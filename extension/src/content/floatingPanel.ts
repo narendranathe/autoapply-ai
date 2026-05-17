@@ -8,6 +8,7 @@
 import type { DetectedField, DetectedQuestion, FieldType, QuestionCategory } from "../shared/types";
 import { FIELD_PATTERNS, QUESTION_CATEGORY_PATTERNS } from "../shared/detection-patterns";
 import { isAllowedAtsOrigin, resolveIframeOrigin } from "../shared/ats-origins";
+import { getThresholdsCached, initThresholds } from "../shared/detection-thresholds";
 import { initAshbyApply } from "./ashbyApply";
 import { initBambooHRApply } from "./bamboohrApply";
 import { initGreenhouseApply } from "./greenhouseApply";
@@ -513,6 +514,9 @@ class FloatingPanel {
   }
 
   async init(): Promise<void> {
+    // Warm the threshold cache so the SPAResizeObserver and autofill gate read
+    // the user's saved values rather than the in-memory defaults on first fire.
+    void initThresholds();
     const data = await chrome.storage.local.get(["apiBaseUrl", "clerkUserId", "clerkToken", "clerkTokenExp", "profile", "providerConfigs", "promptTemplates", "categoryModelRoutes"]);
     if (data.apiBaseUrl) this.apiBase = data.apiBaseUrl as string;
     if (data.clerkUserId) this.clerkUserId = data.clerkUserId as string;
@@ -979,7 +983,9 @@ class FloatingPanel {
   }
 
   private maybeAutoFill(): void {
-    if (this.atsScore === null || this.atsScore < 0.75) return;
+    // Strategy C threshold — user-tunable via Options → Advanced Detection Settings.
+    const { atsAutofillMin } = getThresholdsCached();
+    if (this.atsScore === null || this.atsScore < atsAutofillMin) return;
     if (this.fields.length === 0) return;
     const dismissKey = `aap_autofill_dismissed_${this.company.toLowerCase().replace(/\s+/g, "_")}`;
     if (sessionStorage.getItem(dismissKey)) return;
@@ -1013,9 +1019,19 @@ class FloatingPanel {
       });
       if (!resp.ok) return;
       const json = await resp.json() as { answers?: Array<{ answer_text: string; similarity_score: number; reward_score: number }> };
+      // Strategy C thresholds — user-tunable via Options → Advanced Detection Settings.
+      // ragRewardWeight blends RAG similarity (weight w) with RL reward (1 − w);
+      // missing reward_score is treated as 0 so unrated answers still rank by similarity.
+      const { vaultSimilarityFloor, ragRewardWeight } = getThresholdsCached();
+      const rlWeight = 1 - ragRewardWeight;
       const vaultDrafts = (json.answers ?? [])
-        .filter(a => a.similarity_score >= 0.25)
-        .map(a => ({ text: a.answer_text, source: "vault" as const, similarityScore: a.similarity_score }));
+        .filter(a => a.similarity_score >= vaultSimilarityFloor)
+        .map(a => {
+          const reward = typeof a.reward_score === "number" ? a.reward_score : 0;
+          const composite = ragRewardWeight * a.similarity_score + rlWeight * reward;
+          return { text: a.answer_text, source: "vault" as const, similarityScore: a.similarity_score, composite };
+        })
+        .sort((a, b) => b.composite - a.composite);
       if (vaultDrafts.length === 0) return;
       // Re-check index is still valid (page may have navigated)
       const currentState = this.questionStates[stateIndex];
@@ -1204,12 +1220,15 @@ class FloatingPanel {
     let spaResizeTimer: ReturnType<typeof setTimeout> | null = null;
     const prevHeights = new Map<Element, number>();
     const observer = new ResizeObserver((entries) => {
+      // Strategy C threshold — user-tunable via Options → Advanced Detection Settings.
+      // Read on each fire so changes via the Options page take effect live.
+      const { resizeDeltaPx } = getThresholdsCached();
       let significantChange = false;
       for (const entry of entries) {
         const newH = entry.contentRect.height;
         const oldH = prevHeights.get(entry.target) ?? newH;
         prevHeights.set(entry.target, newH);
-        if (Math.abs(newH - oldH) > 50) significantChange = true;
+        if (Math.abs(newH - oldH) > resizeDeltaPx) significantChange = true;
       }
       if (!significantChange) return;
       if (spaResizeTimer !== null) clearTimeout(spaResizeTimer);
