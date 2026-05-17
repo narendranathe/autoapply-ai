@@ -45,7 +45,7 @@ async def test_put_provider_config_creates_new_row():
     mock_db.refresh = AsyncMock(side_effect=fake_refresh)
 
     payload = ProviderConfigIn(
-        name="groq", model="llama-3.3-70b-versatile", api_key="gsk_test_12345", enabled=True
+        name="groq", model="llama-3.3-70b-versatile", api_key="gsk_test_12345"
     )
 
     result = await upsert_provider_config(payload=payload, db=mock_db, user=mock_user)
@@ -75,7 +75,6 @@ async def test_get_provider_configs_never_returns_api_key():
     row.id = uuid.uuid4()
     row.provider_name = "openai"
     row.model_override = "gpt-4o"
-    row.is_enabled = True
     row.encrypted_api_key = encrypt_value("sk-test")
 
     mock_scalars = MagicMock()
@@ -166,9 +165,7 @@ async def test_put_invalid_provider_name_raises_422():
     mock_user.id = uuid.uuid4()
     mock_db = AsyncMock()
 
-    payload = ProviderConfigIn(
-        name="totally_fake_provider", model="", api_key="key123", enabled=True
-    )
+    payload = ProviderConfigIn(name="totally_fake_provider", model="", api_key="key123")
 
     with pytest.raises(HTTPException) as exc_info:
         await upsert_provider_config(payload=payload, db=mock_db, user=mock_user)
@@ -194,7 +191,6 @@ async def test_resolve_providers_uses_db_when_providers_json_empty():
     mock_row.provider_name = "groq"
     mock_row.encrypted_api_key = encrypt_value("gsk_test_key_for_unit_test")
     mock_row.model_override = "llama-3.3-70b-versatile"
-    mock_row.is_enabled = True
 
     mock_scalars = MagicMock()
     mock_scalars.all.return_value = [mock_row]
@@ -209,3 +205,82 @@ async def test_resolve_providers_uses_db_when_providers_json_empty():
     assert len(providers) == 1
     assert providers[0]["name"] == "groq"
     assert providers[0]["api_key"] == "gsk_test_key_for_unit_test"
+
+
+# ---------------------------------------------------------------------------
+# Test 7 (Issue #104): GET /provider-configs returns enabled derived from api_key
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_provider_configs_is_enabled_derived_from_api_key():
+    """GET /provider-configs must compute ``is_enabled`` as ``bool(api_key)``."""
+    from app.routers.users import get_provider_configs
+
+    mock_user = MagicMock()
+    mock_user.id = uuid.uuid4()
+
+    row_with_key = MagicMock()
+    row_with_key.provider_name = "openai"
+    row_with_key.encrypted_api_key = "ENCRYPTED_BLOB"
+    row_with_key.model_override = "gpt-4o-mini"
+
+    row_without_key = MagicMock()
+    row_without_key.provider_name = "anthropic"
+    row_without_key.encrypted_api_key = ""
+    row_without_key.model_override = None
+
+    mock_scalars = MagicMock()
+    mock_scalars.all.return_value = [row_with_key, row_without_key]
+    mock_result = MagicMock()
+    mock_result.scalars.return_value = mock_scalars
+
+    mock_db = AsyncMock()
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    response = await get_provider_configs(db=mock_db, user=mock_user)
+    configs = {c.provider_name: c for c in response.configs}
+
+    assert configs["openai"].has_key is True
+    assert configs["openai"].is_enabled is True
+    assert configs["openai"].is_enabled == configs["openai"].has_key
+
+    assert configs["anthropic"].has_key is False
+    assert configs["anthropic"].is_enabled is False
+    assert configs["anthropic"].is_enabled == configs["anthropic"].has_key
+
+
+@pytest.mark.asyncio
+async def test_put_provider_configs_response_enabled_derived_from_api_key():
+    """PUT /provider-configs/{name} must derive ``is_enabled`` from the stored key."""
+    from app.routers.users import upsert_provider_config
+    from app.schemas.user import ProviderConfigUpsert
+
+    mock_user = MagicMock()
+    mock_user.id = uuid.uuid4()
+
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = None
+    mock_db = AsyncMock()
+    mock_db.execute = AsyncMock(return_value=mock_result)
+    mock_db.add = MagicMock()
+    mock_db.commit = AsyncMock()
+    mock_db.refresh = AsyncMock()
+
+    with_key_resp = await upsert_provider_config(
+        provider_name="openai",
+        payload=ProviderConfigUpsert(api_key="sk-real-key", model_override="gpt-4o-mini"),
+        db=mock_db,
+        user=mock_user,
+    )
+    assert with_key_resp.has_key is True
+    assert with_key_resp.is_enabled is True
+
+    cleared_resp = await upsert_provider_config(
+        provider_name="anthropic",
+        payload=ProviderConfigUpsert(api_key="", model_override=None),
+        db=mock_db,
+        user=mock_user,
+    )
+    assert cleared_resp.has_key is False
+    assert cleared_resp.is_enabled is False

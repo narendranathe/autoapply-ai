@@ -1,6 +1,14 @@
 // Options page script — module scripts run after DOM is parsed, no DOMContentLoaded needed
 
 import { vaultApi, workHistoryApi, profileApi, type WorkHistoryEntry } from "../shared/api";
+import {
+  DEFAULT_THRESHOLDS,
+  THRESHOLD_RANGES,
+  loadThresholds,
+  saveThresholds,
+  resetThresholds,
+} from "../shared/detection-thresholds";
+import type { DetectionThresholds } from "../shared/types";
 
 const API_DEFAULT = "https://autoapply-ai-api.fly.dev/api/v1";
 
@@ -1044,6 +1052,86 @@ async function clearFailedOfflineQueue() {
   showStatus("offline-queue-status", "Failed queue cleared.", "ok");
 }
 
+// ── Detection Thresholds (Strategy C — issue #109) ──────────────────────────
+
+const DT_INPUT_IDS: Record<keyof DetectionThresholds, string> = {
+  atsAutofillMin: "dt-ats-autofill-min",
+  vaultSimilarityFloor: "dt-vault-similarity-floor",
+  resizeDeltaPx: "dt-resize-delta-px",
+  ragRewardWeight: "dt-rag-reward-weight",
+};
+
+function formatThreshold(key: keyof DetectionThresholds, value: number): string {
+  // Integer pixels for resize; 2-decimal float for the 0–1 ratios.
+  return key === "resizeDeltaPx" ? String(Math.round(value)) : value.toFixed(2);
+}
+
+function syncThresholdDisplay(key: keyof DetectionThresholds, value: number): void {
+  const display = document.getElementById(`${DT_INPUT_IDS[key]}-display`);
+  if (display) display.textContent = formatThreshold(key, value);
+}
+
+function applyThresholdsToUi(thresholds: DetectionThresholds): void {
+  (Object.keys(DT_INPUT_IDS) as Array<keyof DetectionThresholds>).forEach((key) => {
+    const input = document.getElementById(DT_INPUT_IDS[key]) as HTMLInputElement | null;
+    if (input) input.value = String(thresholds[key]);
+    syncThresholdDisplay(key, thresholds[key]);
+  });
+}
+
+function readThresholdsFromUi(): DetectionThresholds {
+  const read = (key: keyof DetectionThresholds): number => {
+    const input = document.getElementById(DT_INPUT_IDS[key]) as HTMLInputElement | null;
+    const parsed = input ? parseFloat(input.value) : NaN;
+    return Number.isFinite(parsed) ? parsed : DEFAULT_THRESHOLDS[key];
+  };
+  return {
+    atsAutofillMin: read("atsAutofillMin"),
+    vaultSimilarityFloor: read("vaultSimilarityFloor"),
+    resizeDeltaPx: read("resizeDeltaPx"),
+    ragRewardWeight: read("ragRewardWeight"),
+  };
+}
+
+async function loadDetectionThresholdsUi(): Promise<void> {
+  const t = await loadThresholds();
+  applyThresholdsToUi(t);
+}
+
+function wireDetectionThresholds(): void {
+  // Live numeric readout — updates while dragging, before save.
+  (Object.keys(DT_INPUT_IDS) as Array<keyof DetectionThresholds>).forEach((key) => {
+    const input = document.getElementById(DT_INPUT_IDS[key]) as HTMLInputElement | null;
+    if (!input) return;
+    const range = THRESHOLD_RANGES[key];
+    // Defensive: enforce the documented range on the DOM input.
+    input.min = String(range.min);
+    input.max = String(range.max);
+    input.step = String(range.step);
+    input.addEventListener("input", () => {
+      const parsed = parseFloat(input.value);
+      if (Number.isFinite(parsed)) syncThresholdDisplay(key, parsed);
+    });
+  });
+
+  const saveBtn = document.getElementById("dt-save-btn");
+  if (saveBtn) {
+    saveBtn.addEventListener("click", async () => {
+      const next = await saveThresholds(readThresholdsFromUi());
+      applyThresholdsToUi(next); // re-sync after normalisation/clamping
+      showStatus("dt-status", "Thresholds saved.", "ok");
+    });
+  }
+  const resetBtn = document.getElementById("dt-reset-btn");
+  if (resetBtn) {
+    resetBtn.addEventListener("click", async () => {
+      const next = await resetThresholds();
+      applyThresholdsToUi(next);
+      showStatus("dt-status", "Reset to defaults.", "info");
+    });
+  }
+}
+
 // Auto-update filename when doc type changes
 (document.getElementById("rag-doc-type") as HTMLSelectElement).addEventListener("change", (e) => {
   const type = (e.target as HTMLSelectElement).value;
@@ -1080,3 +1168,5 @@ get("github-remove-btn").addEventListener("click", removeGitHubToken);
 loadOfflineQueueStatus();
 get("offline-queue-refresh-btn").addEventListener("click", loadOfflineQueueStatus);
 get("offline-queue-clear-btn").addEventListener("click", clearFailedOfflineQueue);
+wireDetectionThresholds();
+loadDetectionThresholdsUi();

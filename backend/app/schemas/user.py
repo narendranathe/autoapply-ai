@@ -61,8 +61,8 @@ class ProviderConfigUpsert(BaseModel):
     Upserts a single provider entry for the authenticated user.
     The ``api_key`` field accepts the *plaintext* key — the server
     encrypts it with Fernet before persisting.  Pass an empty string
-    to clear an existing key while keeping the row (set enabled=False
-    instead if you want to temporarily disable the provider).
+    to clear an existing key (which effectively disables the provider,
+    since enabled state is derived from key presence).
     """
 
     api_key: str = Field(
@@ -74,7 +74,6 @@ class ProviderConfigUpsert(BaseModel):
         max_length=100,
         description="Optional model ID override, e.g. 'gpt-4o-mini'.",
     )
-    is_enabled: bool = Field(True, description="Whether this provider is active.")
 
 
 class ProviderConfigResponse(BaseModel):
@@ -82,12 +81,15 @@ class ProviderConfigResponse(BaseModel):
     Safe representation of a single UserProviderConfig row.
 
     The raw API key is never returned; only a ``has_key`` boolean.
+    ``is_enabled`` is derived server-side from ``has_key``.
     """
 
     provider_name: str
     has_key: bool
     model_override: str | None
-    is_enabled: bool
+    is_enabled: bool = Field(
+        description="Derived: true iff an api key is configured for this provider.",
+    )
 
     model_config = {"from_attributes": True}
 

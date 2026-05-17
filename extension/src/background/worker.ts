@@ -422,9 +422,6 @@ async function drainOfflineQueue(): Promise<void> {
 
   console.log(`[AutoApply] Draining ${pending.length} offline edits...`);
 
-  const { apiBaseUrl } = await chrome.storage.local.get(["apiBaseUrl"]);
-  const apiBase = (apiBaseUrl as string | undefined) || "https://autoapply-ai-api.fly.dev/api/v1";
-
   const { active, newlyDeadLettered, syncedCount } = await processOfflineQueue(
     queue,
     fetch,

@@ -84,7 +84,6 @@ def test_model_has_required_fields():
         user_id=uuid.uuid4(),
         provider_name="anthropic",
         encrypted_api_key="enc_key_abc123",
-        is_enabled=True,
     )
     assert config.provider_name == "anthropic"
     assert config.encrypted_api_key == "enc_key_abc123"
@@ -98,7 +97,6 @@ def test_model_optional_field_defaults_to_none():
         user_id=uuid.uuid4(),
         provider_name="openai",
         encrypted_api_key="enc_key_xyz",
-        is_enabled=True,
     )
     assert config.model_override is None
 
@@ -111,10 +109,27 @@ def test_model_accepts_model_override():
         provider_name="openai",
         encrypted_api_key="enc_key_xyz",
         model_override="gpt-4o",
-        is_enabled=False,
     )
     assert config.model_override == "gpt-4o"
-    assert config.is_enabled is False
+    assert config.is_enabled is True
+
+
+def test_model_is_enabled_derived_from_api_key():
+    """is_enabled is True iff encrypted_api_key is non-empty (derived, not stored)."""
+    with_key = UserProviderConfig(
+        id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        provider_name="openai",
+        encrypted_api_key="enc_key_xyz",
+    )
+    without_key = UserProviderConfig(
+        id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        provider_name="anthropic",
+        encrypted_api_key="",
+    )
+    assert with_key.is_enabled is True
+    assert without_key.is_enabled is False
 
 
 def test_model_unique_constraint_defined():
