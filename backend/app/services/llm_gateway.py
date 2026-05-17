@@ -27,16 +27,147 @@ fallback   | Keyword-based offline scoring
 from __future__ import annotations
 
 import re
+import time
 from abc import ABC, abstractmethod
 from enum import StrEnum
+from typing import Any
 
 import httpx
 from loguru import logger
 
 from app.config import settings
 from app.middleware.circuit_breaker import CircuitOpenError, llm_circuit
+from app.services import llm_circuit_redis
 from app.services.resume_parser import ResumeAST
 from app.utils.encryption import decrypt_value
+
+# -- Secret scrubbing --
+# Issue #190 — exception bodies from Gemini / Perplexity / Groq sometimes
+# echo the API key (query string, Authorization header, x-api-key). We
+# never want those reaching logs or LLMGenerationError.__repr__. The
+# scrubber runs over every interpolation point that mixes user input or
+# upstream-error text into a log line.
+
+_SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # Anthropic
+    re.compile(r"sk-ant-[A-Za-z0-9_\-]+"),
+    # OpenAI / generic sk-* tokens (length >= 20)
+    re.compile(r"sk-[A-Za-z0-9]{20,}"),
+    # Groq
+    re.compile(r"gsk_[A-Za-z0-9]+"),
+    # Perplexity
+    re.compile(r"pplx-[A-Za-z0-9]+"),
+    # Google AI Studio / Gemini
+    re.compile(r"AIza[0-9A-Za-z_\-]{35}"),
+    # Bearer tokens (Authorization header)
+    re.compile(r"Bearer\s+[A-Za-z0-9._~+/\-]+=*", re.IGNORECASE),
+    # x-api-key header value
+    re.compile(r"x-api-key\s*[:=]\s*\S+", re.IGNORECASE),
+    # ?key=... / &api_key=... query params
+    re.compile(r"[?&](?:key|api_key)=[^&\s]+", re.IGNORECASE),
+)
+
+
+def _scrub(text: object) -> str:
+    """Redact known secret-shaped substrings from ``text``.
+
+    Always returns a string. Used at every site that interpolates an
+    upstream exception or arbitrary string into a log line / error
+    message so a leaked API key in a 4xx body can't escape the gateway.
+    """
+    s = str(text)
+    for pattern in _SECRET_PATTERNS:
+        s = pattern.sub("[REDACTED]", s)
+    return s
+
+
+# -- Prometheus metrics (optional) --
+# Use ``prometheus_client`` if available — it ships as a transitive dep of
+# ``prometheus-fastapi-instrumentator``. We fall back to structured loguru
+# logs when the import fails so the gateway works in minimal environments.
+#
+# Issue #185: collectors must survive ``importlib.reload(llm_gateway)`` and
+# uvicorn ``--reload``. The previous bare ``except Exception`` caught
+# ``Duplicated timeseries`` and silently disabled metrics for the rest of
+# the process. We now scope the exception to ``ValueError`` (the only one
+# Prometheus raises on duplicate registration) and recover the existing
+# collector from the default ``REGISTRY``.
+try:  # pragma: no cover - import guard
+    from prometheus_client import REGISTRY, Counter, Histogram
+
+    # Buckets covering LLM latency: sub-second snappy responses through
+    # the 180s Ollama timeout. ``+Inf`` is appended automatically by
+    # prometheus_client but we include it explicitly for clarity.
+    _LLM_LATENCY_BUCKETS = (0.5, 1, 2, 5, 10, 20, 30, 60, 120, 180, float("inf"))
+
+    def _get_or_create_histogram(
+        name: str, doc: str, labelnames: tuple[str, ...], buckets: tuple[float, ...]
+    ) -> Histogram:
+        try:
+            return Histogram(name, doc, labelnames=labelnames, buckets=buckets)
+        except ValueError:
+            existing = REGISTRY._names_to_collectors.get(name)  # type: ignore[attr-defined]
+            if existing is None:  # pragma: no cover - defensive
+                raise
+            return existing  # type: ignore[return-value]
+
+    def _get_or_create_counter(name: str, doc: str, labelnames: tuple[str, ...]) -> Counter:
+        try:
+            return Counter(name, doc, labelnames=labelnames)
+        except ValueError:
+            existing = REGISTRY._names_to_collectors.get(name)  # type: ignore[attr-defined]
+            if existing is None:  # pragma: no cover - defensive
+                # prometheus_client stores Counters under "<name>_total".
+                existing = REGISTRY._names_to_collectors.get(f"{name}_total")  # type: ignore[attr-defined]
+            if existing is None:  # pragma: no cover - defensive
+                raise
+            return existing  # type: ignore[return-value]
+
+    _llm_request_duration_seconds = _get_or_create_histogram(
+        "llm_request_duration_seconds",
+        "Duration of LLM provider requests in seconds.",
+        ("provider",),
+        _LLM_LATENCY_BUCKETS,
+    )
+    _llm_request_total = _get_or_create_counter(
+        "llm_request_total",
+        "Total LLM provider requests.",
+        ("provider", "status"),
+    )
+    _HAS_PROMETHEUS = True
+except ImportError:  # pragma: no cover - prometheus_client missing
+    _llm_request_duration_seconds = None  # type: ignore[assignment]
+    _llm_request_total = None  # type: ignore[assignment]
+    _HAS_PROMETHEUS = False
+
+
+def _emit_metric(provider: str, status: str, duration_ms: float) -> None:
+    """Record a request metric for ``provider`` (``success`` or ``failure``).
+
+    Always emits a key=value loguru info event so log-based dashboards
+    keep working when prometheus_client is unavailable.
+
+    Issue #191 — Loguru does not render keyword arguments into its default
+    sink: ``logger.info("llm.request", provider=...)`` would emit only
+    ``llm.request`` and stash the kwargs in ``record["extra"]`` where no
+    aggregator picks them up. We use a positional format string so the
+    label/value pairs are part of the rendered line.
+    """
+    logger.info(
+        "llm.request provider={} duration_ms={} status={}",
+        provider,
+        round(duration_ms, 2),
+        status,
+    )
+    if _HAS_PROMETHEUS:
+        try:
+            _llm_request_total.labels(provider=provider, status=status).inc()  # type: ignore[union-attr]
+            _llm_request_duration_seconds.labels(provider=provider).observe(  # type: ignore[union-attr]
+                duration_ms / 1000.0
+            )
+        except Exception as exc:  # pragma: no cover - never let metrics break a request
+            logger.debug(f"prometheus emit failed: {exc}")
+
 
 # -- LLMProvider Protocol --
 
@@ -587,6 +718,47 @@ class LLMUnavailableError(Exception):
     pass
 
 
+class LLMGenerationError(Exception):
+    """Raised when an individual LLM provider attempt fails inside the gateway cascade.
+
+    The cascade catches this internally and continues to the next provider —
+    callers will only see it if they invoke a single provider directly via
+    ``LLMGateway._attempt_single`` or similar low-level helper.
+
+    Attributes
+    ----------
+    provider:
+        Logical provider name that failed (``"anthropic"``, ``"openai"``…).
+    attempt_number:
+        1-indexed position inside the gateway cascade.
+    cause:
+        Underlying exception captured when the attempt raised, if any.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider: str,
+        attempt_number: int,
+        cause: Exception | None = None,
+    ):
+        super().__init__(message)
+        self.provider = provider
+        self.attempt_number = attempt_number
+        self.cause = cause
+
+    def __repr__(self) -> str:
+        # Issue #190 — ``cause`` is an upstream exception whose ``repr``
+        # may contain echoed API keys (e.g. Gemini's ``?key=...`` URL).
+        # Scrub before exposing.
+        cause_repr = "None" if self.cause is None else _scrub(repr(self.cause))
+        return (
+            f"LLMGenerationError(provider={self.provider!r}, "
+            f"attempt_number={self.attempt_number}, cause={cause_repr})"
+        )
+
+
 # -- Constants & registry --
 
 
@@ -710,6 +882,8 @@ class LLMGateway:
         provider: str,
         api_key: str = "",
         ollama_model: str = "llama3.1:8b",
+        model: str | None = None,
+        skip_fallback: bool = False,
     ) -> tuple[str, str]:
         """
         Dispatch a completion request through the provider cascade.
@@ -728,13 +902,34 @@ class LLMGateway:
             provider will be skipped and the cascade starts at Ollama.
         ollama_model:
             Ollama model tag (default "llama3.1:8b").
+        model:
+            Optional per-provider model id override. When set, ``gemini``,
+            ``groq``, and ``perplexity`` use this model id instead of their
+            built-in defaults (#188). Ignored for providers that don't
+            accept a runtime model override (anthropic, openai, kimi).
+        skip_fallback:
+            When True, do not append Ollama as a secondary attempt
+            (#186). Callers that supply their own outer fallback loop
+            should set this to avoid double-fallback / provider
+            misattribution (e.g. a cloud provider fails, the gateway
+            silently tries Ollama for up to 180s, and the outer loop
+            then records the cloud provider's name as the one that
+            answered).
 
         Returns
         -------
         tuple[str, str]
             ``(content, provider_name_used)``
+
+        Notes
+        -----
+        * Each provider attempt is wrapped with a Redis-backed circuit
+          breaker (``llm_circuit_redis``). When a provider's circuit is
+          open the gateway skips it without making an HTTP call.
+        * Successful and failed attempts emit Prometheus metrics and a
+          structured ``llm.request`` log event.
         """
-        cascade: list[tuple[str, object]] = []
+        cascade: list[tuple[str, Any]] = []
 
         # Build ordered cascade — primary provider first (only if key is present)
         if provider == "anthropic" and api_key:
@@ -744,14 +939,42 @@ class LLMGateway:
         elif provider == "openai" and api_key:
             cascade.append(("openai", lambda: _call_openai(system_prompt, user_prompt, api_key)))
         elif provider == "groq" and api_key:
-            cascade.append(("groq", lambda: _call_groq(system_prompt, user_prompt, api_key)))
+            cascade.append(
+                (
+                    "groq",
+                    lambda: _call_groq(
+                        system_prompt,
+                        user_prompt,
+                        api_key,
+                        model or "llama-3.3-70b-versatile",
+                    ),
+                )
+            )
         elif provider == "kimi" and api_key:
             cascade.append(("kimi", lambda: _call_kimi(system_prompt, user_prompt, api_key)))
         elif provider == "gemini" and api_key:
-            cascade.append(("gemini", lambda: _call_gemini(system_prompt, user_prompt, api_key)))
+            cascade.append(
+                (
+                    "gemini",
+                    lambda: _call_gemini(
+                        system_prompt,
+                        user_prompt,
+                        api_key,
+                        model or "gemini-1.5-flash",
+                    ),
+                )
+            )
         elif provider == "perplexity" and api_key:
             cascade.append(
-                ("perplexity", lambda: _call_perplexity(system_prompt, user_prompt, api_key))
+                (
+                    "perplexity",
+                    lambda: _call_perplexity(
+                        system_prompt,
+                        user_prompt,
+                        api_key,
+                        model or "sonar",
+                    ),
+                )
             )
         elif provider == "ollama":
             # Ollama needs no key; add it as primary and skip the second append below
@@ -760,23 +983,78 @@ class LLMGateway:
             )
 
         # Always append Ollama as local fallback unless it is already primary
-        if provider != "ollama":
+        # or the caller opted out via ``skip_fallback`` (#186). Callers like
+        # ``_dispatch_provider_entry`` own their own outer-loop fallback and
+        # don't want the gateway to silently retry a 180s Ollama call after
+        # a cloud provider error.
+        if provider != "ollama" and not skip_fallback:
             cascade.append(
                 ("ollama", lambda: _call_ollama(system_prompt, user_prompt, ollama_model))
             )
 
-        # Try each provider in order
-        for name, call in cascade:
-            try:
-                result = await call()  # type: ignore[operator]
-                if result and len(result) > _MIN_RESPONSE_LEN:
-                    return result, name
+        # Try each provider in order, recording metrics + breaker state.
+        for attempt_number, (name, call) in enumerate(cascade, start=1):
+            # Redis-backed circuit breaker — skip immediately if open.
+            if await llm_circuit_redis.is_open(name):
                 logger.warning(
-                    f"LLMGateway: provider '{name}' returned a short response "
-                    f"({len(result)} chars) — skipping"
+                    "LLMGateway: provider '{}' circuit OPEN (attempt {}) — skipping",
+                    name,
+                    attempt_number,
                 )
+                _emit_metric(name, "circuit_open", 0.0)
+                continue
+
+            start = time.monotonic()
+            try:
+                result = await call()
+                duration_ms = (time.monotonic() - start) * 1000.0
+                if result and len(result) > _MIN_RESPONSE_LEN:
+                    await llm_circuit_redis.record_success(name)
+                    _emit_metric(name, "success", duration_ms)
+                    logger.info(
+                        "LLMGateway: provider '{}' succeeded (attempt {}, {:.1f}ms)",
+                        name,
+                        attempt_number,
+                        duration_ms,
+                    )
+                    return result, name
+                # Short response — treat as a soft failure for metrics
+                logger.warning(
+                    "LLMGateway: provider '{}' returned a short response "
+                    "({} chars, attempt {}) — skipping",
+                    name,
+                    len(result) if result else 0,
+                    attempt_number,
+                )
+                _emit_metric(name, "failure", duration_ms)
+                err = LLMGenerationError(
+                    f"Provider '{name}' returned short response",
+                    provider=name,
+                    attempt_number=attempt_number,
+                )
+                await llm_circuit_redis.record_failure(name)
+                logger.debug(repr(err))
             except Exception as exc:
-                logger.warning(f"LLMGateway: provider '{name}' failed: {exc}")
+                duration_ms = (time.monotonic() - start) * 1000.0
+                _emit_metric(name, "failure", duration_ms)
+                # Issue #190 — upstream exception bodies sometimes echo the
+                # API key (Gemini ?key=, Perplexity x-api-key, etc.) so we
+                # scrub before interpolating into the error message and log.
+                safe_exc_text = _scrub(exc)
+                err = LLMGenerationError(
+                    f"Provider '{name}' raised: {safe_exc_text}",
+                    provider=name,
+                    attempt_number=attempt_number,
+                    cause=exc,
+                )
+                logger.warning(
+                    "LLMGateway: provider '{}' failed (attempt {}, {:.1f}ms): {}",
+                    name,
+                    attempt_number,
+                    duration_ms,
+                    safe_exc_text,
+                )
+                await llm_circuit_redis.record_failure(name)
 
         return "", "fallback"
 
@@ -815,7 +1093,9 @@ async def tailor_resume(
         try:
             api_key = decrypt_value(encrypted_api_key)
         except Exception as e:
-            logger.error(f"Failed to decrypt API key: {e}")
+            # Issue #190 — defensive scrub; the encrypted value should never
+            # land in the exception text but better safe than sorry.
+            logger.error(f"Failed to decrypt API key: {_scrub(e)}")
             provider = PROVIDERS["fallback"]
 
     # ── Validate key format ───────────────────────────────
@@ -831,6 +1111,23 @@ async def tailor_resume(
         bullet_count=resume_ast.bullet_count,
     )
 
+    # ── Redis circuit breaker check (#189) ─────────────────
+    # The Redis breaker only protected ``LLMGateway.generate``'s cascade
+    # before this fix. ``tailor_resume`` calls ``provider.complete()``
+    # directly via the PROVIDERS registry, so the highest-volume caller
+    # bypassed the new breaker entirely. Gate the call here so a tripped
+    # breaker short-circuits to the keyword fallback path.
+    if provider_name not in ("fallback", "") and await llm_circuit_redis.is_open(provider_name):
+        logger.warning(
+            "tailor_resume: provider '{}' circuit OPEN — using keyword fallback",
+            provider_name,
+        )
+        return (
+            [b.text for b in resume_ast.bullets],
+            True,
+            "LLM service temporarily unavailable (circuit open). Showing original.",
+        )
+
     # ── Call the LLM ──────────────────────────────────────
     try:
         raw_response = await provider.complete(SYSTEM_PROMPT, user_prompt, api_key)
@@ -843,6 +1140,12 @@ async def tailor_resume(
                 "LLM unavailable. Showing original bullets with keyword relevance scores.",
             )
 
+        # Record success against the Redis breaker so a streak of
+        # transient failures doesn't accidentally keep the circuit closed
+        # by an unrelated record_failure from another caller (#189).
+        if provider_name not in ("fallback", ""):
+            await llm_circuit_redis.record_success(provider_name)
+
         # Parse the response into individual bullets
         rewritten_bullets = _parse_llm_response(raw_response, resume_ast.bullet_count)
 
@@ -854,7 +1157,9 @@ async def tailor_resume(
         return rewritten_bullets, False, summary
 
     except CircuitOpenError as e:
-        logger.warning(f"Circuit open for {provider_name}: {e}")
+        # The in-process @llm_circuit decorator on provider.complete() can
+        # trip independently of the Redis breaker. Preserve legacy behaviour.
+        logger.warning(f"Circuit open for {provider_name}: {_scrub(e)}")
         return (
             [b.text for b in resume_ast.bullets],
             True,
@@ -862,6 +1167,8 @@ async def tailor_resume(
         )
 
     except InvalidAPIKeyError:
+        # Auth failures don't indicate provider health — don't record as
+        # a circuit breaker failure (#189).
         logger.warning(f"Invalid API key for {provider_name}")
         return (
             [b.text for b in resume_ast.bullets],
@@ -870,6 +1177,9 @@ async def tailor_resume(
         )
 
     except RateLimitError:
+        # Rate-limit IS a provider health signal — increment the breaker.
+        if provider_name not in ("fallback", ""):
+            await llm_circuit_redis.record_failure(provider_name)
         logger.warning(f"Rate limited by {provider_name}")
         return (
             [b.text for b in resume_ast.bullets],
@@ -878,11 +1188,20 @@ async def tailor_resume(
         )
 
     except Exception as e:
-        logger.error(f"LLM call failed: {e}", exc_info=True)
+        # Any other failure counts as a provider failure for the Redis
+        # breaker — three of these in a 60s window open the circuit.
+        if provider_name not in ("fallback", ""):
+            await llm_circuit_redis.record_failure(provider_name)
+        # Issue #190 — never dump raw exception text (or its traceback) when
+        # the upstream body may contain echoed API keys. Strip secrets first
+        # and drop ``exc_info`` so loguru's diagnose-formatter doesn't expand
+        # the offending frames into the log.
+        safe = _scrub(e)
+        logger.error(f"LLM call failed: {safe}")
         return (
             [b.text for b in resume_ast.bullets],
             True,
-            f"LLM error: {str(e)[:100]}. Showing original bullets.",
+            f"LLM error: {safe[:100]}. Showing original bullets.",
         )
 
 
