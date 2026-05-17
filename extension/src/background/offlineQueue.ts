@@ -9,6 +9,35 @@ export const MAX_OFFLINE_RETRY = 3;
 export const OFFLINE_QUEUE_KEY = "offline_queue";
 export const OFFLINE_QUEUE_FAILED_KEY = "offline_queue_failed";
 
+/**
+ * Production fallback for the API base URL when the user has not configured
+ * one in chrome.storage.local. NEVER fall back to localhost here — that would
+ * silently break drains for any user running a packaged extension build.
+ */
+export const DEFAULT_API_BASE = "https://autoapply-ai-api.fly.dev/api/v1";
+
+/** Endpoint suffix appended to the configured API base for the markdown drain. */
+export const SYNC_MARKDOWN_PATH = "/vault/sync-markdown";
+
+/**
+ * Resolve the full sync endpoint to POST offline edits to.
+ *
+ * Reads `apiBaseUrl` from the supplied chrome.storage.local-shaped object and
+ * falls back to DEFAULT_API_BASE only when the value is missing or empty.
+ *
+ * Kept pure (takes the storage value, not chrome directly) so it can be
+ * tested with a plain object and so that worker.ts can mock-free unit-test
+ * the URL-resolution behaviour that issue #91 was about.
+ */
+export function resolveSyncEndpoint(
+  storage: { apiBaseUrl?: unknown } | null | undefined,
+): string {
+  const raw = storage?.apiBaseUrl;
+  const apiBase =
+    typeof raw === "string" && raw.length > 0 ? raw : DEFAULT_API_BASE;
+  return `${apiBase}${SYNC_MARKDOWN_PATH}`;
+}
+
 export interface ProcessQueueResult {
   active: OfflineEdit[];
   newlyDeadLettered: OfflineEdit[];

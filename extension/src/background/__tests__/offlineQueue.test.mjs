@@ -18,7 +18,13 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const queueModulePath = path.resolve(__dirname, "../offlineQueue.ts");
 
-const { processOfflineQueue, MAX_OFFLINE_RETRY } = await import(queueModulePath);
+const {
+  processOfflineQueue,
+  MAX_OFFLINE_RETRY,
+  resolveSyncEndpoint,
+  DEFAULT_API_BASE,
+  SYNC_MARKDOWN_PATH,
+} = await import(queueModulePath);
 
 // Tests pass an explicit endpoint — there is no module-level default any more.
 const TEST_ENDPOINT = "https://test.example.com/api/v1/vault/sync-markdown";
@@ -201,4 +207,134 @@ test("processOfflineQueue requires an explicit endpoint (no default)", async () 
     () => processOfflineQueue(queue, fetchScript([okResponse()]), ""),
     /endpoint is required/,
   );
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Issue #91 — drainOfflineQueue must read apiBaseUrl from chrome.storage.local
+// ───────────────────────────────────────────────────────────────────────────
+//
+// drainOfflineQueue() in worker.ts previously hardcoded http://localhost:8000
+// regardless of what the user had configured, silently dropping offline edits
+// in production. The fix routes URL resolution through resolveSyncEndpoint()
+// which reads `apiBaseUrl` out of a chrome.storage.local-shaped object.
+//
+// These tests pin the public contract of resolveSyncEndpoint and exercise the
+// end-to-end "mock chrome.storage.local → drainOfflineQueue posts to the
+// configured base" path via a faked storage layer.
+
+test("resolveSyncEndpoint: uses apiBaseUrl from storage when set", () => {
+  const got = resolveSyncEndpoint({ apiBaseUrl: "https://api.example.com/api/v1" });
+  assert.equal(got, "https://api.example.com/api/v1/vault/sync-markdown");
+});
+
+test("resolveSyncEndpoint: prefers a user-configured localhost over the prod default", () => {
+  // A developer with localhost:8000 saved in storage should hit their own
+  // backend, not the fly.dev production host.
+  const got = resolveSyncEndpoint({ apiBaseUrl: "http://localhost:8000/api/v1" });
+  assert.equal(got, "http://localhost:8000/api/v1/vault/sync-markdown");
+});
+
+test("resolveSyncEndpoint: falls back to DEFAULT_API_BASE when storage is empty", () => {
+  // Critical regression guard for issue #91: must NOT default to localhost.
+  const got = resolveSyncEndpoint({});
+  assert.equal(got, `${DEFAULT_API_BASE}${SYNC_MARKDOWN_PATH}`);
+  assert.ok(!got.includes("localhost"), "fallback must not contain localhost");
+});
+
+test("resolveSyncEndpoint: falls back when apiBaseUrl is missing / undefined / empty string", () => {
+  const expected = `${DEFAULT_API_BASE}${SYNC_MARKDOWN_PATH}`;
+  assert.equal(resolveSyncEndpoint(undefined), expected);
+  assert.equal(resolveSyncEndpoint(null), expected);
+  assert.equal(resolveSyncEndpoint({ apiBaseUrl: undefined }), expected);
+  assert.equal(resolveSyncEndpoint({ apiBaseUrl: "" }), expected);
+});
+
+test("resolveSyncEndpoint: rejects non-string apiBaseUrl values", () => {
+  // Defensive — if storage is corrupted (number, object, null) we still fall
+  // back to the prod default rather than producing an unusable URL.
+  const expected = `${DEFAULT_API_BASE}${SYNC_MARKDOWN_PATH}`;
+  assert.equal(resolveSyncEndpoint({ apiBaseUrl: 8000 }), expected);
+  assert.equal(resolveSyncEndpoint({ apiBaseUrl: null }), expected);
+  assert.equal(resolveSyncEndpoint({ apiBaseUrl: { url: "x" } }), expected);
+});
+
+test("DEFAULT_API_BASE points at production, never localhost", () => {
+  // Belt-and-suspenders: if someone ever flips this to localhost, the test
+  // suite must fail loudly.
+  assert.ok(
+    !DEFAULT_API_BASE.includes("localhost"),
+    `DEFAULT_API_BASE must not be localhost; got ${DEFAULT_API_BASE}`,
+  );
+  assert.ok(DEFAULT_API_BASE.startsWith("https://"), "DEFAULT_API_BASE must be https://");
+});
+
+test("drainOfflineQueue path: chrome.storage.local.apiBaseUrl flows through to fetch URL", async () => {
+  // End-to-end-ish: simulate the exact code path drainOfflineQueue takes —
+  // read from a faked chrome.storage.local, resolve the endpoint, then run
+  // processOfflineQueue with a capturing fetch. The URL we assert is what
+  // the worker would actually POST to in production.
+  const storageData = {
+    apiBaseUrl: "https://staging.example.com/api/v1",
+    offline_queue: [makeEdit({ id: "e-1" })],
+  };
+  const chromeStorageLocal = {
+    get: async (keys) => {
+      const arr = Array.isArray(keys) ? keys : [keys];
+      const out = {};
+      for (const k of arr) if (k in storageData) out[k] = storageData[k];
+      return out;
+    },
+  };
+
+  // Mirror the read drainOfflineQueue performs.
+  const stored = await chromeStorageLocal.get(["offline_queue", "apiBaseUrl"]);
+  const endpoint = resolveSyncEndpoint(stored);
+
+  const capturedUrls = [];
+  const capturingFetch = async (url) => {
+    capturedUrls.push(url);
+    return okResponse();
+  };
+
+  const result = await processOfflineQueue(stored.offline_queue, capturingFetch, endpoint);
+
+  assert.equal(result.syncedCount, 1);
+  assert.equal(capturedUrls.length, 1);
+  assert.equal(capturedUrls[0], "https://staging.example.com/api/v1/vault/sync-markdown");
+  assert.ok(!capturedUrls[0].includes("localhost"));
+});
+
+test("drainOfflineQueue path: empty chrome.storage.local does NOT post to localhost", async () => {
+  // The original bug: user never configured apiBaseUrl, queue drains to
+  // http://localhost:8000 in production. This test pins the fix.
+  const storageData = {
+    // apiBaseUrl deliberately absent.
+    offline_queue: [makeEdit({ id: "e-1" })],
+  };
+  const chromeStorageLocal = {
+    get: async (keys) => {
+      const arr = Array.isArray(keys) ? keys : [keys];
+      const out = {};
+      for (const k of arr) if (k in storageData) out[k] = storageData[k];
+      return out;
+    },
+  };
+
+  const stored = await chromeStorageLocal.get(["offline_queue", "apiBaseUrl"]);
+  const endpoint = resolveSyncEndpoint(stored);
+
+  const capturedUrls = [];
+  const capturingFetch = async (url) => {
+    capturedUrls.push(url);
+    return okResponse();
+  };
+
+  await processOfflineQueue(stored.offline_queue, capturingFetch, endpoint);
+
+  assert.equal(capturedUrls.length, 1);
+  assert.ok(
+    !capturedUrls[0].includes("localhost"),
+    `drain must not post to localhost when storage is empty; got ${capturedUrls[0]}`,
+  );
+  assert.equal(capturedUrls[0], `${DEFAULT_API_BASE}${SYNC_MARKDOWN_PATH}`);
 });

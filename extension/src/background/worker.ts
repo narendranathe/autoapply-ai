@@ -13,6 +13,7 @@ import {
   OFFLINE_QUEUE_FAILED_KEY,
   OFFLINE_QUEUE_KEY,
   processOfflineQueue,
+  resolveSyncEndpoint,
 } from "./offlineQueue";
 
 // Open sidepanel when user clicks the toolbar icon (required for MV3)
@@ -412,10 +413,13 @@ self.addEventListener("online", () => {
 async function drainOfflineQueue(): Promise<void> {
   // Read the queue + the configured API base. We deliberately do NOT read
   // OFFLINE_QUEUE_FAILED_KEY here — see below for the race-narrowing rationale.
+  //
+  // The sync endpoint MUST be resolved from chrome.storage.local.apiBaseUrl —
+  // hardcoding any URL here (especially localhost) would silently break
+  // production drains. See issue #91.
   const stored = await chrome.storage.local.get([OFFLINE_QUEUE_KEY, "apiBaseUrl"]);
   const queue: OfflineEdit[] = stored[OFFLINE_QUEUE_KEY] || [];
-  const apiBase =
-    (stored.apiBaseUrl as string | undefined) || "https://autoapply-ai-api.fly.dev/api/v1";
+  const endpoint = resolveSyncEndpoint(stored);
 
   const pending = queue.filter((e) => !e.synced);
   if (pending.length === 0) return;
@@ -425,7 +429,7 @@ async function drainOfflineQueue(): Promise<void> {
   const { active, newlyDeadLettered, syncedCount } = await processOfflineQueue(
     queue,
     fetch,
-    `${apiBase}/vault/sync-markdown`,
+    endpoint,
   );
 
   if (syncedCount > 0) {
