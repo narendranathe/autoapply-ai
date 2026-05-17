@@ -267,10 +267,10 @@ export const vaultApi = {
     workHistoryText: string;
     maxLength?: number;    // textarea character limit — passed to LLM to respect
     categoryInstructions?: string;  // per-category style instructions from settings
-    providers?: Array<{ name: string; apiKey: string; model?: string }>;
-    // legacy single-provider fallback
+    // SECURITY (#198): no api_key — backend looks up stored keys for the user.
+    providers?: Array<{ name: string; model?: string }>;
+    // legacy single-provider fallback (no api_key; resolved server-side)
     llmProvider?: string;
-    llmApiKey?: string;
     ollamaModel?: string;
   }): Promise<AnswerResponse> {
     const fd = new FormData();
@@ -283,12 +283,11 @@ export const vaultApi = {
     if (params.maxLength) fd.append("max_length", String(params.maxLength));
     if (params.categoryInstructions) fd.append("category_instructions", params.categoryInstructions);
     if (params.providers && params.providers.length > 0) {
-      fd.append("providers_json", JSON.stringify(
-        params.providers.map((p) => ({ name: p.name, api_key: p.apiKey, model: p.model ?? "" }))
+      fd.append("providers", JSON.stringify(
+        params.providers.map((p) => ({ name: p.name, model: p.model ?? "" }))
       ));
     } else {
       if (params.llmProvider) fd.append("llm_provider", params.llmProvider);
-      if (params.llmApiKey) fd.append("llm_api_key", params.llmApiKey);
       if (params.ollamaModel) fd.append("ollama_model", params.ollamaModel);
     }
     return post("/vault/generate/answers", fd);
@@ -508,7 +507,8 @@ export const vaultApi = {
     jdText: string;
     companyName: string;
     roleTitle?: string;
-    providers?: Array<{ name: string; apiKey: string; model?: string }>;
+    // SECURITY (#198): no api_key — backend looks up stored keys for the user.
+    providers?: Array<{ name: string; model?: string }>;
   }): Promise<GenerateTailoredResponse> {
     const fd = new FormData();
     fd.append("base_resume_id", params.baseResumeId);
@@ -516,8 +516,8 @@ export const vaultApi = {
     fd.append("company_name", params.companyName);
     if (params.roleTitle) fd.append("role_title", params.roleTitle);
     if (params.providers?.length) {
-      fd.append("providers_json", JSON.stringify(
-        params.providers.map((p) => ({ name: p.name, api_key: p.apiKey, model: p.model ?? "" }))
+      fd.append("providers", JSON.stringify(
+        params.providers.map((p) => ({ name: p.name, model: p.model ?? "" }))
       ));
     }
     return post("/vault/generate/tailored", fd);
@@ -528,15 +528,16 @@ export const vaultApi = {
     companyName: string;
     roleTitle?: string;
     jdText?: string;
-    providers?: Array<{ name: string; apiKey: string; model?: string }>;
+    // SECURITY (#198): no api_key — backend looks up stored keys for the user.
+    providers?: Array<{ name: string; model?: string }>;
   }): Promise<{ questions: InterviewQuestion[]; total: number }> {
     const fd = new FormData();
     fd.append("company_name", params.companyName);
     if (params.roleTitle) fd.append("role_title", params.roleTitle);
     if (params.jdText) fd.append("jd_text", params.jdText);
     if (params.providers?.length) {
-      fd.append("providers_json", JSON.stringify(
-        params.providers.map((p) => ({ name: p.name, api_key: p.apiKey, model: p.model ?? "" }))
+      fd.append("providers", JSON.stringify(
+        params.providers.map((p) => ({ name: p.name, model: p.model ?? "" }))
       ));
     }
     return post("/vault/interview-prep", fd);
@@ -550,7 +551,8 @@ export const vaultApi = {
     tone?: "professional" | "enthusiastic" | "concise" | "conversational";
     wordLimit?: number;
     candidateName?: string;
-    providers?: Array<{ name: string; apiKey: string; model?: string }>;
+    // SECURITY (#198): no api_key — backend looks up stored keys for the user.
+    providers?: Array<{ name: string; model?: string }>;
   }): Promise<{ drafts: string[]; draft_providers: string[]; tone: string; word_limit: number }> {
     const fd = new FormData();
     fd.append("company_name", params.companyName);
@@ -560,8 +562,8 @@ export const vaultApi = {
     if (params.wordLimit) fd.append("word_limit", String(params.wordLimit));
     if (params.candidateName) fd.append("candidate_name", params.candidateName);
     if (params.providers?.length) {
-      fd.append("providers_json", JSON.stringify(
-        params.providers.map((p) => ({ name: p.name, api_key: p.apiKey, model: p.model ?? "" }))
+      fd.append("providers", JSON.stringify(
+        params.providers.map((p) => ({ name: p.name, model: p.model ?? "" }))
       ));
     }
     return post("/vault/generate/cover-letter", fd);
@@ -591,14 +593,15 @@ export const vaultApi = {
   trimAnswer(params: {
     answerText: string;
     maxChars: number;
-    providers?: Array<{ name: string; apiKey: string; model?: string }>;
+    // SECURITY (#198): no api_key — backend looks up stored keys for the user.
+    providers?: Array<{ name: string; model?: string }>;
   }): Promise<{ trimmed: string; char_count: number; provider_used: string }> {
     const fd = new FormData();
     fd.append("answer_text", params.answerText);
     fd.append("max_chars", String(params.maxChars));
     if (params.providers?.length) {
-      fd.append("providers_json", JSON.stringify(
-        params.providers.map((p) => ({ name: p.name, api_key: p.apiKey, model: p.model ?? "" }))
+      fd.append("providers", JSON.stringify(
+        params.providers.map((p) => ({ name: p.name, model: p.model ?? "" }))
       ));
     }
     return post("/vault/generate/answers/trim", fd);
@@ -611,7 +614,8 @@ export const vaultApi = {
     jdText: string;
     wordLimit?: number;
     candidateName?: string;
-    providers?: Array<{ name: string; apiKey: string; model?: string }>;
+    // SECURITY (#198): no api_key — backend looks up stored keys for the user.
+    providers?: Array<{ name: string; model?: string }>;
   }): Promise<{ summary: string; provider_used: string; word_count: number }> {
     const fd = new FormData();
     fd.append("company_name", params.companyName);
@@ -620,8 +624,8 @@ export const vaultApi = {
     if (params.wordLimit != null) fd.append("word_limit", String(params.wordLimit));
     if (params.candidateName) fd.append("candidate_name", params.candidateName);
     if (params.providers?.length) {
-      fd.append("providers_json", JSON.stringify(
-        params.providers.map((p) => ({ name: p.name, api_key: p.apiKey, model: p.model ?? "" }))
+      fd.append("providers", JSON.stringify(
+        params.providers.map((p) => ({ name: p.name, model: p.model ?? "" }))
       ));
     }
     return post("/vault/generate/summary", fd);
@@ -634,7 +638,8 @@ export const vaultApi = {
     jdText: string;
     numBullets?: number;
     targetCompany?: string;
-    providers?: Array<{ name: string; apiKey: string; model?: string }>;
+    // SECURITY (#198): no api_key — backend looks up stored keys for the user.
+    providers?: Array<{ name: string; model?: string }>;
   }): Promise<{ bullets: string[]; provider_used: string; count: number }> {
     const fd = new FormData();
     fd.append("company_name", params.companyName);
@@ -643,8 +648,8 @@ export const vaultApi = {
     if (params.numBullets != null) fd.append("num_bullets", String(params.numBullets));
     if (params.targetCompany) fd.append("target_company_for_context", params.targetCompany);
     if (params.providers?.length) {
-      fd.append("providers_json", JSON.stringify(
-        params.providers.map((p) => ({ name: p.name, api_key: p.apiKey, model: p.model ?? "" }))
+      fd.append("providers", JSON.stringify(
+        params.providers.map((p) => ({ name: p.name, model: p.model ?? "" }))
       ));
     }
     return post("/vault/generate/bullets", fd);
@@ -922,7 +927,8 @@ export const workHistoryApi = {
 
   importFromResume(
     file: File,
-    providers?: Array<{ name: string; apiKey: string; model?: string }>
+    // SECURITY (#198): no api_key — backend looks up stored keys for the user.
+    providers?: Array<{ name: string; model?: string }>
   ): Promise<{
     created: number;
     skipped: number;
@@ -936,8 +942,8 @@ export const workHistoryApi = {
     const fd = new FormData();
     fd.append("file", file, file.name);
     if (providers?.length) {
-      fd.append("providers_json", JSON.stringify(
-        providers.map((p) => ({ name: p.name, api_key: p.apiKey, model: p.model ?? "" }))
+      fd.append("providers", JSON.stringify(
+        providers.map((p) => ({ name: p.name, model: p.model ?? "" }))
       ));
     }
     return post("/work-history/import-from-resume", fd);

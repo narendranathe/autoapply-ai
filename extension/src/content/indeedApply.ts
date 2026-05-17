@@ -42,8 +42,9 @@ interface Profile {
 }
 
 interface ProviderCfg {
-  enabled: boolean;
-  apiKey: string;
+  enabled?: boolean;
+  // apiKey is legacy local state — never forwarded to backend (#198).
+  apiKey?: string;
   model: string;
 }
 
@@ -262,9 +263,10 @@ async function runFill(applyRoot: HTMLElement, btn: HTMLButtonElement): Promise<
 
   const apiBase = (raw.apiBaseUrl as string | undefined) || "https://autoapply-ai-api.fly.dev/api/v1";
   const configs = (raw.providerConfigs as Record<string, ProviderCfg> | undefined) ?? {};
+  // SECURITY (#198): no api_key in wire payload — backend resolves stored keys.
   const providers = Object.entries(configs)
-    .filter(([, c]) => !!c.apiKey)
-    .map(([name, c]) => ({ name, api_key: c.apiKey, model: c.model }));
+    .filter(([, c]) => !!c.apiKey || !!c.enabled)
+    .map(([name, c]) => ({ name, model: c.model }));
 
   // Use the currently visible step, or the whole apply root
   const stepRoot =
@@ -317,7 +319,7 @@ async function runFill(applyRoot: HTMLElement, btn: HTMLButtonElement): Promise<
         fd.append("question_category", "custom");
         fd.append("company_name", extractIndeedCompany());
         fd.append("jd_text", extractIndeedJd());
-        if (providers.length > 0) fd.append("providers_json", JSON.stringify(providers));
+        if (providers.length > 0) fd.append("providers", JSON.stringify(providers));
         if (ta.maxLength > 0) fd.append("max_length", String(ta.maxLength));
         const resp = await fetch(`${apiBase}/vault/generate/answers`, {
           method: "POST",

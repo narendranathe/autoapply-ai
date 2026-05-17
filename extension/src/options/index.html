@@ -165,6 +165,13 @@
         <h2>LLM Providers</h2>
         <p class="hint" style="margin-bottom:14px">Enable providers you have keys for. The best available provider is used first — falls back automatically if it fails.</p>
 
+        <!-- Migration banner (#198): only visible when legacy local keys exist that failed to migrate to server-side storage. -->
+        <div id="key-migration-banner" class="status warn" style="display:none; margin-bottom:14px; padding:10px 12px; border-radius:8px; border:1px solid #92400e; background:#1a0d00; color:#fbbf24; font-size:13px;">
+          <strong>Migrate keys to server.</strong>
+          <span id="key-migration-banner-msg">Some API keys are still stored locally. Click retry to move them to encrypted server storage.</span>
+          <button class="btn" id="key-migration-retry-btn" style="margin-left:8px;">Retry</button>
+        </div>
+
         <!-- Anthropic (Priority 1) -->
         <div class="provider-row" id="provider-anthropic">
           <div class="provider-header">

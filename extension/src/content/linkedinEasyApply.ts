@@ -36,7 +36,7 @@ interface Profile {
 interface StorageData {
   profile?: Profile;
   apiBaseUrl?: string;
-  providerConfigs?: Record<string, { enabled: boolean; apiKey: string; model: string }>;
+  providerConfigs?: Record<string, { enabled?: boolean; apiKey?: string; model: string }>;
   clerkUserId?: string;
   clerkToken?: string;
   clerkTokenExp?: number;
@@ -264,9 +264,10 @@ async function fillCurrentStep(modal: HTMLElement, btn: HTMLButtonElement): Prom
 
   const apiBase = storageData.apiBaseUrl || "https://autoapply-ai-api.fly.dev/api/v1";
   const providerConfigs = storageData.providerConfigs ?? {};
+  // SECURITY (#198): no api_key in wire payload — backend resolves stored keys.
   const providers = Object.entries(providerConfigs)
-    .filter(([, cfg]) => !!cfg.apiKey)
-    .map(([name, cfg]) => ({ name, api_key: cfg.apiKey, model: cfg.model }));
+    .filter(([, cfg]) => !!cfg.apiKey || !!cfg.enabled)
+    .map(([name, cfg]) => ({ name, model: cfg.model }));
 
   // Find form root (current step content)
   const formRoot =
@@ -349,7 +350,7 @@ async function fillCurrentStep(modal: HTMLElement, btn: HTMLButtonElement): Prom
         fd.append("question_category", "custom");
         fd.append("company_name", extractCompanyName());
         fd.append("jd_text", extractJdSummary());
-        if (providers.length > 0) fd.append("providers_json", JSON.stringify(providers));
+        if (providers.length > 0) fd.append("providers", JSON.stringify(providers));
         if (el.maxLength > 0) fd.append("max_length", String(el.maxLength));
 
         const resp = await fetch(`${apiBase}/vault/generate/answers`, {

@@ -10,6 +10,11 @@ import {
 } from "../shared/detection-thresholds";
 import type { DetectionThresholds } from "../shared/types";
 import { validateApiBaseUrl } from "../background/offlineQueue";
+import {
+  migrateProviderKeys,
+  type ProviderConfigsMap,
+  type MigrationSummary,
+} from "./providerKeyMigration";
 
 const API_DEFAULT = "https://autoapply-ai-api.fly.dev/api/v1";
 
@@ -60,20 +65,30 @@ function loadProviderUI(configs: ProvidersMap) {
   for (const name of Object.keys(PROVIDER_DEFAULTS) as Array<keyof ProvidersMap>) {
     const cfg = configs[name] ?? PROVIDER_DEFAULTS[name];
     const keyInput = document.getElementById(`${name}-key`) as HTMLInputElement | null;
+    // After #198 migration, apiKey is wiped from local storage. We can't echo
+    // the key back; the input stays blank and the user re-enters only to
+    // *change* it. The checkbox now reflects either an unmigrated local key
+    // or the explicit `enabled` flag set after migration.
     if (keyInput) keyInput.value = cfg.apiKey || "";
     const checkbox = document.getElementById(`${name}-enabled`) as HTMLInputElement | null;
-    // Checkbox mirrors whether a key is present — no separate enabled flag needed
-    if (checkbox) checkbox.checked = !!cfg.apiKey;
+    if (checkbox) checkbox.checked = !!cfg.apiKey || !!cfg.enabled;
   }
 }
 
-function readProviderUI(): ProvidersMap {
+/**
+ * Read provider UI state. `existing` lets us preserve `enabled` for providers
+ * whose key was already migrated server-side and whose input is therefore
+ * intentionally blank — we mustn't disable them just because the input is empty.
+ */
+function readProviderUI(existing: ProvidersMap = PROVIDER_DEFAULTS): ProvidersMap {
   const result = { ...PROVIDER_DEFAULTS };
   for (const name of Object.keys(PROVIDER_DEFAULTS) as Array<keyof ProvidersMap>) {
     const keyInput = document.getElementById(`${name}-key`) as HTMLInputElement | null;
     const apiKey = keyInput?.value.trim() || "";
-    // enabled = true whenever a key is present — checkbox is decorative only
-    result[name] = { enabled: !!apiKey, apiKey, model: PROVIDER_DEFAULTS[name].model };
+    const prior = existing[name] ?? PROVIDER_DEFAULTS[name];
+    // Keep prior `enabled` when no new key entered (server-side key in play).
+    const enabled = apiKey.length > 0 ? true : !!prior.enabled;
+    result[name] = { enabled, apiKey, model: PROVIDER_DEFAULTS[name].model };
   }
   return result;
 }
@@ -272,10 +287,109 @@ async function saveApi() {
 }
 
 async function saveLlm() {
-  const configs = readProviderUI();
+  const existing = await chrome.storage.local.get("providerConfigs");
+  const existingMap = (existing.providerConfigs as ProvidersMap | undefined) ?? PROVIDER_DEFAULTS;
+  const configs = readProviderUI(existingMap);
   await chrome.storage.local.set({ providerConfigs: configs });
   const enabledCount = Object.values(configs).filter((c) => c.enabled).length;
-  showStatus("llm-status", enabledCount > 0 ? `Saved — ${enabledCount} provider(s) enabled.` : "Saved — no providers enabled (fallback mode).", "ok");
+  showStatus(
+    "llm-status",
+    enabledCount > 0 ? `Saved — ${enabledCount} provider(s) enabled.` : "Saved — no providers enabled (fallback mode).",
+    "ok",
+  );
+
+  // SECURITY (#198): immediately migrate any plaintext keys to the server so
+  // they never sit in local storage longer than this tick. Errors surface as
+  // the migration banner; we don't block the save UI on it.
+  void runProviderKeyMigration();
+}
+
+// ── Provider Key Migration (#198) ───────────────────────────────────────────
+
+/**
+ * Build the same auth headers that `shared/api.ts` uses: prefer JWT Bearer
+ * if a fresh token is in storage, fall back to the X-Clerk-User-Id header.
+ *
+ * This is duplicated rather than imported because the migration must run
+ * against a snapshot of storage we just read — using `api.ts` helpers would
+ * pull in its module-scoped cache and complicate testing.
+ */
+async function buildAuthHeadersForMigration(): Promise<Record<string, string>> {
+  const data = await chrome.storage.local.get(["clerkUserId", "clerkToken", "clerkTokenExp"]);
+  const token = data.clerkToken as string | undefined;
+  const exp = (data.clerkTokenExp as number | undefined) ?? 0;
+  const userId = data.clerkUserId as string | undefined;
+  const nowSec = Date.now() / 1000;
+  const tokenValid = !!token && (exp === 0 || nowSec < exp - 30);
+  if (tokenValid) return { "Authorization": `Bearer ${token}` };
+  if (userId) return { "X-Clerk-User-Id": userId };
+  return {};
+}
+
+/** Show or hide the migration banner. Idempotent. */
+function setMigrationBanner(visible: boolean, msg?: string): void {
+  const banner = document.getElementById("key-migration-banner") as HTMLElement | null;
+  if (!banner) return;
+  banner.style.display = visible ? "block" : "none";
+  if (msg) {
+    const msgEl = document.getElementById("key-migration-banner-msg");
+    if (msgEl) msgEl.textContent = msg;
+  }
+}
+
+/**
+ * One-shot migration runner. Reads providerConfigs from storage, calls the
+ * pure `migrateProviderKeys` function, writes back the stripped configs,
+ * and toggles the banner on failure. Safe to call repeatedly — already
+ * migrated entries are no-ops.
+ *
+ * Returns the migration summary so callers (and tests) can introspect.
+ */
+async function runProviderKeyMigration(): Promise<MigrationSummary | null> {
+  const data = await chrome.storage.local.get(["providerConfigs", "apiBaseUrl", "clerkUserId", "clerkToken"]);
+  const configs = (data.providerConfigs as ProviderConfigsMap | undefined) ?? {};
+
+  // Nothing to migrate?
+  const hasLegacyKey = Object.values(configs).some((c) => c && typeof c.apiKey === "string" && c.apiKey.length > 0);
+  if (!hasLegacyKey) {
+    setMigrationBanner(false);
+    return null;
+  }
+
+  // Need auth to PUT keys. If not signed in, leave banner up so user comes back.
+  if (!data.clerkUserId && !data.clerkToken) {
+    setMigrationBanner(
+      true,
+      "Sign in (above) to move locally stored API keys to encrypted server storage.",
+    );
+    return null;
+  }
+
+  const apiBase = (data.apiBaseUrl as string | undefined) || API_DEFAULT;
+  const headers = await buildAuthHeadersForMigration();
+
+  const summary = await migrateProviderKeys(configs, {
+    apiBase,
+    authHeaders: () => headers,
+    fetch: (input, init) => fetch(input, init),
+  });
+
+  if (summary.changed) {
+    await chrome.storage.local.set({ providerConfigs: summary.updatedConfigs });
+    // Refresh UI so cleared inputs aren't re-shown with stale legacy keys.
+    // The map is structurally compatible — loadProviderUI tolerates missing
+    // provider names (it falls back to PROVIDER_DEFAULTS per key).
+    loadProviderUI(summary.updatedConfigs as unknown as ProvidersMap);
+  }
+
+  if (summary.hasFailures) {
+    const failed = summary.results.filter((r) => r.status === "failed");
+    const names = failed.map((r) => r.name).join(", ");
+    setMigrationBanner(true, `Could not migrate keys for: ${names}. Click retry.`);
+  } else {
+    setMigrationBanner(false);
+  }
+  return summary;
 }
 
 /** Sync profile from backend into local storage and DOM inputs. */
@@ -1197,3 +1311,10 @@ get("offline-queue-refresh-btn").addEventListener("click", loadOfflineQueueStatu
 get("offline-queue-clear-btn").addEventListener("click", clearFailedOfflineQueue);
 wireDetectionThresholds();
 loadDetectionThresholdsUi();
+
+// #198: kick off a transparent migration of any legacy plaintext provider keys
+// to server-side storage. Non-blocking — runs in the background after the page
+// is interactive. Failures surface via the in-page banner.
+const retryBtn = document.getElementById("key-migration-retry-btn");
+if (retryBtn) retryBtn.addEventListener("click", () => { void runProviderKeyMigration(); });
+void runProviderKeyMigration();

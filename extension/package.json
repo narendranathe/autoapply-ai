@@ -9,7 +9,7 @@
     "build:content": "node build-content.mjs",
     "verify:manifest": "node scripts/verify-manifest.mjs",
     "preview": "vite preview",
-    "test": "node --test --experimental-strip-types --no-warnings src/**/__tests__/*.test.mjs"
+    "test": "bash -O globstar -c 'node --test --experimental-strip-types --no-warnings src/**/__tests__/*.test.mjs'"
   },
   "dependencies": {
     "@clerk/clerk-js": "^6.3.1",

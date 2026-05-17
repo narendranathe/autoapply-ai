@@ -1,4 +1,13 @@
 import { useEffect, useState } from "react";
+import {
+  buildProviderList,
+  getFreshProviders,
+  type ProviderConfig,
+  type StoredProviderConfig,
+} from "./providerList";
+
+export type { ProviderConfig, StoredProviderConfig };
+export { buildProviderList, getFreshProviders };
 
 export interface UserProfile {
   firstName?: string;
@@ -16,38 +25,6 @@ export interface UserProfile {
   yearsExperience?: string;
   sponsorship?: string;
   salary?: string;
-}
-
-export type ProviderConfig = { name: string; apiKey: string; model?: string };
-
-const PROVIDER_RANK: Record<string, number> = {
-  anthropic: 1, openai: 2, gemini: 3, groq: 4, perplexity: 5, kimi: 6,
-};
-const PROVIDER_MODELS: Record<string, string> = {
-  anthropic: "claude-sonnet-4-6", openai: "gpt-4o", gemini: "gemini-1.5-flash",
-  groq: "llama-3.3-70b-versatile", perplexity: "sonar", kimi: "moonshot-v1-32k",
-};
-
-export function buildProviderList(
-  configs: Record<string, { enabled?: boolean; apiKey: string; model?: string }>
-): ProviderConfig[] {
-  return Object.entries(configs)
-    .filter(([, cfg]) => !!cfg.apiKey)
-    .map(([name, cfg]) => ({ name, apiKey: cfg.apiKey, model: cfg.model || PROVIDER_MODELS[name] || "" }))
-    .sort((a, b) => (PROVIDER_RANK[a.name] ?? 50) - (PROVIDER_RANK[b.name] ?? 50));
-}
-
-export async function getFreshProviders(): Promise<Array<{ name: string; apiKey: string; model: string }>> {
-  return new Promise((resolve) => {
-    chrome.storage.local.get("providerConfigs", (data) => {
-      if (!data.providerConfigs) { resolve([]); return; }
-      resolve(
-        buildProviderList(
-          data.providerConfigs as Record<string, { enabled?: boolean; apiKey: string; model?: string }>
-        ) as Array<{ name: string; apiKey: string; model: string }>
-      );
-    });
-  });
 }
 
 export interface UseProvidersResult {
@@ -71,8 +48,8 @@ export function useProviders(): UseProvidersResult {
       if (data.providerConfigs)
         setProviders(
           buildProviderList(
-            data.providerConfigs as Record<string, { enabled: boolean; apiKey: string; model: string }>
-          )
+            data.providerConfigs as Record<string, StoredProviderConfig>,
+          ),
         );
       if (data.promptTemplates) setPromptTemplates(data.promptTemplates as Record<string, string>);
       setProvidersLoaded(true);
@@ -84,8 +61,8 @@ export function useProviders(): UseProvidersResult {
       if (changes.providerConfigs?.newValue)
         setProviders(
           buildProviderList(
-            changes.providerConfigs.newValue as Record<string, { enabled: boolean; apiKey: string; model: string }>
-          )
+            changes.providerConfigs.newValue as Record<string, StoredProviderConfig>,
+          ),
         );
       if (changes.promptTemplates?.newValue)
         setPromptTemplates(changes.promptTemplates.newValue as Record<string, string>);

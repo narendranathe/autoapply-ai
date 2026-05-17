@@ -241,11 +241,12 @@ async function runFill(btn: HTMLButtonElement): Promise<void> {
 
   const apiBase =
     (data.apiBaseUrl as string | undefined) || "https://autoapply-ai-api.fly.dev/api/v1";
+  // SECURITY (#198): no api_key in wire payload — backend resolves stored keys.
   const providers = Object.entries(
-    (data.providerConfigs as Record<string, { enabled: boolean; apiKey: string; model: string }> | undefined) ?? {}
+    (data.providerConfigs as Record<string, { enabled?: boolean; apiKey?: string; model: string }> | undefined) ?? {}
   )
-    .filter(([, cfg]) => cfg.enabled && cfg.apiKey)
-    .map(([name, cfg]) => ({ name, api_key: cfg.apiKey, model: cfg.model }));
+    .filter(([, cfg]) => !!cfg.enabled || !!cfg.apiKey)
+    .map(([name, cfg]) => ({ name, model: cfg.model }));
 
   const root = getFormRoot();
   if (!root) {
@@ -304,7 +305,7 @@ async function runFill(btn: HTMLButtonElement): Promise<void> {
       fd.append("jd_text", jdText);
       fd.append("work_history_text", workHistoryText);
       if (ta.maxLength > 0) fd.append("max_length", String(ta.maxLength));
-      if (providers.length > 0) fd.append("providers_json", JSON.stringify(providers));
+      if (providers.length > 0) fd.append("providers", JSON.stringify(providers));
 
       const headers = buildAuthHeaders(data);
 

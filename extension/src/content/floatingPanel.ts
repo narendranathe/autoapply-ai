@@ -462,7 +462,8 @@ class FloatingPanel {
   private clerkUserId: string | null = null;
   private clerkToken: string | null = null;
   private clerkTokenExp: number = 0;
-  private providers: Array<{ name: string; api_key: string; model: string }> = [];
+  // SECURITY (#198): no api_key — backend looks up stored keys for the user.
+  private providers: Array<{ name: string; model: string }> = [];
   private profile: Profile = {
     firstName: "", lastName: "", email: "", phone: "",
     city: "", state: "", zip: "", country: "United States",
@@ -527,9 +528,11 @@ class FloatingPanel {
     if (data.categoryModelRoutes) this.categoryModelRoutes = data.categoryModelRoutes as Record<string, string>;
     if (data.providerConfigs) {
       const RANK: Record<string, number> = { anthropic: 1, openai: 2, gemini: 3, groq: 4, perplexity: 5, kimi: 6 };
-      this.providers = Object.entries(data.providerConfigs as Record<string, { enabled: boolean; apiKey: string; model: string }>)
-        .filter(([, cfg]) => !!cfg.apiKey)  // enabled = has a key
-        .map(([name, cfg]) => ({ name, api_key: cfg.apiKey, model: cfg.model }))
+      // SECURITY (#198): build wire payload with NO api_key. We still gate on
+      // local key presence (or `enabled`) to keep behaviour for unmigrated users.
+      this.providers = Object.entries(data.providerConfigs as Record<string, { enabled?: boolean; apiKey?: string; model: string }>)
+        .filter(([, cfg]) => !!cfg.apiKey || !!cfg.enabled)
+        .map(([name, cfg]) => ({ name, model: cfg.model }))
         .sort((a, b) => (RANK[a.name] ?? 50) - (RANK[b.name] ?? 50));
     }
 
@@ -1077,7 +1080,8 @@ class FloatingPanel {
           if (preferred.length > 0) orderedProviders = [...preferred, ...rest];
         }
         state.loadingProvider = orderedProviders[0]?.name ?? "";
-        fd.append("providers_json", JSON.stringify(orderedProviders));
+        // SECURITY (#198): `providers` (no api_key) — server resolves keys.
+        fd.append("providers", JSON.stringify(orderedProviders));
       }
       if (state.question.maxLength && state.question.maxLength > 0) {
         fd.append("max_length", String(state.question.maxLength));

@@ -37,7 +37,7 @@ interface StorageData {
   profile?: Profile;
   clerkUserId?: string;
   apiBaseUrl?: string;
-  providerConfigs?: Record<string, { enabled: boolean; apiKey: string; model: string }>;
+  providerConfigs?: Record<string, { enabled?: boolean; apiKey?: string; model: string }>;
 }
 
 // ── Label → Profile field mapping ─────────────────────────────────────────
@@ -288,11 +288,12 @@ async function runFill(btn: HTMLButtonElement): Promise<void> {
   }
 
   const apiBase = data.apiBaseUrl || "https://autoapply-ai-api.fly.dev/api/v1";
-  const providers: Array<{ name: string; api_key: string; model: string }> = Object.entries(
+  // SECURITY (#198): no api_key in wire payload — backend resolves stored keys.
+  const providers: Array<{ name: string; model: string }> = Object.entries(
     data.providerConfigs ?? {}
   )
-    .filter(([, cfg]) => cfg.enabled && cfg.apiKey)
-    .map(([name, cfg]) => ({ name, api_key: cfg.apiKey, model: cfg.model }));
+    .filter(([, cfg]) => cfg.enabled || cfg.apiKey)
+    .map(([name, cfg]) => ({ name, model: cfg.model }));
 
   const root = getFormRoot();
   if (!root) {
@@ -380,7 +381,7 @@ async function runFill(btn: HTMLButtonElement): Promise<void> {
       fd.append("jd_text", jdText);
       fd.append("work_history_text", workHistoryText);
       if (maxLen) fd.append("max_length", String(maxLen));
-      if (providers.length > 0) fd.append("providers_json", JSON.stringify(providers));
+      if (providers.length > 0) fd.append("providers", JSON.stringify(providers));
 
       const headers = buildAuthHeaders(data);
 
