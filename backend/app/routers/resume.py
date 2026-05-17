@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_db
-from app.services.llm_service import RewriteStrategy
+from app.services.llm_gateway import RewriteStrategy
 from app.services.resume_parser import ResumeParser
 from app.services.tailoring_pipeline import TailoringPipeline
 from app.utils.audit import write_audit_log

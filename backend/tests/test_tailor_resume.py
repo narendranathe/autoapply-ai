@@ -29,7 +29,7 @@ import pytest
 from cryptography.fernet import Fernet
 
 from app.middleware.circuit_breaker import CircuitState, llm_circuit
-from app.services.llm_service import (
+from app.services.llm_gateway import (
     RewriteStrategy,
     _parse_llm_response,
     tailor_resume,

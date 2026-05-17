@@ -16,10 +16,8 @@ from dataclasses import dataclass
 
 from loguru import logger
 
-from app.services.llm_service import (
+from app.services.llm_gateway import (
     RewriteStrategy,
-)
-from app.services.llm_service import (
     tailor_resume as llm_tailor,
 )
 from app.services.resume_parser import ResumeAST, ResumeParser

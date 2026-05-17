@@ -20,7 +20,7 @@ import re
 from loguru import logger
 
 from app.schemas.application import ParseEmailResponse
-from app.services.llm_service import PROVIDERS, InvalidAPIKeyError, RateLimitError
+from app.services.llm_gateway import PROVIDERS, InvalidAPIKeyError, RateLimitError
 
 # ── Valid statuses ────────────────────────────────────────────────────────────
 
