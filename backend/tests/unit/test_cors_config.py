@@ -9,6 +9,10 @@ def _settings(**overrides: str) -> Settings:
     base: dict[str, str] = {
         "ENVIRONMENT": "production",
         "EXTENSION_ID": "",
+        # Issue #90 added a model validator requiring CLERK_FRONTEND_API_URL
+        # in production. These CORS tests are not about that field, so we
+        # set a dummy URL by default and let individual tests override.
+        "CLERK_FRONTEND_API_URL": "https://clerk.example.com",
     }
     base.update(overrides)
     return Settings(_env_file=None, **base)  # type: ignore[call-arg,arg-type]
@@ -52,6 +56,9 @@ def test_create_app_raises_at_boot_when_production_missing_extension_id(
     config_module.get_settings.cache_clear()
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.setenv("EXTENSION_ID", "")
+    # CLERK_FRONTEND_API_URL is required in production (Issue #90); set a
+    # dummy value so this test isolates the EXTENSION_ID failure path.
+    monkeypatch.setenv("CLERK_FRONTEND_API_URL", "https://clerk.example.com")
     monkeypatch.setattr(main_module, "settings", Settings(_env_file=None))  # type: ignore[call-arg,arg-type]
 
     with pytest.raises(RuntimeError, match="EXTENSION_ID must be set"):

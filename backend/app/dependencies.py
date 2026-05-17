@@ -55,6 +55,37 @@ _jwks_refresh_lock = asyncio.Lock()
 _CLERK_JWT_ALGORITHMS = ["RS256"]
 
 
+def _warn_if_clerk_url_missing() -> bool:
+    """
+    Emit a clear log warning when CLERK_FRONTEND_API_URL is unset in a
+    non-production environment (Issue #90).
+
+    Production deploys without the URL are already refused at startup by
+    the config validator in ``app.config`` — this helper exists for
+    dev / staging / test, where the documented header-bypass is still
+    permitted and we want it to be loud in CI logs.
+
+    Returns:
+        ``True`` if a warning was emitted (caller / tests can assert on
+        the return value without needing to capture log output, which is
+        fragile under loguru monkey-patching).
+    """
+    if not settings.CLERK_FRONTEND_API_URL and not settings.is_production:
+        logger.warning(
+            "CLERK_FRONTEND_API_URL is unset (env={}). JWT verification is "
+            "DISABLED and X-Clerk-User-Id will be trusted from any caller. "
+            "This is only safe for local development; production deploys "
+            "are refused at startup by app.config.",
+            settings.ENVIRONMENT,
+        )
+        return True
+    return False
+
+
+# Emit the warning at import time so it shows up in boot logs.
+_warn_if_clerk_url_missing()
+
+
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """
     Provide a database session per request.
@@ -227,14 +258,37 @@ async def get_current_user(
     Resolve the authenticated user.
 
     Priority:
-    1. If CLERK_FRONTEND_API_URL is configured: validate the
+    1. Production fail-closed (Issue #90): if ``CLERK_FRONTEND_API_URL`` is
+       missing in production, refuse the request with 401. The config
+       validator in ``app.config`` blocks process startup in this state, so
+       this branch is defense-in-depth for monkey-patched / mis-imported
+       settings.
+    2. If ``CLERK_FRONTEND_API_URL`` is configured: validate the
        ``Authorization: Bearer <token>`` JWT against Clerk's JWKS.
-    2. Otherwise fall back to ``X-Clerk-User-Id`` header (dev / extension flow).
-    3. In development with no header: resolve the user whose ``clerk_id`` matches
-       ``settings.DEV_TEST_USER_ID``. If that setting is empty, return 401
-       (no credentials → unauthenticated).
+       In production the ``X-Clerk-User-Id`` header is NEVER trusted —
+       only the verified JWT subject becomes the resolved clerk_id.
+    3. Otherwise (dev / staging with no Clerk tenant) fall back to the
+       ``X-Clerk-User-Id`` header.
+    4. In development with no header: resolve the user whose ``clerk_id``
+       matches ``settings.DEV_TEST_USER_ID``. If that setting is empty,
+       return 401 (no credentials → unauthenticated).
     """
     from app.models.user import User  # late import to avoid circular deps
+
+    # ── 0. Production fail-closed guard ───────────────────────────────────
+    # Belt-and-braces for Issue #90: the config validator already refuses to
+    # construct Settings without CLERK_FRONTEND_API_URL in production, but if
+    # something monkey-patches the value at runtime we must NOT silently fall
+    # through to the X-Clerk-User-Id header bypass.
+    if settings.is_production and not settings.CLERK_FRONTEND_API_URL:
+        logger.error(
+            "CLERK_FRONTEND_API_URL is unset in production — refusing request "
+            "to prevent X-Clerk-User-Id auth bypass (Issue #90)."
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication unavailable: server misconfigured.",
+        )
 
     clerk_id: str | None = None
 
@@ -272,8 +326,12 @@ async def get_current_user(
                     detail="Invalid or expired authentication token.",
                 ) from exc
 
-    # ── 2. Header path (extension / dev) ─────────────────────────────────
-    if clerk_id is None and x_clerk_user_id:
+    # ── 2. Header path (extension / dev only) ────────────────────────────
+    # The X-Clerk-User-Id header is a TRUSTED CLAIM with no cryptographic
+    # binding. In production the JWT path above is the only acceptable
+    # authentication mechanism — ignore the header outright to avoid any
+    # path that would resolve a user from an unverified header value.
+    if clerk_id is None and x_clerk_user_id and not settings.is_production:
         clerk_id = x_clerk_user_id
 
     if clerk_id:
@@ -322,8 +380,7 @@ async def get_current_user(
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail=(
-            "Authentication required. "
-            "Send Authorization: Bearer <token> from your Clerk session."
+            "Authentication required. Send Authorization: Bearer <token> from your Clerk session."
         ),
     )
 

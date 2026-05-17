@@ -209,6 +209,31 @@ class Settings(BaseSettings):
             )
         return self
 
+    @model_validator(mode="after")
+    def require_clerk_url_in_production(self) -> Self:
+        """
+        Fail-fast guard against the auth bypass in issue #90.
+
+        ``get_current_user`` only runs RS256 JWKS validation when
+        ``CLERK_FRONTEND_API_URL`` is set. Without it, the backend silently
+        falls back to trusting the ``X-Clerk-User-Id`` header — a complete
+        auth bypass. Refuse to construct Settings in production so the
+        process crashes at boot, not on the first authenticated request.
+
+        Dev / staging / test environments are allowed to leave the URL
+        unset so local workflows (no Clerk tenant configured) keep working;
+        the auth dependency emits a one-shot warning in that case.
+        """
+        if self.is_production and not self.CLERK_FRONTEND_API_URL:
+            raise ValueError(
+                "CLERK_FRONTEND_API_URL must be set when ENVIRONMENT=production. "
+                "Without it, get_current_user trusts the X-Clerk-User-Id header from "
+                "any caller — a complete auth bypass. Set it to your Clerk Frontend "
+                "API URL, e.g. `fly secrets set "
+                "CLERK_FRONTEND_API_URL=https://your-app.clerk.accounts.dev`."
+            )
+        return self
+
     @property
     def is_production(self) -> bool:
         return self.ENVIRONMENT == "production"
@@ -216,6 +241,23 @@ class Settings(BaseSettings):
     @property
     def is_development(self) -> bool:
         return self.ENVIRONMENT == "development"
+
+    @property
+    def is_staging(self) -> bool:
+        return self.ENVIRONMENT == "staging"
+
+    @property
+    def clerk_jwt_enforced(self) -> bool:
+        """
+        True when the auth dependency must verify Clerk-issued JWTs.
+
+        Production deploys always enforce JWT verification — the config
+        validator above guarantees ``CLERK_FRONTEND_API_URL`` is set, so this
+        is effectively constant in production. Non-production environments
+        enforce JWT verification only when ``CLERK_FRONTEND_API_URL`` is
+        configured (e.g. staging pointed at a real Clerk tenant).
+        """
+        return self.is_production or bool(self.CLERK_FRONTEND_API_URL)
 
 
 @lru_cache

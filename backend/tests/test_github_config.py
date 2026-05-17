@@ -69,8 +69,16 @@ def test_no_vault_warning_in_any_environment(monkeypatch: pytest.MonkeyPatch) ->
     never emit a 'GitHub vault not fully configured' warning, regardless
     of environment or which fields are set.
     """
+    # Issue #90 added a production guard requiring CLERK_FRONTEND_API_URL.
+    # Supply a dummy value when env=production so this test isolates the
+    # vault-warning code path under test.
     for env in ("development", "staging", "production", "test"):
         monkeypatch.setenv("ENVIRONMENT", env)
+        if env == "production":
+            monkeypatch.setenv("CLERK_FRONTEND_API_URL", "https://clerk.example.com")
+            monkeypatch.setenv("EXTENSION_ID", "cccccccccccccccccccccccccccccccc")
+        else:
+            monkeypatch.delenv("CLERK_FRONTEND_API_URL", raising=False)
         for key in ("GITHUB_TOKEN", "GITHUB_VAULT_OWNER", "GITHUB_VAULT_REPO"):
             monkeypatch.delenv(key, raising=False)
         with warnings.catch_warnings(record=True) as caught:
