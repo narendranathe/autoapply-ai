@@ -240,3 +240,134 @@ async def test_resolve_user_providers_ignores_blank_name_entries():
         db,
     )
     assert enriched == []
+
+
+# ---------------------------------------------------------------------------
+# Issue #197 P1-C — SQL predicate must include BOTH user_id and
+# provider_name. A mutation that drops the user_id binding would let
+# Alice's request resolve Bob's stored key — the row-level cross-user
+# isolation only exists in the WHERE clause.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_resolve_decrypted_key_query_binds_user_id_and_provider_name():
+    """The compiled statement passed to ``db.execute`` must reference
+    both ``user_id`` and ``provider_name`` in its WHERE clause AND bind
+    the actual values we passed in. If a refactor drops the user_id
+    predicate this test fails — without it, mocked-row tests would
+    happily accept Alice's request returning Bob's row.
+    """
+    from sqlalchemy.sql import Select
+
+    user_id = uuid.uuid4()
+    row = MagicMock()
+    row.encrypted_api_key = encrypt_value("sk-secret")
+    db = _mock_db_with_row(row)
+
+    await resolve_decrypted_key(user_id, "anthropic", db)
+
+    # ``execute`` was called exactly once with the SELECT statement.
+    assert db.execute.await_count == 1
+    stmt = db.execute.await_args[0][0]
+    assert isinstance(stmt, Select), f"expected Select, got {type(stmt).__name__}"
+
+    # Compile with the SQLite dialect (no real DB needed) so we can
+    # inspect the rendered WHERE clause and the bound parameter values.
+    from sqlalchemy.dialects import sqlite
+
+    compiled = stmt.compile(
+        dialect=sqlite.dialect(),
+        compile_kwargs={"literal_binds": False},
+    )
+    rendered_sql = str(compiled).lower()
+    params = compiled.params  # dict of bound param name → value
+
+    # WHERE clause references both columns.
+    assert "user_id" in rendered_sql, f"user_id missing from WHERE: {rendered_sql}"
+    assert "provider_name" in rendered_sql, (
+        f"provider_name missing from WHERE: {rendered_sql}"
+    )
+
+    # And the bound values are exactly what the caller passed — i.e. a
+    # mutation that hard-codes a literal user_id would fail here.
+    bound_values = list(params.values())
+    assert user_id in bound_values, (
+        f"caller-supplied user_id not bound in statement params: {params}"
+    )
+    assert "anthropic" in bound_values, (
+        f"caller-supplied provider_name not bound in statement params: {params}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_decrypted_key_isolates_users_in_real_sqlite_db():
+    """Belt-and-braces over the introspection test above: spin up a real
+    in-memory sqlite engine with the actual ``user_provider_configs``
+    table, insert rows for two distinct users with different encrypted
+    keys, and confirm ``resolve_decrypted_key(alice_id, ...)`` returns
+    Alice's plaintext (never Bob's). If a mutation drops the user_id
+    predicate this test fails because the query returns >1 row and
+    ``scalar_one_or_none`` raises.
+
+    Skipped when ``aiosqlite`` is unavailable — the static-statement
+    introspection test above is the primary guard; this is the
+    end-to-end belt.
+    """
+    pytest.importorskip("aiosqlite")
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.orm import sessionmaker
+
+    # Importing the model also registers it on the shared declarative
+    # ``Base`` we stubbed at the top of this file, so its metadata is
+    # available to create the table.
+    from app.models.user_provider_config import UserProviderConfig
+
+    # The pgvector ``Vector`` column type used elsewhere in the schema is
+    # not portable to sqlite — but ``UserProviderConfig`` itself has no
+    # vector columns so we create only its single table.
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(
+                lambda sync_conn: UserProviderConfig.__table__.create(sync_conn)
+            )
+
+        SessionLocal = sessionmaker(  # type: ignore[call-overload]
+            engine, class_=AsyncSession, expire_on_commit=False
+        )
+
+        alice_id = uuid.uuid4()
+        bob_id = uuid.uuid4()
+
+        async with SessionLocal() as session:
+            session.add_all(
+                [
+                    UserProviderConfig(
+                        user_id=alice_id,
+                        provider_name="anthropic",
+                        encrypted_api_key=encrypt_value("sk-alice"),
+                    ),
+                    UserProviderConfig(
+                        user_id=bob_id,
+                        provider_name="anthropic",
+                        encrypted_api_key=encrypt_value("sk-bob"),
+                    ),
+                ]
+            )
+            await session.commit()
+
+        async with SessionLocal() as session:
+            alice_key = await resolve_decrypted_key(alice_id, "anthropic", session)
+            bob_key = await resolve_decrypted_key(bob_id, "anthropic", session)
+
+        assert alice_key is not None
+        assert bob_key is not None
+        assert alice_key.expose() == "sk-alice"
+        assert bob_key.expose() == "sk-bob"
+        # Critically — the two never collapse to the same value. If a
+        # mutation drops the user_id predicate, ``scalar_one_or_none``
+        # raises ``MultipleResultsFound`` long before this assertion.
+        assert alice_key.expose() != bob_key.expose()
+    finally:
+        await engine.dispose()
