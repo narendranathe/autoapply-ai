@@ -132,12 +132,19 @@ Then rebuild: `npm run build`
 ### 4d. Package for Chrome Web Store
 ```bash
 cd extension
-# Build production bundle
+# Build production bundle (runs scripts/verify-manifest.mjs — fails if any
+# localhost / 127.0.0.1 entry remains in dist/manifest.json host_permissions).
 npm run build
 
 # Zip the dist folder (not the dist folder itself — zip its contents)
 cd dist && zip -r ../autoapply-ai.zip . && cd ..
 ```
+
+> `npm run build` runs in production mode and the Vite plugin in
+> `extension/vite.config.ts` strips every loopback entry from `host_permissions`
+> before writing `dist/manifest.json`. Use `npm run build:dev` when loading the
+> extension locally against `http://localhost:8000` — that build keeps the
+> loopback permission so the dev server is reachable.
 
 ### 4e. Submit to Chrome Web Store
 1. Go to [Chrome Web Store Developer Dashboard](https://chrome.google.com/webstore/devconsole)
@@ -192,9 +199,11 @@ poetry run uvicorn app.main:create_app --factory --reload --port 8000
 ```bash
 cd extension
 npm ci
-npm run dev      # Vite dev build with watch mode
+npm run dev        # Vite dev build with watch mode (keeps localhost host_permission)
 # or
-npm run build    # Production build
+npm run build:dev  # One-shot dev build (keeps localhost host_permission)
+# or
+npm run build      # Production build (strips localhost host_permission)
 ```
 
 Load `extension/dist/` as unpacked extension in Chrome.

@@ -3,15 +3,34 @@ import react from "@vitejs/plugin-react";
 import { resolve } from "path";
 import fs from "fs";
 
-// Vite plugin: copy Chrome extension static files to dist after build.
-function copyExtensionStaticFiles() {
+const LOCALHOST_NEEDLES = ["localhost", "127.0.0.1"];
+
+function isLocalhostPattern(pattern: string): boolean {
+  return LOCALHOST_NEEDLES.some((needle) => pattern.includes(needle));
+}
+
+// Strip localhost host_permissions for production builds so the published
+// extension never asks Chrome users for permission to query the developer's
+// loopback API server.
+function copyExtensionStaticFiles(mode: string) {
   return {
     name: "copy-extension-static",
     closeBundle() {
-      // manifest.json — required at dist root
-      fs.copyFileSync("manifest.json", "dist/manifest.json");
+      const sourceManifest = JSON.parse(
+        fs.readFileSync("manifest.json", "utf8")
+      );
 
-      // icons/ — required for browser action icons
+      if (mode === "production" && Array.isArray(sourceManifest.host_permissions)) {
+        sourceManifest.host_permissions = sourceManifest.host_permissions.filter(
+          (entry: string) => !isLocalhostPattern(entry)
+        );
+      }
+
+      fs.writeFileSync(
+        "dist/manifest.json",
+        JSON.stringify(sourceManifest, null, 2) + "\n"
+      );
+
       if (fs.existsSync("icons")) {
         fs.cpSync("icons", "dist/icons", { recursive: true });
       }
@@ -22,8 +41,8 @@ function copyExtensionStaticFiles() {
 // Chrome MV3 main build: background service worker + sidepanel + options page.
 // Content scripts are built separately in vite.content.config.ts as IIFE bundles
 // because Chrome content scripts cannot use ES module import statements.
-export default defineConfig({
-  plugins: [react(), copyExtensionStaticFiles()],
+export default defineConfig(({ mode }) => ({
+  plugins: [react(), copyExtensionStaticFiles(mode)],
   build: {
     outDir: "dist",
     emptyOutDir: true,
@@ -48,4 +67,4 @@ export default defineConfig({
       "@": resolve(__dirname, "src"),
     },
   },
-});
+}));

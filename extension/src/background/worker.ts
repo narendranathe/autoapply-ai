@@ -419,6 +419,9 @@ async function drainOfflineQueue(): Promise<void> {
 
   console.log(`[AutoApply] Draining ${pending.length} offline edits...`);
 
+  const { apiBaseUrl } = await chrome.storage.local.get(["apiBaseUrl"]);
+  const apiBase = (apiBaseUrl as string | undefined) || "https://autoapply-ai-api.fly.dev/api/v1";
+
   for (const entry of pending) {
     try {
       const fd = new FormData();
@@ -426,7 +429,7 @@ async function drainOfflineQueue(): Promise<void> {
       fd.append("markdown_content", entry.markdownContent);
       fd.append("timestamp", String(entry.timestamp));
 
-      const resp = await fetch("http://localhost:8000/api/v1/vault/sync-markdown", {
+      const resp = await fetch(`${apiBase}/vault/sync-markdown`, {
         method: "POST",
         body: fd,
       });
