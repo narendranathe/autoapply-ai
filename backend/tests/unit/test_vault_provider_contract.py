@@ -700,15 +700,39 @@ def test_reject_providers_json_logs_warning_with_user_and_user_agent():
     assert "AutoApply-Chrome-Ext/1.2.3" in log_output
 
 
+def _flip_accept_legacy_flag(value: bool):
+    """Set ``ACCEPT_LEGACY_PROVIDERS_JSON`` on every binding that callers
+    might consult. Other unit-test files in this repo swap
+    ``app.config.settings`` with a ``SimpleNamespace`` for FERNET_KEY
+    pinning, which leaves ``_shared.py`` holding a stale reference to
+    the original Settings object. Mutating both bindings keeps the
+    test deterministic regardless of import order.
+
+    Returns a no-arg restore callable.
+    """
+    import app.config as _cfg_mod
+    import app.routers.vault._shared as _shared_mod
+
+    bindings = (_cfg_mod, _shared_mod)
+    saved = [(b, getattr(b.settings, "ACCEPT_LEGACY_PROVIDERS_JSON", False)) for b in bindings]
+    for b in bindings:
+        # ``settings`` may be a SimpleNamespace or a Settings instance —
+        # both support attribute assignment.
+        b.settings.ACCEPT_LEGACY_PROVIDERS_JSON = value
+
+    def restore():
+        for b, prev in saved:
+            b.settings.ACCEPT_LEGACY_PROVIDERS_JSON = prev
+
+    return restore
+
+
 def test_reject_providers_json_accept_flag_logs_warning_and_returns():
     """P0-G — when ``ACCEPT_LEGACY_PROVIDERS_JSON`` is True, the
     rejection is suppressed but a WARN line still records the
     user/UA. The function returns None (no raise)."""
-    from app.config import settings as _settings
-
-    saved = _settings.ACCEPT_LEGACY_PROVIDERS_JSON
-    _settings.ACCEPT_LEGACY_PROVIDERS_JSON = True
-    sink, restore = _install_fresh_loguru_sink()
+    restore_flag = _flip_accept_legacy_flag(True)
+    sink, restore_log = _install_fresh_loguru_sink()
     try:
         user_id = uuid.uuid4()
         request = MagicMock()
@@ -723,8 +747,8 @@ def test_reject_providers_json_accept_flag_logs_warning_and_returns():
 
         log_output = sink.getvalue()
     finally:
-        restore()
-        _settings.ACCEPT_LEGACY_PROVIDERS_JSON = saved
+        restore_log()
+        restore_flag()
 
     assert "WARNING" in log_output
     assert "legacy_providers_json_accepted" in log_output
@@ -754,10 +778,7 @@ async def test_resolve_providers_accept_legacy_flag_uses_legacy_payload():
     resolver MUST fall back to the legacy ``providers_json`` payload
     (stripped of api_key) and resolve keys server-side.
     """
-    from app.config import settings as _settings
-
-    saved = _settings.ACCEPT_LEGACY_PROVIDERS_JSON
-    _settings.ACCEPT_LEGACY_PROVIDERS_JSON = True
+    restore_flag = _flip_accept_legacy_flag(True)
     try:
         user = MagicMock()
         user.id = uuid.uuid4()
@@ -780,7 +801,7 @@ async def test_resolve_providers_accept_legacy_flag_uses_legacy_payload():
                 request=request,
             )
     finally:
-        _settings.ACCEPT_LEGACY_PROVIDERS_JSON = saved
+        restore_flag()
 
     assert len(out) == 1
     assert out[0]["name"] == "anthropic"
@@ -793,22 +814,27 @@ async def test_resolve_providers_accept_legacy_flag_uses_legacy_payload():
 @pytest.mark.asyncio
 async def test_resolve_providers_strict_mode_default_rejects_legacy():
     """P0-G default — flag off (default), legacy payload is rejected
-    with 422 just like before."""
-    from app.config import settings as _settings
+    with 422 just like before. We explicitly set the flag to False so
+    test ordering can't leave a previous flip dangling."""
+    restore_flag = _flip_accept_legacy_flag(False)
+    try:
+        import app.routers.vault._shared as _shared_mod
 
-    # Default must be False — the assertion both documents the default
-    # and guards against operator misconfiguration.
-    assert _settings.ACCEPT_LEGACY_PROVIDERS_JSON is False
+        # Default must be False — the assertion both documents the
+        # default and guards against operator misconfiguration.
+        assert _shared_mod.settings.ACCEPT_LEGACY_PROVIDERS_JSON is False
 
-    user = MagicMock()
-    user.id = uuid.uuid4()
-    db = AsyncMock()
+        user = MagicMock()
+        user.id = uuid.uuid4()
+        db = AsyncMock()
 
-    with pytest.raises(HTTPException) as exc_info:
-        await _resolve_providers(
-            providers="",
-            db=db,
-            user=user,
-            providers_json='[{"name":"anthropic","api_key":"sk-LEAK"}]',
-        )
-    assert exc_info.value.status_code == 422
+        with pytest.raises(HTTPException) as exc_info:
+            await _resolve_providers(
+                providers="",
+                db=db,
+                user=user,
+                providers_json='[{"name":"anthropic","api_key":"sk-LEAK"}]',
+            )
+        assert exc_info.value.status_code == 422
+    finally:
+        restore_flag()
