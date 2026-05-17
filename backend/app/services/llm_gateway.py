@@ -41,6 +41,45 @@ from app.services import llm_circuit_redis
 from app.services.resume_parser import ResumeAST
 from app.utils.encryption import decrypt_value
 
+# -- Secret scrubbing --
+# Issue #190 — exception bodies from Gemini / Perplexity / Groq sometimes
+# echo the API key (query string, Authorization header, x-api-key). We
+# never want those reaching logs or LLMGenerationError.__repr__. The
+# scrubber runs over every interpolation point that mixes user input or
+# upstream-error text into a log line.
+
+_SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # Anthropic
+    re.compile(r"sk-ant-[A-Za-z0-9_\-]+"),
+    # OpenAI / generic sk-* tokens (length >= 20)
+    re.compile(r"sk-[A-Za-z0-9]{20,}"),
+    # Groq
+    re.compile(r"gsk_[A-Za-z0-9]+"),
+    # Perplexity
+    re.compile(r"pplx-[A-Za-z0-9]+"),
+    # Google AI Studio / Gemini
+    re.compile(r"AIza[0-9A-Za-z_\-]{35}"),
+    # Bearer tokens (Authorization header)
+    re.compile(r"Bearer\s+[A-Za-z0-9._~+/\-]+=*", re.IGNORECASE),
+    # x-api-key header value
+    re.compile(r"x-api-key\s*[:=]\s*\S+", re.IGNORECASE),
+    # ?key=... / &api_key=... query params
+    re.compile(r"[?&](?:key|api_key)=[^&\s]+", re.IGNORECASE),
+)
+
+
+def _scrub(text: object) -> str:
+    """Redact known secret-shaped substrings from ``text``.
+
+    Always returns a string. Used at every site that interpolates an
+    upstream exception or arbitrary string into a log line / error
+    message so a leaked API key in a 4xx body can't escape the gateway.
+    """
+    s = str(text)
+    for pattern in _SECRET_PATTERNS:
+        s = pattern.sub("[REDACTED]", s)
+    return s
+
 # -- Prometheus metrics (optional) --
 # Use ``prometheus_client`` if available — it ships as a transitive dep of
 # ``prometheus-fastapi-instrumentator``. We fall back to structured loguru
@@ -705,9 +744,13 @@ class LLMGenerationError(Exception):
         self.cause = cause
 
     def __repr__(self) -> str:
+        # Issue #190 — ``cause`` is an upstream exception whose ``repr``
+        # may contain echoed API keys (e.g. Gemini's ``?key=...`` URL).
+        # Scrub before exposing.
+        cause_repr = "None" if self.cause is None else _scrub(repr(self.cause))
         return (
             f"LLMGenerationError(provider={self.provider!r}, "
-            f"attempt_number={self.attempt_number}, cause={self.cause!r})"
+            f"attempt_number={self.attempt_number}, cause={cause_repr})"
         )
 
 
@@ -989,8 +1032,12 @@ class LLMGateway:
             except Exception as exc:
                 duration_ms = (time.monotonic() - start) * 1000.0
                 _emit_metric(name, "failure", duration_ms)
+                # Issue #190 — upstream exception bodies sometimes echo the
+                # API key (Gemini ?key=, Perplexity x-api-key, etc.) so we
+                # scrub before interpolating into the error message and log.
+                safe_exc_text = _scrub(exc)
                 err = LLMGenerationError(
-                    f"Provider '{name}' raised: {exc}",
+                    f"Provider '{name}' raised: {safe_exc_text}",
                     provider=name,
                     attempt_number=attempt_number,
                     cause=exc,
@@ -1000,7 +1047,7 @@ class LLMGateway:
                     name,
                     attempt_number,
                     duration_ms,
-                    exc,
+                    safe_exc_text,
                 )
                 await llm_circuit_redis.record_failure(name)
 
@@ -1041,7 +1088,9 @@ async def tailor_resume(
         try:
             api_key = decrypt_value(encrypted_api_key)
         except Exception as e:
-            logger.error(f"Failed to decrypt API key: {e}")
+            # Issue #190 — defensive scrub; the encrypted value should never
+            # land in the exception text but better safe than sorry.
+            logger.error(f"Failed to decrypt API key: {_scrub(e)}")
             provider = PROVIDERS["fallback"]
 
     # ── Validate key format ───────────────────────────────
@@ -1080,7 +1129,7 @@ async def tailor_resume(
         return rewritten_bullets, False, summary
 
     except CircuitOpenError as e:
-        logger.warning(f"Circuit open for {provider_name}: {e}")
+        logger.warning(f"Circuit open for {provider_name}: {_scrub(e)}")
         return (
             [b.text for b in resume_ast.bullets],
             True,
@@ -1104,11 +1153,16 @@ async def tailor_resume(
         )
 
     except Exception as e:
-        logger.error(f"LLM call failed: {e}", exc_info=True)
+        # Issue #190 — never dump raw exception text (or its traceback) when
+        # the upstream body may contain echoed API keys. Strip secrets first
+        # and drop ``exc_info`` so loguru's diagnose-formatter doesn't expand
+        # the offending frames into the log.
+        safe = _scrub(e)
+        logger.error(f"LLM call failed: {safe}")
         return (
             [b.text for b in resume_ast.bullets],
             True,
-            f"LLM error: {str(e)[:100]}. Showing original bullets.",
+            f"LLM error: {safe[:100]}. Showing original bullets.",
         )
 
 
