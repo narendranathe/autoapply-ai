@@ -15,7 +15,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { isAllowedAtsOrigin, ATS_ORIGIN_PATTERNS } from "../ats-origins.ts";
+import { isAllowedAtsOrigin, ATS_ORIGIN_PATTERNS, resolveIframeOrigin } from "../ats-origins.ts";
 
 describe("isAllowedAtsOrigin", () => {
   it("rejects wildcard '*'", () => {
@@ -43,6 +43,17 @@ describe("isAllowedAtsOrigin", () => {
     assert.equal(isAllowedAtsOrigin("https://example.com"), false);
     assert.equal(isAllowedAtsOrigin("https://attacker.io"), false);
     assert.equal(isAllowedAtsOrigin("http://localhost:3000"), false);
+  });
+
+  it("rejects http:// even for an otherwise-allowlisted ATS host (HTTPS-only)", () => {
+    // ATS production surfaces are TLS-only; plaintext http:// must never
+    // be allowed even on a matching hostname.
+    assert.equal(isAllowedAtsOrigin("http://greenhouse.io"), false);
+    assert.equal(isAllowedAtsOrigin("http://boards.greenhouse.io"), false);
+    assert.equal(isAllowedAtsOrigin("http://www.linkedin.com"), false);
+    assert.equal(isAllowedAtsOrigin("http://jobs.lever.co"), false);
+    assert.equal(isAllowedAtsOrigin("http://wd5.myworkdayjobs.com"), false);
+    assert.equal(isAllowedAtsOrigin("http://indeed.com"), false);
   });
 
   it("accepts each of the 5 tracked Platforms at apex + subdomain", () => {
@@ -160,5 +171,75 @@ describe("IframeFieldBridge sender", () => {
     assert.equal(result.sent, true);
     assert.equal(calls.length, 1);
     assert.equal(calls[0].targetOrigin, "https://wd5.myworkdayjobs.com");
+  });
+});
+
+describe("resolveIframeOrigin", () => {
+  // resolveIframeOrigin reads iframe.src (not contentWindow.location.href,
+  // which throws SecurityError on cross-origin iframes — the bridge's
+  // actual use case). The browser's postMessage targetOrigin check is what
+  // makes trusting parent-controlled src safe: a mismatch drops the message.
+
+  it("returns the parsed origin for a normal https iframe src", () => {
+    assert.equal(
+      resolveIframeOrigin({ src: "https://greenhouse.io/foo" } as HTMLIFrameElement),
+      "https://greenhouse.io",
+    );
+  });
+
+  it("strips path / query / hash and keeps only the origin", () => {
+    assert.equal(
+      resolveIframeOrigin({
+        src: "https://boards.greenhouse.io/company/job?utm=x#frag",
+      } as HTMLIFrameElement),
+      "https://boards.greenhouse.io",
+    );
+  });
+
+  it("preserves non-default ports in the origin", () => {
+    assert.equal(
+      resolveIframeOrigin({ src: "https://example.com:8443/path" } as HTMLIFrameElement),
+      "https://example.com:8443",
+    );
+  });
+
+  it("returns null for empty / missing src", () => {
+    assert.equal(resolveIframeOrigin({ src: "" } as HTMLIFrameElement), null);
+    assert.equal(resolveIframeOrigin({ src: null } as unknown as HTMLIFrameElement), null);
+    assert.equal(resolveIframeOrigin({} as HTMLIFrameElement), null);
+  });
+
+  it("returns null for about:blank", () => {
+    assert.equal(resolveIframeOrigin({ src: "about:blank" } as HTMLIFrameElement), null);
+    assert.equal(resolveIframeOrigin({ src: "ABOUT:BLANK" } as HTMLIFrameElement), null);
+  });
+
+  it("returns null for javascript: URLs", () => {
+    assert.equal(resolveIframeOrigin({ src: "javascript:void(0)" } as HTMLIFrameElement), null);
+    assert.equal(
+      resolveIframeOrigin({ src: "JavaScript:alert(1)" } as HTMLIFrameElement),
+      null,
+    );
+  });
+
+  it("returns null for data: URLs", () => {
+    assert.equal(
+      resolveIframeOrigin({ src: "data:text/html,<p>hi</p>" } as HTMLIFrameElement),
+      null,
+    );
+  });
+
+  it("returns null for blob: URLs (opaque origin)", () => {
+    assert.equal(
+      resolveIframeOrigin({
+        src: "blob:https://example.com/550e8400-e29b-41d4-a716-446655440000",
+      } as HTMLIFrameElement),
+      null,
+    );
+  });
+
+  it("returns null for malformed URLs that fail to parse", () => {
+    assert.equal(resolveIframeOrigin({ src: "not a url" } as HTMLIFrameElement), null);
+    assert.equal(resolveIframeOrigin({ src: "://" } as HTMLIFrameElement), null);
   });
 });
