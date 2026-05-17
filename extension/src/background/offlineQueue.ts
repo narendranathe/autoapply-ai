@@ -21,10 +21,58 @@ export type ResolveDrainEndpointResult =
   | { ok: false; reason: "missing_in_prod" };
 
 /**
+ * Validate that a configured `apiBaseUrl` is safe to POST queued markdown
+ * edits to.
+ *
+ * Rules (issue #91 round-2 hardening):
+ *   - URL must parse via the `URL(...)` constructor — `javascript:`,
+ *     `data:`, `file:`, `not a url`, etc. all fail this gate.
+ *   - In production, ONLY `https:` is accepted. An `http:` URL in prod is
+ *     a downgrade vector and is rejected.
+ *   - In development, `http:` is allowed but ONLY when the host is
+ *     `localhost` or `127.0.0.1`. Plain `http://attacker.example.com` is
+ *     still rejected even in dev.
+ *
+ * Returns `null` when the URL is acceptable, otherwise a short reason for
+ * logging / UI surfacing.
+ */
+export function validateApiBaseUrl(
+  raw: string,
+  isDev: boolean,
+): { ok: true } | { ok: false; reason: string } {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return { ok: false, reason: "not a valid URL" };
+  }
+
+  const scheme = parsed.protocol;
+  if (scheme === "https:") {
+    return { ok: true };
+  }
+  if (scheme === "http:") {
+    const host = parsed.hostname;
+    const isLoopback = host === "localhost" || host === "127.0.0.1" || host === "::1";
+    if (!isLoopback) {
+      return { ok: false, reason: "http:// is only allowed for localhost" };
+    }
+    if (!isDev) {
+      return { ok: false, reason: "http://localhost is only allowed in dev builds" };
+    }
+    return { ok: true };
+  }
+  return { ok: false, reason: `scheme ${scheme} is not allowed (https only)` };
+}
+
+/**
  * Resolve the URL the drain should POST to.
  *
  * Defensive rules (issue #91):
- *   1. If `apiBaseUrl` is configured in storage → use it.
+ *   1. If `apiBaseUrl` is configured in storage → validate it. Bad schemes
+ *      (`javascript:`, `data:`, `file://`, plain `http://attacker.com`) are
+ *      treated the same as "missing in prod" so the queue is preserved and
+ *      no edits are exfiltrated to an attacker-controlled host.
  *   2. Otherwise, in dev builds only → fall back to localhost.
  *   3. Otherwise (production with no configured URL) → return ok:false. The
  *      caller MUST skip the drain entirely and preserve the queue. Defaulting
@@ -40,11 +88,20 @@ export function resolveDrainEndpoint(
 ): ResolveDrainEndpointResult {
   const base = (storedApiBase ?? "").trim();
   if (base) {
-    return {
-      ok: true,
-      endpoint: `${base.replace(/\/$/, "")}/vault/sync-markdown`,
-      usedFallback: false,
-    };
+    const trimmed = base.replace(/\/$/, "");
+    const validation = validateApiBaseUrl(trimmed, isDev);
+    if (validation.ok) {
+      return {
+        ok: true,
+        endpoint: `${trimmed}/vault/sync-markdown`,
+        usedFallback: false,
+      };
+    }
+    // A bad URL is functionally "missing in prod" — we refuse to use it and
+    // preserve the queue. The dev fallback path below intentionally does NOT
+    // rescue this case: if the user typed a bad URL in dev we should still
+    // surface it rather than silently send edits to localhost.
+    return { ok: false, reason: "missing_in_prod" };
   }
   if (isDev) {
     return {
