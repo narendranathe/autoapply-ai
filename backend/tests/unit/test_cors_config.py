@@ -169,7 +169,68 @@ def test_cors_origins_never_contains_star_wildcard_in_production() -> None:
         assert not o.endswith("/*")
 
 
-# ── 5. Boot-time integration ─────────────────────────────────────────────
+# ── 5. EXTENSION_ID format validator ─────────────────────────────────────
+#
+# Chrome extension IDs are exactly 32 lowercase letters in the range a-p
+# (a base16 encoding using a-p instead of 0-f). An operator typo such as
+# ``*`` or whitespace would otherwise be embedded literally into the CORS
+# allowlist as ``chrome-extension://*`` / ``chrome-extension://   `` and
+# defeat the fail-fast guarantee. These tests pin the validator contract.
+
+
+def test_extension_id_accepts_valid_32_char_a_p_string() -> None:
+    """A real-shaped extension id (32 chars, only a-p) must be accepted."""
+    s = _settings(
+        ENVIRONMENT="development",
+        EXTENSION_ID="abcdefghijklmnopabcdefghijklmnop",
+    )
+    assert s.EXTENSION_ID == "abcdefghijklmnopabcdefghijklmnop"
+
+
+def test_extension_id_rejects_31_char_string() -> None:
+    """One char too short -> ValidationError (no off-by-one tolerance)."""
+    with pytest.raises(ValidationError) as exc_info:
+        _settings(
+            ENVIRONMENT="development",
+            EXTENSION_ID="abcdefghijklmnopabcdefghijklmno",  # 31 chars
+        )
+    assert "32 lowercase letters" in str(exc_info.value)
+
+
+def test_extension_id_rejects_string_with_digits() -> None:
+    """Digits are outside the a-p alphabet -> rejected."""
+    with pytest.raises(ValidationError) as exc_info:
+        _settings(
+            ENVIRONMENT="development",
+            EXTENSION_ID="abcdefghijklmnopabcdefghijklmn0p",  # '0' in slot 31
+        )
+    assert "32 lowercase letters" in str(exc_info.value)
+
+
+def test_extension_id_rejects_star_wildcard() -> None:
+    """The classic operator typo: ``EXTENSION_ID=*`` must not be embedded
+    as a literal ``chrome-extension://*`` origin."""
+    with pytest.raises(ValidationError) as exc_info:
+        _settings(ENVIRONMENT="development", EXTENSION_ID="*")
+    assert "32 lowercase letters" in str(exc_info.value)
+
+
+def test_extension_id_rejects_whitespace() -> None:
+    """Whitespace-only values must not produce ``chrome-extension://   ``."""
+    with pytest.raises(ValidationError) as exc_info:
+        _settings(ENVIRONMENT="development", EXTENSION_ID="   ")
+    assert "32 lowercase letters" in str(exc_info.value)
+
+
+def test_extension_id_accepts_empty_string_in_dev() -> None:
+    """Empty string is the documented dev/staging default and must remain
+    accepted by the format validator. (Production emptiness is rejected by
+    a separate model validator — covered by the fail-fast tests above.)"""
+    s = _settings(ENVIRONMENT="development", EXTENSION_ID="")
+    assert s.EXTENSION_ID == ""
+
+
+# ── 6. Boot-time integration ─────────────────────────────────────────────
 
 
 def test_create_app_fails_at_boot_when_production_misconfigured(
