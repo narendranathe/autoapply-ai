@@ -2,6 +2,7 @@
 Tests for health check endpoints.
 """
 
+import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
@@ -55,13 +56,16 @@ async def test_health_returns_503_when_db_down(client):
     try:
         response = await client.get("/health")
     finally:
+        app.dependency_overrides.pop(get_db, None)
         app.dependency_overrides.pop(get_redis, None)
 
     assert response.status_code == 503
     data = response.json()
     assert data["status"] == "degraded"
     assert data["db"].startswith("error:")
-    assert "connection refused" in data["db"]
+    # Sanitized response: only the exception class name, NOT the raw message.
+    assert data["db"] == "error: RuntimeError"
+    assert "connection refused" not in data["db"]
     assert data["redis"] == "ok"
 
 
@@ -81,7 +85,41 @@ async def test_health_returns_503_when_redis_down(client):
     assert data["status"] == "degraded"
     assert data["db"] == "ok"
     assert data["redis"].startswith("error:")
-    assert "redis unreachable" in data["redis"]
+    # Sanitized response: only the exception class name, NOT the raw message.
+    assert data["redis"] == "error: RuntimeError"
+    assert "redis unreachable" not in data["redis"]
+
+
+@pytest.mark.asyncio
+async def test_health_returns_503_when_db_times_out(client):
+    """A hung DB checkout must trip the 2s timeout and surface TimeoutError."""
+
+    async def hang(*_args, **_kwargs):
+        await asyncio.sleep(5)
+
+    hanging_db = AsyncMock()
+    hanging_db.execute.side_effect = hang
+    fake_redis = AsyncMock()
+    fake_redis.ping.return_value = True
+
+    async def override_get_db():
+        yield hanging_db
+
+    app = client._transport.app
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_redis] = lambda: fake_redis
+
+    try:
+        response = await client.get("/health")
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        app.dependency_overrides.pop(get_redis, None)
+
+    assert response.status_code == 503
+    data = response.json()
+    assert data["status"] == "degraded"
+    assert "TimeoutError" in data["db"]
+    assert data["redis"] == "ok"
 
 
 @pytest.mark.asyncio
