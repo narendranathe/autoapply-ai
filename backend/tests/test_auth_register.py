@@ -75,9 +75,7 @@ async def test_register_without_clerk_header_returns_401(
 
 
 @pytest.mark.asyncio
-async def test_register_with_empty_clerk_header_returns_401(
-    client: AsyncClient, monkeypatch
-):
+async def test_register_with_empty_clerk_header_returns_401(client: AsyncClient, monkeypatch):
     """An empty X-Clerk-User-Id header must be treated the same as a missing
     one — 401 (FastAPI treats an empty header value as ``None``)."""
     from app.dependencies import settings
@@ -99,9 +97,7 @@ async def test_register_with_empty_clerk_header_returns_401(
 
 
 @pytest.mark.asyncio
-async def test_register_rejects_clerk_id_in_body(
-    client: AsyncClient, db_session, monkeypatch
-):
+async def test_register_rejects_clerk_id_in_body(client: AsyncClient, db_session, monkeypatch):
     """A body containing ``clerk_id`` must be rejected — ``RegisterRequest``
     has ``extra='forbid'``, so FastAPI returns 422.
 
@@ -128,16 +124,12 @@ async def test_register_rejects_clerk_id_in_body(
     assert response.status_code == 422, response.text
 
     # Crucially, no row was created for the victim.
-    result = await db_session.execute(
-        select(User).where(User.clerk_id == "clerk_victim_account")
-    )
+    result = await db_session.execute(select(User).where(User.clerk_id == "clerk_victim_account"))
     assert result.scalar_one_or_none() is None
 
 
 @pytest.mark.asyncio
-async def test_register_rejects_unknown_body_fields(
-    client: AsyncClient, monkeypatch
-):
+async def test_register_rejects_unknown_body_fields(client: AsyncClient, monkeypatch):
     """Any unknown body field (other than ``clerk_id``) must also be rejected
     by ``extra='forbid'`` — broader regression hedge against schema drift."""
     from app.dependencies import settings
@@ -508,9 +500,7 @@ async def test_register_user_500s_if_integrity_error_without_recoverable_row():
     db = AsyncMock()
     db.execute = AsyncMock(return_value=_FakeResult(None))  # always NULL
     db.add = MagicMock()
-    db.commit = AsyncMock(
-        side_effect=IntegrityError("INSERT", params=None, orig=Exception("dup"))
-    )
+    db.commit = AsyncMock(side_effect=IntegrityError("INSERT", params=None, orig=Exception("dup")))
     db.rollback = AsyncMock()
     db.refresh = AsyncMock()
 
