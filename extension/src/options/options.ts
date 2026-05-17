@@ -16,7 +16,7 @@ function getSelect(id: string): HTMLSelectElement {
   return document.getElementById(id) as HTMLSelectElement;
 }
 
-function showStatus(elId: string, msg: string, type: "ok" | "err" | "info") {
+function showStatus(elId: string, msg: string, type: "ok" | "err" | "info" | "warn") {
   const el = get(elId);
   if (!el) return;
   el.textContent = msg;
@@ -1032,7 +1032,7 @@ async function loadOfflineQueueStatus() {
   showStatus(
     "offline-queue-status",
     `${pending} pending · ${failedCount} dead-lettered`,
-    failedCount > 0 ? "err" : "info",
+    failedCount > 0 ? "warn" : "info",
   );
   const clearBtn = document.getElementById("offline-queue-clear-btn") as HTMLButtonElement | null;
   if (clearBtn) clearBtn.disabled = failedCount === 0;
