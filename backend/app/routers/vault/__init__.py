@@ -36,7 +36,9 @@ from app.services.resume_generator import (  # noqa: F401
 # Re-export singletons so tests patching "app.routers.vault._retrieval_agent" still work.
 from ._shared import (  # noqa: F401
     _ats_to_dict,
+    _get_provider_key,
     _github_service,
+    _reject_legacy_providers_json,
     _resolve_providers,
     _resume_parser,
     _resume_to_dict,

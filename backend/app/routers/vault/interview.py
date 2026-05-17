@@ -14,11 +14,12 @@ from app.models.user import User
 from app.models.work_history import WorkHistoryEntry
 from app.services.llm_gateway import LLMGateway
 
+from ._shared import _resolve_providers
+
 router = APIRouter()
 
 
 # ── Interview Prep (T3) ─────────────────────────────────────────────────────
-
 _INTERVIEW_SYSTEM = """You are an expert interview coach helping a software engineer prepare for a job interview.
 Generate exactly 10 likely interview questions for the given role and company, covering a mix of:
 - Behavioral (2–3): leadership, conflict, challenge questions
@@ -48,6 +49,10 @@ async def generate_interview_prep(
     company_name: str = Form(...),
     role_title: str = Form(""),
     jd_text: str = Form(""),
+    # Issue #197: the client sends only {name, model} entries — keys are
+    # decrypted server-side from user_provider_configs.
+    providers: str = Form(""),
+    # Legacy reject — clients still sending the old field are rejected 422.
     providers_json: str = Form(""),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -57,6 +62,11 @@ async def generate_interview_prep(
     Grounds answers in the user's work history and the provided JD.
     Returns { questions: [{question, category, suggested_answer}] }
     """
+    # Reject + resolve provider list (raises 422 if legacy or 400 if no key)
+    providers_list: list[dict] = await _resolve_providers(
+        providers, db, user, legacy_providers_json=providers_json
+    )
+
     # Load work history
     wh_stmt = (
         select(WorkHistoryEntry)
@@ -66,14 +76,6 @@ async def generate_interview_prep(
     wh_result = await db.execute(wh_stmt)
     wh_entries = list(wh_result.scalars().all())
     work_history_text = "\n\n".join(e.to_text_block() for e in wh_entries)
-
-    # Parse providers list
-    providers_list: list[dict] = []
-    if providers_json.strip():
-        try:
-            providers_list = _json.loads(providers_json)
-        except Exception:
-            logger.warning("interview-prep: invalid providers_json")
 
     user_prompt = f"""Candidate work history:
 {work_history_text or "Not provided."}
@@ -111,7 +113,8 @@ Generate 10 interview questions + suggested answers as described."""
                     questions = parsed[:10]
                     break
             except Exception as exc:
-                logger.debug(f"interview-prep provider {name} failed: {exc}")
+                # Provider name is safe; the api_key is never interpolated.
+                logger.debug("interview-prep provider {} failed: {}", name, exc)
                 continue
 
     # Rule-based fallback when no provider worked or none configured

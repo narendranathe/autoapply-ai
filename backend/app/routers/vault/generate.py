@@ -2,9 +2,7 @@
 Vault sub-module: resume and content generation endpoints.
 """
 
-import contextlib
 import hashlib
-import json as _json
 import sys
 import uuid
 
@@ -20,7 +18,7 @@ from app.models.work_history import WorkHistoryEntry
 from app.services.ats_service import ATSResult
 from app.services.resume_generator import PersonalProfile
 
-from ._shared import _github_service
+from ._shared import _github_service, _resolve_providers
 
 
 def _score_resume():
@@ -230,7 +228,10 @@ async def generate_tailored_resume(
     jd_text: str = Form(...),
     company_name: str = Form(...),
     role_title: str = Form(""),
-    providers_json: str = Form(""),  # JSON: [{"name":"groq","api_key":"...","model":"..."}]
+    # Issue #197: JSON array of {"name": str, "model": str} — NO api_key.
+    providers: str = Form(""),
+    # Legacy reject (HTTP 422) — clients still sending api_key are refused.
+    providers_json: str = Form(""),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -287,19 +288,17 @@ async def generate_tailored_resume(
         education_text="",
     )
 
-    # Resolve provider — use first entry in providers_json, fallback to user's stored key
-    providers_list: list[dict] = []
-    if providers_json.strip():
-        try:
-            providers_list = _json.loads(providers_json)
-        except Exception:
-            logger.warning("generate/tailored: invalid providers_json — using fallback")
+    # Resolve provider — server-side key lookup. Rejects legacy providers_json
+    # with 422 and 400s when the requested provider has no stored key.
+    providers_list: list[dict] = await _resolve_providers(
+        providers, db, user, legacy_providers_json=providers_json
+    )
 
     provider = "anthropic"
-    api_key = user.encrypted_llm_api_key or ""
+    api_key = ""
     if providers_list:
         provider = providers_list[0].get("name", "anthropic")
-        api_key = providers_list[0].get("api_key", "") or api_key
+        api_key = providers_list[0].get("api_key", "")
 
     generated = await _generate_full_latex_resume()(
         profile=profile,
@@ -363,6 +362,9 @@ async def generate_summary_endpoint(
     jd_text: str = Form(""),
     word_limit: int = Form(80),
     candidate_name: str = Form(""),
+    # Issue #197: JSON array of {"name": str, "model": str} — NO api_key.
+    providers: str = Form(""),
+    # Legacy reject (HTTP 422).
     providers_json: str = Form(""),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -371,10 +373,9 @@ async def generate_summary_endpoint(
     Generate a 2-4 sentence professional summary tailored to a role.
     Returns {summary, provider_used, word_count}.
     """
-    providers_list: list[dict] = []
-    with contextlib.suppress(Exception):
-        if providers_json.strip():
-            providers_list = _json.loads(providers_json)
+    providers_list: list[dict] = await _resolve_providers(
+        providers, db, user, legacy_providers_json=providers_json
+    )
 
     from app.models.work_history import WorkHistoryEntry as WHModel
 
@@ -420,6 +421,9 @@ async def generate_bullets_endpoint(
     jd_text: str = Form(""),
     num_bullets: int = Form(5),
     target_company_for_context: str = Form(""),
+    # Issue #197: JSON array of {"name": str, "model": str} — NO api_key.
+    providers: str = Form(""),
+    # Legacy reject (HTTP 422).
     providers_json: str = Form(""),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -428,10 +432,9 @@ async def generate_bullets_endpoint(
     Generate ATS-optimized bullet points for a specific role, grounded in work history.
     Returns {bullets, provider_used, count}.
     """
-    providers_list: list[dict] = []
-    with contextlib.suppress(Exception):
-        if providers_json.strip():
-            providers_list = _json.loads(providers_json)
+    providers_list: list[dict] = await _resolve_providers(
+        providers, db, user, legacy_providers_json=providers_json
+    )
 
     from app.models.work_history import WorkHistoryEntry as WHModel
 
@@ -478,6 +481,9 @@ async def generate_cover_letter_endpoint(
     tone: str = Form("professional"),  # professional|enthusiastic|concise|conversational
     word_limit: int = Form(400),
     candidate_name: str = Form(""),
+    # Issue #197: JSON array of {"name": str, "model": str} — NO api_key.
+    providers: str = Form(""),
+    # Legacy reject (HTTP 422).
     providers_json: str = Form(""),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -486,10 +492,9 @@ async def generate_cover_letter_endpoint(
     Generate cover letter drafts — one per enabled LLM provider, run in parallel.
     Accepts tone and word_limit controls. Returns up to N drafts (one per provider).
     """
-    providers_list: list[dict] = []
-    with contextlib.suppress(Exception):
-        if providers_json.strip():
-            providers_list = _json.loads(providers_json)
+    providers_list: list[dict] = await _resolve_providers(
+        providers, db, user, legacy_providers_json=providers_json
+    )
 
     # Load candidate work history
     from app.models.work_history import WorkHistoryEntry as WHModel  # local import avoids circular
