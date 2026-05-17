@@ -243,9 +243,18 @@ See `backend/.env.example` for the full list with descriptions.
 GitHub Actions runs on every push:
 - **Backend**: ruff lint → black format → mypy typecheck → pytest
 - **Extension**: tsc typecheck → vite build
+- **Dashboard**: tsc typecheck → eslint → vite build
 - **Docker**: builds backend image (no push, validates Dockerfile)
 
 See `.github/workflows/ci.yml`.
+
+### Required GitHub Actions secrets
+
+| Secret | Used by | Purpose |
+|--------|---------|---------|
+| `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` | `docker` job | Authenticated Docker Hub pulls (avoid rate limits) |
+| `FLY_API_TOKEN` | `deploy` job | Fly.io deploy on `main` |
+| `VITE_CLERK_PUBLISHABLE_KEY_TEST` | `dashboard` job | Clerk publishable key (test instance) injected into the dashboard Vite build. Must be a Clerk **test** publishable key — `pk_test_...` — taken from Clerk Dashboard → API Keys → Development instance. Never use the production key here. |
 
 ---
 
