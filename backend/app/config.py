@@ -318,10 +318,18 @@ class Settings(BaseSettings):
                     "to pin to a specific extension.",
                     env=self.ENVIRONMENT,
                 )
-            except Exception:
-                # loguru is a runtime dep but be defensive — never let logging
-                # failures break config loading.
-                pass
+            except ImportError as e:
+                # loguru is a declared runtime dep, but if a slim environment
+                # is missing it we still want the warnings.warn() above to
+                # land — fall back to stderr rather than swallowing real bugs
+                # behind a bare ``except`` (issue #92 round 2).
+                import sys
+
+                print(
+                    f"config: loguru unavailable ({e}); wildcard warning emitted "
+                    "via warnings module only",
+                    file=sys.stderr,
+                )
         return self
 
     @property
