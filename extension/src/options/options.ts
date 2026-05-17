@@ -18,6 +18,7 @@ import {
   stripLocalKey,
   type ProvidersMap as MigrationProvidersMap,
 } from "../shared/providerMigration";
+import { AUTH_STORAGE_KEYS, buildAuthHeaders } from "../content/authHelper";
 
 const API_DEFAULT = "https://autoapply-ai-api.fly.dev/api/v1";
 
@@ -1186,32 +1187,69 @@ function wireDetectionThresholds(): void {
 // Per provider we PUT to /users/provider-configs/{name} then GET to verify
 // has_key=true. Only on verified success is the local apiKey stripped.
 
+/**
+ * Pure helper: given a providerConfigs map, compute the banner state.
+ *
+ * Exported so unit tests can exercise the listener path without
+ * touching DOM or chrome.* APIs.
+ */
+export interface ProviderMigrationBannerState {
+  visible: boolean;
+  message: string;
+}
+
+export function computeProviderMigrationBannerState(
+  configs: MigrationProvidersMap | undefined | null,
+): ProviderMigrationBannerState {
+  const safe = configs ?? {};
+  const remaining = countUnmigratedKeys(safe);
+  if (remaining === 0) return { visible: false, message: "" };
+  const names = unmigratedProviderNames(safe).join(", ");
+  const plural = remaining === 1 ? "" : "s";
+  return {
+    visible: true,
+    message: `${remaining} key${plural} still stored locally (${names}) — click to migrate to the server.`,
+  };
+}
+
 async function refreshProviderMigrationBanner(): Promise<void> {
   const banner = document.getElementById("provider-migrate-banner") as HTMLDivElement | null;
   const text = document.getElementById("provider-migrate-banner-text");
   if (!banner || !text) return;
   const data = await chrome.storage.local.get("providerConfigs");
-  const configs = (data.providerConfigs as MigrationProvidersMap | undefined) ?? {};
-  const remaining = countUnmigratedKeys(configs);
-  if (remaining === 0) {
+  const state = computeProviderMigrationBannerState(
+    data.providerConfigs as MigrationProvidersMap | undefined,
+  );
+  if (!state.visible) {
     banner.style.display = "none";
     return;
   }
   banner.style.display = "block";
-  const names = unmigratedProviderNames(configs).join(", ");
-  text.textContent = `${remaining} key${remaining === 1 ? "" : "s"} still stored locally (${names}) — click to migrate to the server.`;
+  text.textContent = state.message;
 }
 
+/**
+ * Migration-specific wrapper around the shared ``buildAuthHeaders``.
+ *
+ * P2 (#198 round 2): de-duplicates the auth-header logic that used to
+ * live inline in this file. ``buildAuthHeaders`` accepts a typed
+ * ``StoredAuth`` shape and returns ``{}`` when the user isn't
+ * authenticated; here we map that to ``null`` because the migration
+ * loop wants to short-circuit with a "not authenticated" status
+ * message rather than firing unauthenticated PUTs.
+ */
 function buildAuthHeadersForMigration(
   data: Record<string, unknown>,
 ): Record<string, string> | null {
-  const userId = data.clerkUserId as string | undefined;
-  const token = data.clerkToken as string | undefined;
-  const tokenExp = (data.clerkTokenExp as number | undefined) ?? 0;
-  const tokenValid = token && (tokenExp === 0 || Date.now() / 1000 < tokenExp - 30);
-  if (tokenValid) return { Authorization: `Bearer ${token}` };
-  if (userId) return { "X-Clerk-User-Id": userId };
-  return null;
+  const headers = buildAuthHeaders({
+    clerkUserId: data.clerkUserId as string | undefined,
+    clerkToken: data.clerkToken as string | undefined,
+    clerkTokenExp: data.clerkTokenExp as number | undefined,
+  });
+  // ``buildAuthHeaders`` returns ``{}`` (not null) when both token and
+  // user id are missing. Convert to null so the caller can show a
+  // user-friendly "save your User ID first" message.
+  return Object.keys(headers).length > 0 ? headers : null;
 }
 
 async function migrateProviderKeysOnClick(): Promise<void> {
@@ -1223,12 +1261,12 @@ async function migrateProviderKeysOnClick(): Promise<void> {
   showStatus("provider-migrate-status", "Starting migration…", "info");
 
   try {
+    // P2 (#198 round 2): use the shared ``AUTH_STORAGE_KEYS`` const so
+    // any future auth-key change propagates here automatically.
     const data = await chrome.storage.local.get([
       "providerConfigs",
       "apiBaseUrl",
-      "clerkUserId",
-      "clerkToken",
-      "clerkTokenExp",
+      ...AUTH_STORAGE_KEYS,
     ]);
     const authHeaders = buildAuthHeadersForMigration(data);
     if (!authHeaders) {
@@ -1312,10 +1350,23 @@ async function migrateProviderKeysOnClick(): Promise<void> {
   }
 }
 
-// Keep the banner in sync with storage changes (e.g. after saveLlm or after a
-// successful migration).
+/**
+ * Pure: decide whether a storage change event should trigger a banner
+ * refresh. Exported so a unit test can pin the behaviour without
+ * spinning up a real chrome.storage.onChanged listener.
+ */
+export function shouldRefreshBannerOnChange(
+  changes: Record<string, { newValue?: unknown; oldValue?: unknown } | undefined>,
+  area: string,
+): boolean {
+  return area === "local" && !!changes?.providerConfigs;
+}
+
+// Keep the banner in sync with storage changes (e.g. after saveLlm or
+// after a successful migration). Wraps the pure predicate above so the
+// listener path is a one-liner.
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "local" && changes.providerConfigs) {
+  if (shouldRefreshBannerOnChange(changes as Record<string, { newValue?: unknown; oldValue?: unknown }>, area)) {
     void refreshProviderMigrationBanner();
   }
 });
