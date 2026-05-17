@@ -167,16 +167,18 @@ async def test_resolve_providers_raises_400_when_requested_provider_missing_key(
     async def fake_resolve(uid, name, db):
         return None  # no server-side key for any provider
 
-    with patch(
-        "app.services.user_provider_configs.resolve_decrypted_key",
-        side_effect=fake_resolve,
+    with (
+        patch(
+            "app.services.user_provider_configs.resolve_decrypted_key",
+            side_effect=fake_resolve,
+        ),
+        pytest.raises(HTTPException) as exc_info,
     ):
-        with pytest.raises(HTTPException) as exc_info:
-            await _resolve_providers(
-                providers='[{"name":"openai","model":"gpt-4o-mini"}]',
-                db=db,
-                user=user,
-            )
+        await _resolve_providers(
+            providers='[{"name":"openai","model":"gpt-4o-mini"}]',
+            db=db,
+            user=user,
+        )
 
     assert exc_info.value.status_code == 400
     detail = exc_info.value.detail
@@ -198,20 +200,22 @@ async def test_resolve_user_providers_strict_raises_for_missing_key():
     async def fake_resolve(uid, name, db):
         return None
 
-    with patch(
-        "app.services.user_provider_configs.resolve_decrypted_key",
-        side_effect=fake_resolve,
+    with (
+        patch(
+            "app.services.user_provider_configs.resolve_decrypted_key",
+            side_effect=fake_resolve,
+        ),
+        pytest.raises(ProviderNotConfiguredError) as exc_info,
     ):
-        with pytest.raises(ProviderNotConfiguredError) as exc_info:
-            await resolve_user_providers(
-                user_id,
-                [
-                    {"name": "anthropic", "model": "claude-3"},
-                    {"name": "openai", "model": "gpt-4"},
-                ],
-                db,
-                strict=True,
-            )
+        await resolve_user_providers(
+            user_id,
+            [
+                {"name": "anthropic", "model": "claude-3"},
+                {"name": "openai", "model": "gpt-4"},
+            ],
+            db,
+            strict=True,
+        )
 
     assert exc_info.value.provider_name == "anthropic"
 
@@ -518,9 +522,9 @@ async def test_trim_answer_cascade_includes_ollama():
             user=user,
         )
 
-    assert captured.get("provider") == "ollama", (
-        "Ollama must be tried in the cascade even when api_key is empty"
-    )
+    assert (
+        captured.get("provider") == "ollama"
+    ), "Ollama must be tried in the cascade even when api_key is empty"
     assert captured.get("api_key") == ""
     assert out["provider_used"] == "ollama"
 

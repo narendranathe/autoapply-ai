@@ -305,19 +305,17 @@ async def test_resolve_decrypted_key_query_binds_user_id_and_provider_name():
 
     # WHERE clause references both columns.
     assert "user_id" in rendered_sql, f"user_id missing from WHERE: {rendered_sql}"
-    assert "provider_name" in rendered_sql, (
-        f"provider_name missing from WHERE: {rendered_sql}"
-    )
+    assert "provider_name" in rendered_sql, f"provider_name missing from WHERE: {rendered_sql}"
 
     # And the bound values are exactly what the caller passed — i.e. a
     # mutation that hard-codes a literal user_id would fail here.
     bound_values = list(params.values())
-    assert user_id in bound_values, (
-        f"caller-supplied user_id not bound in statement params: {params}"
-    )
-    assert "anthropic" in bound_values, (
-        f"caller-supplied provider_name not bound in statement params: {params}"
-    )
+    assert (
+        user_id in bound_values
+    ), f"caller-supplied user_id not bound in statement params: {params}"
+    assert (
+        "anthropic" in bound_values
+    ), f"caller-supplied provider_name not bound in statement params: {params}"
 
 
 @pytest.mark.asyncio
@@ -349,9 +347,7 @@ async def test_resolve_decrypted_key_isolates_users_in_real_sqlite_db():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     try:
         async with engine.begin() as conn:
-            await conn.run_sync(
-                lambda sync_conn: UserProviderConfig.__table__.create(sync_conn)
-            )
+            await conn.run_sync(lambda sync_conn: UserProviderConfig.__table__.create(sync_conn))
 
         SessionLocal = sessionmaker(  # type: ignore[call-overload]
             engine, class_=AsyncSession, expire_on_commit=False
