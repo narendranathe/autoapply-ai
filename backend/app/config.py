@@ -145,6 +145,30 @@ class Settings(BaseSettings):
             )
         return v
 
+    @field_validator("FERNET_KEY", mode="after")
+    @classmethod
+    def validate_fernet_key(cls, v: str) -> str:
+        if not v:
+            import warnings
+
+            warnings.warn(
+                "FERNET_KEY is unset — API key and GitHub token encryption will fail "
+                "at runtime. Generate one: "
+                'python -c "from cryptography.fernet import Fernet; '
+                'print(Fernet.generate_key().decode())"',
+                stacklevel=2,
+            )
+            return v
+        try:
+            from cryptography.fernet import Fernet
+
+            Fernet(v.encode())
+        except Exception as e:
+            raise ValueError(
+                f"FERNET_KEY is invalid: {e}. Generate one with Fernet.generate_key().decode()"
+            ) from e
+        return v
+
     @property
     def is_production(self) -> bool:
         return self.ENVIRONMENT == "production"
