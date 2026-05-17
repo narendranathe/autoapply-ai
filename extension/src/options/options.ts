@@ -191,10 +191,19 @@ async function saveAuth() {
       const email = profile.email || `${userId}@autoapply.local`;
       // Simple deterministic hash for email_hash (not sensitive — just a DB key)
       const emailHash = btoa(email).replace(/[^a-zA-Z0-9]/g, "").slice(0, 32);
+      const githubUsername = (profile.githubUsername || "").trim();
 
+      // SECURITY (#89): clerk_id is sourced server-side from authHdrs
+      // (Bearer JWT or X-Clerk-User-Id). The body intentionally omits clerk_id.
+      const registerBody: Record<string, string> = { email_hash: emailHash };
+      if (githubUsername) registerBody.github_username = githubUsername;
       const registerResp = await fetch(
-        `${apiBase}/auth/register?clerk_id=${encodeURIComponent(userId)}&email_hash=${encodeURIComponent(emailHash)}`,
-        { method: "POST" }
+        `${apiBase}/auth/register`,
+        {
+          method: "POST",
+          headers: { ...authHdrs, "Content-Type": "application/json" },
+          body: JSON.stringify(registerBody),
+        }
       );
 
       if (registerResp.ok) {
