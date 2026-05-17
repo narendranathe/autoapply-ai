@@ -230,7 +230,14 @@ TEXT TO SHORTEN:
         for p in sorted_p:
             name = p.get("name", "")
             api_key = p.get("api_key", "")
-            if not name or not api_key:
+            # Issue #197 follow-up: ollama is the only provider that needs
+            # no API key (local server). After ``_expose_providers_for_gateway``
+            # its ``api_key`` is the empty string, so a naive
+            # ``if not api_key: continue`` would skip it entirely. Allow it
+            # through explicitly here.
+            if not name:
+                continue
+            if name != "ollama" and not api_key:
                 continue
             try:
                 raw, _provider_used = await gateway.generate(

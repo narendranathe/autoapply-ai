@@ -380,6 +380,58 @@ async def test_trim_answer_rejects_providers_json():
 
 
 @pytest.mark.asyncio
+async def test_trim_answer_cascade_includes_ollama():
+    """Regression — round-1 fix introduced a cascade that skipped any
+    provider with an empty ``api_key`` string. Ollama is keyless (local
+    server) so its plaintext api_key is ``""`` after
+    ``_expose_providers_for_gateway`` — but the cascade must still try it.
+    Asserts ``LLMGateway.generate`` is invoked with ``provider="ollama"``.
+    """
+    from app.routers.vault.answers import trim_answer
+
+    user = MagicMock()
+    user.id = uuid.uuid4()
+    db = AsyncMock()
+
+    # _resolve_providers returns wrapped entries. Ollama has api_key=None
+    # which the expose helper renders as "".
+    async def fake_resolve(providers, db, user, *, providers_json=None):
+        return [{"name": "ollama", "model": "llama3.1:8b", "api_key": None}]
+
+    captured: dict = {}
+
+    class FakeGateway:
+        def __init__(self) -> None:
+            pass
+
+        async def generate(self, *, system_prompt, user_prompt, provider, api_key, **kw):
+            captured["provider"] = provider
+            captured["api_key"] = api_key
+            # >20 chars so the cascade accepts it instead of falling through
+            # to hard-truncation.
+            return ("Trimmed answer text that is comfortably above 20 chars.", provider)
+
+    with (
+        patch("app.routers.vault.answers._resolve_providers", side_effect=fake_resolve),
+        patch("app.routers.vault.answers.LLMGateway", FakeGateway),
+    ):
+        out = await trim_answer(
+            answer_text="x" * 1000,
+            max_chars=100,
+            providers='[{"name":"ollama","model":"llama3.1:8b"}]',
+            providers_json="",
+            db=db,
+            user=user,
+        )
+
+    assert captured.get("provider") == "ollama", (
+        "Ollama must be tried in the cascade even when api_key is empty"
+    )
+    assert captured.get("api_key") == ""
+    assert out["provider_used"] == "ollama"
+
+
+@pytest.mark.asyncio
 async def test_tailored_resume_rejects_providers_json():
     """generate/tailored is the 8th touched endpoint."""
     from app.routers.vault.generate import generate_tailored_resume
