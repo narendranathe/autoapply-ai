@@ -201,7 +201,14 @@ async def test_jwt_path_takes_precedence_over_dev_fallback(monkeypatch):
     mock_db.execute = AsyncMock(return_value=mock_result)
 
     with (
-        patch("app.dependencies._get_clerk_jwks", new=AsyncMock(return_value=[])),
+        patch(
+            "app.dependencies.jwt.get_unverified_header",
+            return_value={"kid": "kid-test"},
+        ),
+        patch(
+            "app.dependencies._resolve_jwk_for_kid",
+            new=AsyncMock(return_value={"kid": "kid-test"}),
+        ),
         patch("app.dependencies.jwt.decode", return_value={"sub": "user_from_jwt"}),
     ):
         user = await get_current_user(
