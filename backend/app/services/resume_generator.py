@@ -399,6 +399,12 @@ async def _dispatch_provider_entry(
     Issue #188 — propagates the per-entry ``model`` to the gateway so cloud
     providers honour user-selected variants (e.g. ``gemini-1.5-pro``). For
     Ollama, the same ``model`` field is used as the local model tag.
+
+    Issue #186 — passes ``skip_fallback=True`` so the gateway doesn't
+    silently retry Ollama when a cloud provider fails. The outer
+    multi-provider loops here own fallback semantics; the gateway should
+    only attempt the provider the caller asked for so the returned
+    ``provider_used`` is always accurate.
     """
     name = p.get("name", "")
     api_key = p.get("api_key", "")
@@ -418,6 +424,7 @@ async def _dispatch_provider_entry(
             provider=name,
             api_key=api_key,
             ollama_model=entry_model or ollama_model,
+            skip_fallback=True,
         )
     return await _llm_gateway.generate(
         system_prompt=system_prompt,
@@ -426,6 +433,7 @@ async def _dispatch_provider_entry(
         api_key=api_key,
         ollama_model=ollama_model,
         model=entry_model,
+        skip_fallback=True,
     )
 
 

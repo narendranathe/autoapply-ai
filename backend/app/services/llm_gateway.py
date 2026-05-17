@@ -797,6 +797,7 @@ class LLMGateway:
         api_key: str = "",
         ollama_model: str = "llama3.1:8b",
         model: str | None = None,
+        skip_fallback: bool = False,
     ) -> tuple[str, str]:
         """
         Dispatch a completion request through the provider cascade.
@@ -820,6 +821,14 @@ class LLMGateway:
             ``groq``, and ``perplexity`` use this model id instead of their
             built-in defaults (#188). Ignored for providers that don't
             accept a runtime model override (anthropic, openai, kimi).
+        skip_fallback:
+            When True, do not append Ollama as a secondary attempt
+            (#186). Callers that supply their own outer fallback loop
+            should set this to avoid double-fallback / provider
+            misattribution (e.g. a cloud provider fails, the gateway
+            silently tries Ollama for up to 180s, and the outer loop
+            then records the cloud provider's name as the one that
+            answered).
 
         Returns
         -------
@@ -888,7 +897,11 @@ class LLMGateway:
             )
 
         # Always append Ollama as local fallback unless it is already primary
-        if provider != "ollama":
+        # or the caller opted out via ``skip_fallback`` (#186). Callers like
+        # ``_dispatch_provider_entry`` own their own outer-loop fallback and
+        # don't want the gateway to silently retry a 180s Ollama call after
+        # a cloud provider error.
+        if provider != "ollama" and not skip_fallback:
             cascade.append(
                 ("ollama", lambda: _call_ollama(system_prompt, user_prompt, ollama_model))
             )
