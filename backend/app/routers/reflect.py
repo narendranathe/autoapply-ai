@@ -88,7 +88,7 @@ async def stream_reflection(
         select(UserProviderConfig)
         .where(
             UserProviderConfig.user_id == user.id,
-            UserProviderConfig.is_enabled.is_(True),
+            UserProviderConfig.encrypted_api_key != "",
         )
         .limit(1)
     )

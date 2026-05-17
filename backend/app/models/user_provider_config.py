@@ -1,8 +1,9 @@
 """
 UserProviderConfig model.
 
-Stores per-user LLM provider configuration: encrypted API key, optional model
-override, and whether the provider is enabled.
+Stores per-user LLM provider configuration: encrypted API key and optional
+model override.  A provider is considered "enabled" iff ``encrypted_api_key``
+is non-empty — there is no stored flag.
 
 One row per (user, provider) pair — enforced by a unique constraint so that
 client code can upsert safely.
@@ -11,7 +12,7 @@ client code can upsert safely.
 import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -48,15 +49,14 @@ class UserProviderConfig(Base, TimestampMixin):
         nullable=True,
         comment="Optional model ID to use instead of the provider default.",
     )
-    is_enabled: Mapped[bool] = mapped_column(
-        Boolean,
-        default=True,
-        nullable=False,
-        comment="Whether this provider is active for the user.",
-    )
 
     # ── Relationships ─────────────────────────────────────
     user: Mapped["User"] = relationship(back_populates="provider_configs")
+
+    @property
+    def is_enabled(self) -> bool:
+        """Derived: a provider is enabled iff an api key is configured."""
+        return bool(self.encrypted_api_key)
 
     def __repr__(self) -> str:
         return (

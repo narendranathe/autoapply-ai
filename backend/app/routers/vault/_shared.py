@@ -54,7 +54,7 @@ async def _resolve_providers(
         select(UserProviderConfig)
         .where(
             UserProviderConfig.user_id == user.id,
-            UserProviderConfig.is_enabled.is_(True),
+            UserProviderConfig.encrypted_api_key != "",
         )
         .order_by(UserProviderConfig.provider_name)
     )
