@@ -145,14 +145,20 @@ except ImportError:  # pragma: no cover - prometheus_client missing
 def _emit_metric(provider: str, status: str, duration_ms: float) -> None:
     """Record a request metric for ``provider`` (``success`` or ``failure``).
 
-    Always emits a structured loguru info event so log-based dashboards
+    Always emits a key=value loguru info event so log-based dashboards
     keep working when prometheus_client is unavailable.
+
+    Issue #191 — Loguru does not render keyword arguments into its default
+    sink: ``logger.info("llm.request", provider=...)`` would emit only
+    ``llm.request`` and stash the kwargs in ``record["extra"]`` where no
+    aggregator picks them up. We use a positional format string so the
+    label/value pairs are part of the rendered line.
     """
     logger.info(
-        "llm.request",
-        provider=provider,
-        duration_ms=round(duration_ms, 2),
-        status=status,
+        "llm.request provider={} duration_ms={} status={}",
+        provider,
+        round(duration_ms, 2),
+        status,
     )
     if _HAS_PROMETHEUS:
         try:

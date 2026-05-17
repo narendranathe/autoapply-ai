@@ -175,9 +175,37 @@ async def test_emit_metric_never_raises_when_prometheus_missing():
 
 
 @pytest.mark.asyncio
-async def test_emit_metric_logs_structured_event(caplog):
-    """Always emit a structured ``llm.request`` info event for log dashboards."""
-    # The gateway uses loguru, which doesn't propagate to caplog by default.
-    # Instead, just verify the helper invokes its emitter cleanly.
-    llm_gateway._emit_metric("anthropic", "success", 5.5)
-    llm_gateway._emit_metric("openai", "failure", 12.0)
+async def test_emit_metric_logs_structured_event():
+    """Always emit a ``llm.request`` info event with provider / duration /
+    status rendered into the log line so aggregators can pick them up.
+
+    Issue #191 — Loguru does not render keyword arguments into its default
+    sinks. The previous implementation called
+    ``logger.info("llm.request", provider=..., status=...)`` which emitted
+    only ``llm.request`` and dropped the labels into ``record["extra"]``.
+    We assert the rendered line now contains each label/value pair.
+
+    ``caplog`` does not capture loguru output, so we wire a dedicated sink.
+    """
+    from loguru import logger as _logger
+
+    messages: list[str] = []
+
+    def sink(message) -> None:  # noqa: ANN001
+        messages.append(message.record["message"])
+
+    sink_id = _logger.add(sink, level="INFO")
+    try:
+        llm_gateway._emit_metric("anthropic", "success", 5.5)
+        llm_gateway._emit_metric("openai", "failure", 12.0)
+    finally:
+        _logger.remove(sink_id)
+
+    joined = "\n".join(messages)
+    assert "llm.request" in joined
+    assert "provider=anthropic" in joined
+    assert "status=success" in joined
+    assert "duration_ms=5.5" in joined
+    assert "provider=openai" in joined
+    assert "status=failure" in joined
+    assert "duration_ms=12.0" in joined
