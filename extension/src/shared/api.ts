@@ -239,15 +239,24 @@ export interface GenerateTailoredResponse {
 
 // ── Provider serialisation ─────────────────────────────────────────────────
 //
-// P0 #198 (implementation B): the extension MUST NOT send plaintext API keys
-// over the wire on every generation request. The backend reads each user's
-// key from the encrypted ``user_provider_configs`` table. We only send the
-// provider name + optional model so the server can honour user preference
-// for which provider to call first.
+// P0 #198 (implementation B) + cross-PR coordination with #197:
 //
-// This helper is the single chokepoint — every ``providers_json`` payload
-// flows through it. Tests assert the output never contains an ``api_key``
-// field, regardless of what shape the call site passes in.
+// The extension MUST NOT send plaintext API keys over the wire on every
+// generation request. The backend reads each user's key from the encrypted
+// ``user_provider_configs`` table. We only send the provider name + optional
+// model so the server can honour user preference for which provider to call
+// first.
+//
+// Wire field name: ``providers`` (the new contract from #197). The legacy
+// ``providers_json`` field is rejected by the backend with 422 — sending it
+// would silently fall through to the rule-based stub. Every call site
+// flows through this helper so the field name is canonical in exactly one
+// place.
+//
+// Tests assert the output never contains an ``api_key`` / ``apiKey`` field,
+// regardless of what shape the call site passes in.
+export const PROVIDERS_FORM_FIELD = "providers";
+
 function serializeProvidersForApi(
   providers: ReadonlyArray<{ name: string; model?: string; apiKey?: string }> | undefined,
 ): string | null {
@@ -255,6 +264,22 @@ function serializeProvidersForApi(
   return JSON.stringify(
     providers.map((p) => ({ name: p.name, model: p.model ?? "" })),
   );
+}
+
+/**
+ * Append the serialised provider list to a FormData under the canonical
+ * ``providers`` field name. No-op when ``providers`` is empty.
+ *
+ * Importing this from content scripts (instead of inlining
+ * ``fd.append("providers_json", JSON.stringify(...))``) ensures every
+ * call site honours the cross-PR contract with #197.
+ */
+export function appendProvidersField(
+  fd: FormData,
+  providers: ReadonlyArray<{ name: string; model?: string; apiKey?: string }> | undefined,
+): void {
+  const serialised = serializeProvidersForApi(providers);
+  if (serialised) fd.append(PROVIDERS_FORM_FIELD, serialised);
 }
 
 export { serializeProvidersForApi as __serializeProvidersForApi };
@@ -310,7 +335,9 @@ export const vaultApi = {
     if (params.categoryInstructions) fd.append("category_instructions", params.categoryInstructions);
     const providersJson = serializeProvidersForApi(params.providers);
     if (providersJson) {
-      fd.append("providers_json", providersJson);
+      // P0 #197/#198: canonical wire field is ``providers`` (the backend
+      // rejects ``providers_json`` with HTTP 422).
+      fd.append(PROVIDERS_FORM_FIELD, providersJson);
     } else {
       if (params.llmProvider) fd.append("llm_provider", params.llmProvider);
       // P0 #198: ``llm_api_key`` is intentionally not sent. The backend
@@ -541,12 +568,11 @@ export const vaultApi = {
     fd.append("jd_text", params.jdText);
     fd.append("company_name", params.companyName);
     if (params.roleTitle) fd.append("role_title", params.roleTitle);
-    {
-      // P0 #198: never ship api_key on the wire — backend reads from
-      // user_provider_configs (encrypted at rest, decrypted per request).
-      const providersJson = serializeProvidersForApi(params.providers);
-      if (providersJson) fd.append("providers_json", providersJson);
-    }
+    // P0 #197/#198: never ship api_key on the wire — backend reads from
+    // user_provider_configs (encrypted at rest, decrypted per request).
+    // Canonical wire field is ``providers`` (legacy ``providers_json``
+    // returns HTTP 422).
+    appendProvidersField(fd, params.providers);
     return post("/vault/generate/tailored", fd);
   },
 
@@ -561,12 +587,9 @@ export const vaultApi = {
     fd.append("company_name", params.companyName);
     if (params.roleTitle) fd.append("role_title", params.roleTitle);
     if (params.jdText) fd.append("jd_text", params.jdText);
-    {
-      // P0 #198: never ship api_key on the wire — backend reads from
-      // user_provider_configs (encrypted at rest, decrypted per request).
-      const providersJson = serializeProvidersForApi(params.providers);
-      if (providersJson) fd.append("providers_json", providersJson);
-    }
+    // P0 #197/#198: never ship api_key on the wire — backend reads from
+    // user_provider_configs (encrypted at rest, decrypted per request).
+    appendProvidersField(fd, params.providers);
     return post("/vault/interview-prep", fd);
   },
 
@@ -587,12 +610,9 @@ export const vaultApi = {
     if (params.tone) fd.append("tone", params.tone);
     if (params.wordLimit) fd.append("word_limit", String(params.wordLimit));
     if (params.candidateName) fd.append("candidate_name", params.candidateName);
-    {
-      // P0 #198: never ship api_key on the wire — backend reads from
-      // user_provider_configs (encrypted at rest, decrypted per request).
-      const providersJson = serializeProvidersForApi(params.providers);
-      if (providersJson) fd.append("providers_json", providersJson);
-    }
+    // P0 #197/#198: never ship api_key on the wire — backend reads from
+    // user_provider_configs (encrypted at rest, decrypted per request).
+    appendProvidersField(fd, params.providers);
     return post("/vault/generate/cover-letter", fd);
   },
 
@@ -625,12 +645,9 @@ export const vaultApi = {
     const fd = new FormData();
     fd.append("answer_text", params.answerText);
     fd.append("max_chars", String(params.maxChars));
-    {
-      // P0 #198: never ship api_key on the wire — backend reads from
-      // user_provider_configs (encrypted at rest, decrypted per request).
-      const providersJson = serializeProvidersForApi(params.providers);
-      if (providersJson) fd.append("providers_json", providersJson);
-    }
+    // P0 #197/#198: never ship api_key on the wire — backend reads from
+    // user_provider_configs (encrypted at rest, decrypted per request).
+    appendProvidersField(fd, params.providers);
     return post("/vault/generate/answers/trim", fd);
   },
 
@@ -649,12 +666,9 @@ export const vaultApi = {
     fd.append("jd_text", params.jdText);
     if (params.wordLimit != null) fd.append("word_limit", String(params.wordLimit));
     if (params.candidateName) fd.append("candidate_name", params.candidateName);
-    {
-      // P0 #198: never ship api_key on the wire — backend reads from
-      // user_provider_configs (encrypted at rest, decrypted per request).
-      const providersJson = serializeProvidersForApi(params.providers);
-      if (providersJson) fd.append("providers_json", providersJson);
-    }
+    // P0 #197/#198: never ship api_key on the wire — backend reads from
+    // user_provider_configs (encrypted at rest, decrypted per request).
+    appendProvidersField(fd, params.providers);
     return post("/vault/generate/summary", fd);
   },
 
@@ -673,12 +687,9 @@ export const vaultApi = {
     fd.append("jd_text", params.jdText);
     if (params.numBullets != null) fd.append("num_bullets", String(params.numBullets));
     if (params.targetCompany) fd.append("target_company_for_context", params.targetCompany);
-    {
-      // P0 #198: never ship api_key on the wire — backend reads from
-      // user_provider_configs (encrypted at rest, decrypted per request).
-      const providersJson = serializeProvidersForApi(params.providers);
-      if (providersJson) fd.append("providers_json", providersJson);
-    }
+    // P0 #197/#198: never ship api_key on the wire — backend reads from
+    // user_provider_configs (encrypted at rest, decrypted per request).
+    appendProvidersField(fd, params.providers);
     return post("/vault/generate/bullets", fd);
   },
 
@@ -967,11 +978,9 @@ export const workHistoryApi = {
   }> {
     const fd = new FormData();
     fd.append("file", file, file.name);
-    {
-      // P0 #198: never ship api_key.
-      const providersJson = serializeProvidersForApi(providers);
-      if (providersJson) fd.append("providers_json", providersJson);
-    }
+    // P0 #197/#198: never ship api_key. Use the canonical ``providers``
+    // wire field (legacy ``providers_json`` returns HTTP 422).
+    appendProvidersField(fd, providers);
     return post("/work-history/import-from-resume", fd);
   },
 };

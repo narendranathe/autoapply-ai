@@ -9,6 +9,8 @@ import type { DetectedField, DetectedQuestion, FieldType, QuestionCategory } fro
 import { FIELD_PATTERNS, QUESTION_CATEGORY_PATTERNS } from "../shared/detection-patterns";
 import { isAllowedAtsOrigin, resolveIframeOrigin } from "../shared/ats-origins";
 import { getThresholdsCached, initThresholds } from "../shared/detection-thresholds";
+import { buildProviderList, type ProvidersMap } from "../shared/providerMigration";
+import { PROVIDERS_FORM_FIELD } from "../shared/api";
 import { initAshbyApply } from "./ashbyApply";
 import { initBambooHRApply } from "./bamboohrApply";
 import { initGreenhouseApply } from "./greenhouseApply";
@@ -528,13 +530,9 @@ class FloatingPanel {
     if (data.promptTemplates) this.promptTemplates = data.promptTemplates as Record<string, string>;
     if (data.categoryModelRoutes) this.categoryModelRoutes = data.categoryModelRoutes as Record<string, string>;
     if (data.providerConfigs) {
-      const RANK: Record<string, number> = { anthropic: 1, openai: 2, gemini: 3, groq: 4, perplexity: 5, kimi: 6 };
-      // Include providers that either still have a local key (pre-migration)
-      // or have been explicitly enabled (post-migration: backend holds the key).
-      this.providers = Object.entries(data.providerConfigs as Record<string, { enabled?: boolean; apiKey?: string; model?: string }>)
-        .filter(([, cfg]) => !!cfg && (!!cfg.apiKey || cfg.enabled === true))
-        .map(([name, cfg]) => ({ name, model: cfg.model ?? "" }))
-        .sort((a, b) => (RANK[a.name] ?? 50) - (RANK[b.name] ?? 50));
+      // P1-F: delegate to the canonical helper. Output is {name, model} only —
+      // never an apiKey — ordered by canonical provider rank.
+      this.providers = buildProviderList(data.providerConfigs as ProvidersMap);
     }
 
     // Fetch full work history text for LLM context
@@ -1081,7 +1079,9 @@ class FloatingPanel {
           if (preferred.length > 0) orderedProviders = [...preferred, ...rest];
         }
         state.loadingProvider = orderedProviders[0]?.name ?? "";
-        fd.append("providers_json", JSON.stringify(orderedProviders));
+        // P0 #197/#198: canonical wire field name is ``providers`` (backend
+        // rejects ``providers_json`` with HTTP 422).
+        fd.append(PROVIDERS_FORM_FIELD, JSON.stringify(orderedProviders));
       }
       if (state.question.maxLength && state.question.maxLength > 0) {
         fd.append("max_length", String(state.question.maxLength));

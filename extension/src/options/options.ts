@@ -11,6 +11,7 @@ import {
 import type { DetectionThresholds } from "../shared/types";
 import { validateApiBaseUrl } from "../background/offlineQueue";
 import {
+  buildProviderList,
   countUnmigratedKeys,
   unmigratedProviderNames,
   migrateProviderKey,
@@ -665,12 +666,10 @@ async function importFromResume() {
   showStatus("wh-import-status", "Parsing resume…", "info");
 
   try {
-    // Read provider preference list for LLM extraction (P0 #198: no apiKey).
+    // P0 #198 + P1-F: read provider preference list via the shared helper —
+    // produces {name, model} only, never apiKey.
     const data = await chrome.storage.local.get("providerConfigs");
-    const configs = (data.providerConfigs as Record<string, { enabled?: boolean; apiKey?: string; model?: string }> | undefined) ?? {};
-    const providers = Object.entries(configs)
-      .filter(([, cfg]) => !!cfg.apiKey || cfg.enabled === true)
-      .map(([name, cfg]) => ({ name, model: cfg.model ?? "" }));
+    const providers = buildProviderList(data.providerConfigs as MigrationProvidersMap | undefined);
 
     const result = await workHistoryApi.importFromResume(_importFile, providers);
 

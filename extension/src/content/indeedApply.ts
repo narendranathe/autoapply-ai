@@ -1,4 +1,6 @@
 import { AUTH_STORAGE_KEYS, buildAuthHeaders } from "./authHelper";
+import { buildProviderList, type ProvidersMap } from "../shared/providerMigration";
+import { PROVIDERS_FORM_FIELD } from "../shared/api";
 
 /**
  * indeedApply.ts
@@ -39,12 +41,6 @@ interface Profile {
   yearsExperience: string;
   sponsorship: string;
   salary: string;
-}
-
-interface ProviderCfg {
-  enabled: boolean;
-  apiKey: string;
-  model: string;
 }
 
 // ── Label matchers ─────────────────────────────────────────────────────────
@@ -261,11 +257,9 @@ async function runFill(applyRoot: HTMLElement, btn: HTMLButtonElement): Promise<
   }
 
   const apiBase = (raw.apiBaseUrl as string | undefined) || "https://autoapply-ai-api.fly.dev/api/v1";
-  const configs = (raw.providerConfigs as Record<string, ProviderCfg> | undefined) ?? {};
-  // P0 #198: only ship {name, model} — apiKey stays out of the payload.
-  const providers = Object.entries(configs)
-    .filter(([, c]) => !!c.apiKey || c.enabled === true)
-    .map(([name, c]) => ({ name, model: c.model ?? "" }));
+  // P0 #198 + P1-F (#198 round 2): canonical {name, model}-only list,
+  // produced by the shared helper — no apiKey ever in the output.
+  const providers = buildProviderList(raw.providerConfigs as ProvidersMap | undefined);
 
   // Use the currently visible step, or the whole apply root
   const stepRoot =
@@ -318,7 +312,9 @@ async function runFill(applyRoot: HTMLElement, btn: HTMLButtonElement): Promise<
         fd.append("question_category", "custom");
         fd.append("company_name", extractIndeedCompany());
         fd.append("jd_text", extractIndeedJd());
-        if (providers.length > 0) fd.append("providers_json", JSON.stringify(providers));
+        // P0 #197/#198: ``providers`` is the canonical wire field name; the
+        // backend rejects ``providers_json`` with HTTP 422.
+        if (providers.length > 0) fd.append(PROVIDERS_FORM_FIELD, JSON.stringify(providers));
         if (ta.maxLength > 0) fd.append("max_length", String(ta.maxLength));
         const resp = await fetch(`${apiBase}/vault/generate/answers`, {
           method: "POST",
