@@ -117,11 +117,14 @@ function detectFields(): DetectedField[] {
   return fields;
 }
 
-function isEssayQuestion(label: string): boolean {
-  // Any textarea with a non-trivial label is a Q&A question.
-  // detectFields() only covers <input> and <select>, never <textarea>,
-  // so every textarea is by definition not in the Fields list.
-  return label.trim().length >= 3;
+export const NON_QUESTION_PATTERNS = /^(url|website|link|linkedin|github|portfolio|email|phone|name|first\s?name|last\s?name|full\s?name|address|city|zip|country|salary|start\s?date)/i;
+export const MIN_ESSAY_LABEL_LENGTH = 15;
+
+export function isEssayQuestion(label: string): boolean {
+  const normalized = label.trim();
+  if (normalized.length < MIN_ESSAY_LABEL_LENGTH) return false;
+  if (NON_QUESTION_PATTERNS.test(normalized)) return false;
+  return true;
 }
 
 function detectQuestions(): DetectedQuestion[] {
