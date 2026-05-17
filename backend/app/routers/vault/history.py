@@ -138,10 +138,19 @@ async def get_vault_analytics(
     )
     unique_companies = (await db.execute(unique_companies_stmt)).scalar_one() or 0
 
+    avg_ats_stmt = select(func.avg(Resume.ats_score)).where(
+        Resume.user_id == user.id,
+        Resume.ats_score.is_not(None),
+    )
+    avg_ats_raw = (await db.execute(avg_ats_stmt)).scalar_one_or_none()
+    avg_ats_score = round(float(avg_ats_raw), 3) if avg_ats_raw is not None else None
+
+    avg_reward_rounded = round(avg_reward, 3) if avg_reward is not None else None
+
     return {
         "answers": {
             "total": total_answers,
-            "avg_reward_score": round(avg_reward, 3) if avg_reward is not None else None,
+            "avg_reward_score": avg_reward_rounded,
             "feedback_distribution": feedback_dist,
             "by_category": category_breakdown,
         },
@@ -150,4 +159,8 @@ async def get_vault_analytics(
             "unique_companies": unique_companies,
         },
         "top_companies_by_answers": [{"company": c, "answer_count": n} for c, n in top_companies],
+        # Flat top-level fields consumed by the dashboard Mirror page.
+        "total_resumes": total_resumes,
+        "avg_ats_score": avg_ats_score,
+        "avg_reward_score": avg_reward_rounded,
     }
