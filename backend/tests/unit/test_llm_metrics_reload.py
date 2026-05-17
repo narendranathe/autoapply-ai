@@ -32,8 +32,7 @@ def test_reload_keeps_prometheus_enabled_in_subprocess():
     Runs in a subprocess so the reload doesn't replace classes that other
     tests in this process import directly (e.g. ``LLMGenerationError``).
     """
-    script = textwrap.dedent(
-        """
+    script = textwrap.dedent("""
         import importlib
         import sys
 
@@ -57,8 +56,7 @@ def test_reload_keeps_prometheus_enabled_in_subprocess():
         reloaded._emit_metric("openai", "failure", 5.0)
 
         print("OK")
-        """
-    )
+        """)
     result = subprocess.run(
         [sys.executable, "-c", script],
         capture_output=True,
