@@ -8,11 +8,52 @@ import type { OfflineEdit } from "../shared/types";
 export const MAX_OFFLINE_RETRY = 3;
 export const OFFLINE_QUEUE_KEY = "offline_queue";
 export const OFFLINE_QUEUE_FAILED_KEY = "offline_queue_failed";
+export const DEV_FALLBACK_API_BASE = "http://localhost:8000/api/v1";
 
 export interface ProcessQueueResult {
   active: OfflineEdit[];
   newlyDeadLettered: OfflineEdit[];
   syncedCount: number;
+}
+
+export type ResolveDrainEndpointResult =
+  | { ok: true; endpoint: string; usedFallback: boolean }
+  | { ok: false; reason: "missing_in_prod" };
+
+/**
+ * Resolve the URL the drain should POST to.
+ *
+ * Defensive rules (issue #91):
+ *   1. If `apiBaseUrl` is configured in storage → use it.
+ *   2. Otherwise, in dev builds only → fall back to localhost.
+ *   3. Otherwise (production with no configured URL) → return ok:false. The
+ *      caller MUST skip the drain entirely and preserve the queue. Defaulting
+ *      to localhost in prod silently loses every edit because the loopback
+ *      address resolves inside the user's machine, not our API.
+ *
+ * The helper is pure — no chrome/storage access — so tests can hit every
+ * branch without mocking globals.
+ */
+export function resolveDrainEndpoint(
+  storedApiBase: string | undefined,
+  isDev: boolean,
+): ResolveDrainEndpointResult {
+  const base = (storedApiBase ?? "").trim();
+  if (base) {
+    return {
+      ok: true,
+      endpoint: `${base.replace(/\/$/, "")}/vault/sync-markdown`,
+      usedFallback: false,
+    };
+  }
+  if (isDev) {
+    return {
+      ok: true,
+      endpoint: `${DEV_FALLBACK_API_BASE}/vault/sync-markdown`,
+      usedFallback: true,
+    };
+  }
+  return { ok: false, reason: "missing_in_prod" };
 }
 
 /**

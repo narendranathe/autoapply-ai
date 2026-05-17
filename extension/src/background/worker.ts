@@ -13,6 +13,7 @@ import {
   OFFLINE_QUEUE_FAILED_KEY,
   OFFLINE_QUEUE_KEY,
   processOfflineQueue,
+  resolveDrainEndpoint,
 } from "./offlineQueue";
 
 // Open sidepanel when user clicks the toolbar icon (required for MV3)
@@ -410,22 +411,46 @@ self.addEventListener("online", () => {
 });
 
 async function drainOfflineQueue(): Promise<void> {
-  // Read the queue + the configured API base. We deliberately do NOT read
-  // OFFLINE_QUEUE_FAILED_KEY here — see below for the race-narrowing rationale.
+  // Read the queue + the configured API base ONCE per drain (not per fetch —
+  // every entry in this batch hits the same endpoint). We deliberately do NOT
+  // read OFFLINE_QUEUE_FAILED_KEY here — see below for the race-narrowing
+  // rationale.
   const stored = await chrome.storage.local.get([OFFLINE_QUEUE_KEY, "apiBaseUrl"]);
   const queue: OfflineEdit[] = stored[OFFLINE_QUEUE_KEY] || [];
-  const apiBase =
-    (stored.apiBaseUrl as string | undefined) || "https://autoapply-ai-api.fly.dev/api/v1";
 
   const pending = queue.filter((e) => !e.synced);
   if (pending.length === 0) return;
+
+  // Vite replaces import.meta.env.DEV at build time → true for `vite build
+  // --mode development`, false for production builds. In a Chrome MV3 service
+  // worker this constant survives the bundle as a plain boolean.
+  const isDev = Boolean((import.meta as { env?: { DEV?: boolean } }).env?.DEV);
+  const resolved = resolveDrainEndpoint(stored.apiBaseUrl as string | undefined, isDev);
+
+  if (!resolved.ok) {
+    // Production build with no apiBaseUrl configured. Skipping the drain is
+    // the SAFE choice — we'd previously default to localhost, silently
+    // dropping every queued edit. The queue is left untouched so a future
+    // drain (after the user configures the API URL in options) can succeed.
+    console.error(
+      "[AutoApply] Skipping offline drain: no apiBaseUrl configured in production. " +
+        `Preserving ${pending.length} pending edit(s) for retry once the API URL is set.`,
+    );
+    return;
+  }
+
+  if (resolved.usedFallback) {
+    console.warn(
+      `[AutoApply] No apiBaseUrl configured; using dev localhost fallback for ${pending.length} edit(s).`,
+    );
+  }
 
   console.log(`[AutoApply] Draining ${pending.length} offline edits...`);
 
   const { active, newlyDeadLettered, syncedCount } = await processOfflineQueue(
     queue,
     fetch,
-    `${apiBase}/vault/sync-markdown`,
+    resolved.endpoint,
   );
 
   if (syncedCount > 0) {
