@@ -1256,9 +1256,22 @@ async function migrateProviderKeysOnClick(): Promise<void> {
         modelOverride: entry?.model ?? null,
       });
       if (res.ok) {
-        configs = stripLocalKey(configs, name);
-        // Persist after each success so a later failure can't roll back work.
-        await chrome.storage.local.set({ providerConfigs: configs });
+        // P1-B (#198 round 2): two-tab race — chrome.storage.local.set is
+        // NOT atomic across tabs, and two Options tabs migrating
+        // different providers in parallel could clobber each other's
+        // edits to other rows. Re-read storage immediately before the
+        // write, merge our strip into the freshest state, then persist.
+        // This is a "last-write-wins" read-modify-write — the only
+        // mutation we make here is clearing one specific apiKey, so any
+        // concurrent edit to other rows survives.
+        const fresh = await chrome.storage.local.get("providerConfigs");
+        const latest =
+          (fresh.providerConfigs as MigrationProvidersMap | undefined) ?? configs;
+        const merged = stripLocalKey(latest, name);
+        await chrome.storage.local.set({ providerConfigs: merged });
+        // Reflect the merge back into our local working copy so the
+        // next iteration sees the freshest state of every row.
+        configs = merged;
         successes.push(name);
       } else {
         failures.push({ name, reason: res.reason });
