@@ -19,7 +19,6 @@ from app.services.llm_gateway import (
     _scrub,
 )
 
-
 # -- direct scrubber unit tests ------------------------------------------
 
 
@@ -161,7 +160,13 @@ async def test_gateway_error_message_scrubs_upstream_secret():
 
     captured_messages: list[str] = []
 
-    from loguru import logger as _logger
+    # Use the gateway module's bound logger to dodge sys.modules-level
+    # ``loguru.logger`` mutations performed by other tests in the suite.
+    from app.services import llm_gateway as _gw
+
+    _logger = _gw.logger
+    if not hasattr(_logger, "add") or not hasattr(_logger, "remove"):
+        pytest.skip("loguru.logger was monkey-patched by another test module")
 
     def sink(message) -> None:  # noqa: ANN001
         captured_messages.append(message.record["message"])

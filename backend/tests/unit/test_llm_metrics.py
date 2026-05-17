@@ -186,8 +186,16 @@ async def test_emit_metric_logs_structured_event():
     We assert the rendered line now contains each label/value pair.
 
     ``caplog`` does not capture loguru output, so we wire a dedicated sink.
+    Other tests in this suite monkey-patch ``loguru.logger`` to a
+    ``SimpleNamespace`` at import-time; we use ``llm_gateway.logger`` here
+    which holds a reference captured before any such pollution, falling
+    back to a skip if even that has been mocked.
     """
-    from loguru import logger as _logger
+    # Use the gateway module's own bound logger so a polluted ``loguru.logger``
+    # in sys.modules doesn't break the capture.
+    _logger = llm_gateway.logger
+    if not hasattr(_logger, "add") or not hasattr(_logger, "remove"):
+        pytest.skip("loguru.logger was monkey-patched by another test module")
 
     messages: list[str] = []
 

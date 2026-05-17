@@ -24,9 +24,7 @@ import pytest
 from app.services import llm_gateway
 
 
-@pytest.mark.skipif(
-    not llm_gateway._HAS_PROMETHEUS, reason="prometheus_client unavailable"
-)
+@pytest.mark.skipif(not llm_gateway._HAS_PROMETHEUS, reason="prometheus_client unavailable")
 def test_reload_keeps_prometheus_enabled_in_subprocess():
     """After importlib.reload, _HAS_PROMETHEUS stays True and collectors
     remain usable (i.e. .labels(...).inc() doesn't raise).
@@ -67,15 +65,13 @@ def test_reload_keeps_prometheus_enabled_in_subprocess():
         text=True,
         check=False,
     )
-    assert result.returncode == 0, (
-        f"subprocess failed:\nstdout={result.stdout!r}\nstderr={result.stderr!r}"
-    )
+    assert (
+        result.returncode == 0
+    ), f"subprocess failed:\nstdout={result.stdout!r}\nstderr={result.stderr!r}"
     assert "OK" in result.stdout
 
 
-@pytest.mark.skipif(
-    not llm_gateway._HAS_PROMETHEUS, reason="prometheus_client unavailable"
-)
+@pytest.mark.skipif(not llm_gateway._HAS_PROMETHEUS, reason="prometheus_client unavailable")
 def test_helper_recovers_existing_collector_on_value_error():
     """The helper must return the already-registered collector when
     ``Counter()`` raises ``ValueError`` for a duplicate name.
@@ -88,9 +84,7 @@ def test_helper_recovers_existing_collector_on_value_error():
     assert first is second
 
 
-@pytest.mark.skipif(
-    not llm_gateway._HAS_PROMETHEUS, reason="prometheus_client unavailable"
-)
+@pytest.mark.skipif(not llm_gateway._HAS_PROMETHEUS, reason="prometheus_client unavailable")
 def test_helper_recovers_existing_histogram_on_value_error():
     name = "llm_test_duplicate_histogram_xyz"
     first = llm_gateway._get_or_create_histogram(name, "doc", ("p",), (1.0, 2.0, float("inf")))

@@ -80,6 +80,7 @@ def _scrub(text: object) -> str:
         s = pattern.sub("[REDACTED]", s)
     return s
 
+
 # -- Prometheus metrics (optional) --
 # Use ``prometheus_client`` if available — it ships as a transitive dep of
 # ``prometheus-fastapi-instrumentator``. We fall back to structured loguru
@@ -110,9 +111,7 @@ try:  # pragma: no cover - import guard
                 raise
             return existing  # type: ignore[return-value]
 
-    def _get_or_create_counter(
-        name: str, doc: str, labelnames: tuple[str, ...]
-    ) -> Counter:
+    def _get_or_create_counter(name: str, doc: str, labelnames: tuple[str, ...]) -> Counter:
         try:
             return Counter(name, doc, labelnames=labelnames)
         except ValueError:
@@ -1112,6 +1111,23 @@ async def tailor_resume(
         bullet_count=resume_ast.bullet_count,
     )
 
+    # ── Redis circuit breaker check (#189) ─────────────────
+    # The Redis breaker only protected ``LLMGateway.generate``'s cascade
+    # before this fix. ``tailor_resume`` calls ``provider.complete()``
+    # directly via the PROVIDERS registry, so the highest-volume caller
+    # bypassed the new breaker entirely. Gate the call here so a tripped
+    # breaker short-circuits to the keyword fallback path.
+    if provider_name not in ("fallback", "") and await llm_circuit_redis.is_open(provider_name):
+        logger.warning(
+            "tailor_resume: provider '{}' circuit OPEN — using keyword fallback",
+            provider_name,
+        )
+        return (
+            [b.text for b in resume_ast.bullets],
+            True,
+            "LLM service temporarily unavailable (circuit open). Showing original.",
+        )
+
     # ── Call the LLM ──────────────────────────────────────
     try:
         raw_response = await provider.complete(SYSTEM_PROMPT, user_prompt, api_key)
@@ -1124,6 +1140,12 @@ async def tailor_resume(
                 "LLM unavailable. Showing original bullets with keyword relevance scores.",
             )
 
+        # Record success against the Redis breaker so a streak of
+        # transient failures doesn't accidentally keep the circuit closed
+        # by an unrelated record_failure from another caller (#189).
+        if provider_name not in ("fallback", ""):
+            await llm_circuit_redis.record_success(provider_name)
+
         # Parse the response into individual bullets
         rewritten_bullets = _parse_llm_response(raw_response, resume_ast.bullet_count)
 
@@ -1135,6 +1157,8 @@ async def tailor_resume(
         return rewritten_bullets, False, summary
 
     except CircuitOpenError as e:
+        # The in-process @llm_circuit decorator on provider.complete() can
+        # trip independently of the Redis breaker. Preserve legacy behaviour.
         logger.warning(f"Circuit open for {provider_name}: {_scrub(e)}")
         return (
             [b.text for b in resume_ast.bullets],
@@ -1143,6 +1167,8 @@ async def tailor_resume(
         )
 
     except InvalidAPIKeyError:
+        # Auth failures don't indicate provider health — don't record as
+        # a circuit breaker failure (#189).
         logger.warning(f"Invalid API key for {provider_name}")
         return (
             [b.text for b in resume_ast.bullets],
@@ -1151,6 +1177,9 @@ async def tailor_resume(
         )
 
     except RateLimitError:
+        # Rate-limit IS a provider health signal — increment the breaker.
+        if provider_name not in ("fallback", ""):
+            await llm_circuit_redis.record_failure(provider_name)
         logger.warning(f"Rate limited by {provider_name}")
         return (
             [b.text for b in resume_ast.bullets],
@@ -1159,6 +1188,10 @@ async def tailor_resume(
         )
 
     except Exception as e:
+        # Any other failure counts as a provider failure for the Redis
+        # breaker — three of these in a 60s window open the circuit.
+        if provider_name not in ("fallback", ""):
+            await llm_circuit_redis.record_failure(provider_name)
         # Issue #190 — never dump raw exception text (or its traceback) when
         # the upstream body may contain echoed API keys. Strip secrets first
         # and drop ``exc_info`` so loguru's diagnose-formatter doesn't expand
