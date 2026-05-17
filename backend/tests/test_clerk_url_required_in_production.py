@@ -333,9 +333,7 @@ def _sign_clerk_token(
 
 
 def _request_with_bearer(token: str, *, x_header: str | None = None) -> Request:
-    headers: list[tuple[bytes, bytes]] = [
-        (b"authorization", f"Bearer {token}".encode())
-    ]
+    headers: list[tuple[bytes, bytes]] = [(b"authorization", f"Bearer {token}".encode())]
     if x_header is not None:
         headers.append((b"x-clerk-user-id", x_header.encode()))
     scope = {
@@ -438,17 +436,13 @@ async def test_production_jwt_takes_precedence_over_header(
         except Exception:
             pass
         result = MagicMock()
-        result.scalar_one_or_none.return_value = MagicMock(
-            clerk_id=jwt_sub, is_active=True
-        )
+        result.scalar_one_or_none.return_value = MagicMock(clerk_id=jwt_sub, is_active=True)
         return result
 
     mock_db = AsyncMock()
     mock_db.execute = AsyncMock(side_effect=_capture_execute)
 
-    with patch.object(
-        deps_module, "_resolve_jwk_for_kid", AsyncMock(return_value=jwk)
-    ):
+    with patch.object(deps_module, "_resolve_jwk_for_kid", AsyncMock(return_value=jwk)):
         user = await get_current_user(
             request=_request_with_bearer(token, x_header=header_sub),
             db=mock_db,
@@ -499,15 +493,15 @@ async def test_production_rejects_jwt_from_foreign_tenant(
     mock_db = AsyncMock()
     mock_db.execute = AsyncMock()
 
-    with patch.object(
-        deps_module, "_resolve_jwk_for_kid", AsyncMock(return_value=jwk)
+    with (
+        patch.object(deps_module, "_resolve_jwk_for_kid", AsyncMock(return_value=jwk)),
+        pytest.raises(HTTPException) as exc_info,
     ):
-        with pytest.raises(HTTPException) as exc_info:
-            await get_current_user(
-                request=_request_with_bearer(token),
-                db=mock_db,
-                x_clerk_user_id=None,
-            )
+        await get_current_user(
+            request=_request_with_bearer(token),
+            db=mock_db,
+            x_clerk_user_id=None,
+        )
 
     assert exc_info.value.status_code == 401
     # The foreign sub must NEVER be resolved against the local DB.
