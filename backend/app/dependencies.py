@@ -279,11 +279,13 @@ async def get_current_user(
     # Belt-and-braces for Issue #90: the config validator already refuses to
     # construct Settings without CLERK_FRONTEND_API_URL in production, but if
     # something monkey-patches the value at runtime we must NOT silently fall
-    # through to the X-Clerk-User-Id header bypass.
-    if settings.is_production and not settings.CLERK_FRONTEND_API_URL:
+    # through to the X-Clerk-User-Id header bypass. ``clerk_jwt_enforced``
+    # centralises the "JWT required" policy in app.config so the two
+    # defenses (this guard and the header-trust check below) cannot drift.
+    if settings.clerk_jwt_enforced and not settings.CLERK_FRONTEND_API_URL:
         logger.error(
-            "CLERK_FRONTEND_API_URL is unset in production — refusing request "
-            "to prevent X-Clerk-User-Id auth bypass (Issue #90)."
+            "CLERK_FRONTEND_API_URL is unset while clerk_jwt_enforced=True — "
+            "refusing request to prevent X-Clerk-User-Id auth bypass (Issue #90)."
         )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -328,10 +330,13 @@ async def get_current_user(
 
     # ── 2. Header path (extension / dev only) ────────────────────────────
     # The X-Clerk-User-Id header is a TRUSTED CLAIM with no cryptographic
-    # binding. In production the JWT path above is the only acceptable
-    # authentication mechanism — ignore the header outright to avoid any
-    # path that would resolve a user from an unverified header value.
-    if clerk_id is None and x_clerk_user_id and not settings.is_production:
+    # binding. Whenever JWT enforcement is on (any production deploy, or any
+    # non-production deploy that has CLERK_FRONTEND_API_URL set) the JWT
+    # path above is the only acceptable authentication mechanism — ignore
+    # the header outright. The check uses ``settings.clerk_jwt_enforced``
+    # so this policy lives in exactly one place (app.config) and the two
+    # defenses cannot drift.
+    if clerk_id is None and x_clerk_user_id and not settings.clerk_jwt_enforced:
         clerk_id = x_clerk_user_id
 
     if clerk_id:
