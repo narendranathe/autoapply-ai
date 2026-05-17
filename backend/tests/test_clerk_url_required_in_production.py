@@ -18,11 +18,15 @@ full ASGI app, so they remain fast and focused.
 
 from __future__ import annotations
 
+import time
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import HTTPException, Request
+from jose import jwt
+from jose.utils import long_to_base64
 from pydantic import ValidationError
 
 from app.config import Settings
@@ -192,7 +196,15 @@ async def test_production_without_clerk_url_request_returns_401(
     """Defense-in-depth: even if a runtime monkey-patch leaves the URL
     empty while ENVIRONMENT=production (the config validator would normally
     block this at startup), get_current_user must refuse the request with
-    401 — never trust the X-Clerk-User-Id header in production."""
+    401 — never trust the X-Clerk-User-Id header in production.
+
+    Asserting the **exact detail string** (not just the 401 status) pins
+    the early-guard path independently from the later
+    ``not settings.clerk_jwt_enforced`` check at the header-trust step. If
+    the early guard is ever removed, the request would still 401 — but
+    with a different detail ("Authentication required.") — and this test
+    would fail loudly, surfacing the regression. See Critic 3's mutation
+    finding on round 1."""
     from app.dependencies import settings
 
     monkeypatch.setattr(settings, "ENVIRONMENT", "production")
@@ -209,6 +221,9 @@ async def test_production_without_clerk_url_request_returns_401(
         )
 
     assert exc_info.value.status_code == 401
+    # Pin the early-guard detail so deleting the guard breaks this test
+    # even though the later check would still produce a 401.
+    assert exc_info.value.detail == "Authentication unavailable: server misconfigured."
     # No DB lookup should have run — we want to fail before any user resolution.
     mock_db.execute.assert_not_awaited()
     # The error must NOT leak the impersonated id back to the caller.
