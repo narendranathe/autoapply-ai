@@ -31,8 +31,10 @@ from app.routers import (
 async def lifespan(app: FastAPI):
     """Application startup and shutdown events."""
     logger.info(f"Starting {settings.APP_NAME} (env={settings.ENVIRONMENT})")
-    # Force re-evaluation of fail-fast config properties at boot so a misconfigured
-    # production deploy crashes here rather than serving the first request.
+    # Touch cors_origins at boot so any startup-time CORS evaluation happens
+    # before the first request. The CRITICAL warning for a missing
+    # EXTENSION_ID in production is already emitted at Settings construction
+    # (see app.config.Settings.warn_production_extension_id_missing).
     _ = settings.cors_origins
     yield
     logger.info(f"Shutting down {settings.APP_NAME}")

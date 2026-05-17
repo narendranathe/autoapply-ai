@@ -122,8 +122,13 @@ class Settings(BaseSettings):
     OLLAMA_BASE_URL: str = "http://localhost:11434"
 
     # ── CORS ──────────────────────────────────────────────
-    # In production set EXTENSION_ID to your published Chrome extension ID
-    # so only your extension can call the API.
+    # In production set EXTENSION_ID to your published Chrome extension id so
+    # only your extension can call the API. If EXTENSION_ID is unset in
+    # production, ``cors_origins`` falls back to a non-routable placeholder
+    # origin (NOT the chrome-extension://* wildcard) — see ``cors_origins`` —
+    # and ``warn_production_extension_id_missing`` emits a CRITICAL log line
+    # once at settings construction so operators see the misconfiguration at
+    # startup (issue #92).
     EXTENSION_ID: str = ""
     ALLOWED_ORIGINS: list[str] = [
         "chrome-extension://*",
@@ -131,24 +136,34 @@ class Settings(BaseSettings):
         "http://localhost:5173",
     ]
 
+    # Placeholder origin returned in production when EXTENSION_ID is unset.
+    # Using a non-routable placeholder (rather than the chrome-extension://*
+    # wildcard) ensures that a misconfigured production deploy denies all
+    # extension origins by default instead of allowing every installed
+    # extension to call the API.
+    CORS_PRODUCTION_PLACEHOLDER_ORIGIN: str = "chrome-extension://PLACEHOLDER_SET_EXTENSION_ID"
+
     @property
     def cors_origins(self) -> list[str]:
         """
         Returns effective CORS origins.
-        In production EXTENSION_ID is required so CORS is restricted to a single
-        published extension; falling back to a chrome-extension://* wildcard
-        would let any extension call the API. Raises RuntimeError at startup
-        when the production deploy is missing the secret.
+
+        In production, EXTENSION_ID restricts CORS to a single published
+        extension. If EXTENSION_ID is not set, we fall back to a placeholder
+        origin (never the chrome-extension://* wildcard) so a misconfigured
+        deploy fails closed. A CRITICAL log line is emitted once at settings
+        construction (see ``warn_production_extension_id_missing``) so
+        operators see the misconfiguration at startup.
+
+        In non-production environments, the configured ALLOWED_ORIGINS
+        (including the chrome-extension://* wildcard) is returned unchanged.
         """
         if self.is_production:
             if not self.EXTENSION_ID:
-                raise RuntimeError(
-                    "EXTENSION_ID must be set when ENVIRONMENT=production. "
-                    "The chrome-extension://* wildcard in ALLOWED_ORIGINS would "
-                    "otherwise let any installed extension call the API. "
-                    "Set it to your published Chrome Web Store extension id, e.g. "
-                    "`fly secrets set EXTENSION_ID=<your-extension-id>`."
-                )
+                return [
+                    self.CORS_PRODUCTION_PLACEHOLDER_ORIGIN,
+                    *[o for o in self.ALLOWED_ORIGINS if not o.startswith("chrome-extension://")],
+                ]
             return [
                 f"chrome-extension://{self.EXTENSION_ID}",
                 *[o for o in self.ALLOWED_ORIGINS if not o.startswith("chrome-extension://")],
@@ -207,6 +222,52 @@ class Settings(BaseSettings):
                 "DEV_TEST_USER_ID must not be set when ENVIRONMENT=production "
                 "(dev auth bypass is unsafe in production)."
             )
+        return self
+
+    @model_validator(mode="after")
+    def warn_production_extension_id_missing(self) -> Self:
+        """
+        Emit a CRITICAL log line once at settings construction when a
+        production deploy is missing EXTENSION_ID. The chrome-extension://*
+        wildcard would otherwise let any installed extension call the API;
+        ``cors_origins`` falls back to a non-routable placeholder so the
+        deploy fails closed, but operators must still see this loud and clear
+        at startup (issue #92).
+        """
+        if self.is_production and not self.EXTENSION_ID:
+            # Import lazily to avoid a top-level dependency on loguru when
+            # Settings is used outside the FastAPI app (e.g. management
+            # scripts that don't install loguru's sinks). We also catch
+            # AttributeError because several existing unit tests replace
+            # ``loguru.logger`` with a ``types.SimpleNamespace`` that does
+            # not expose ``.critical``; in that case we degrade to stdlib
+            # logging rather than crashing settings construction.
+            emitted = False
+            try:
+                from loguru import logger as _loguru_logger
+
+                _loguru_logger.critical(
+                    "EXTENSION_ID is not set in production. CORS will fall back "
+                    "to the placeholder origin '{placeholder}' (NOT the "
+                    "chrome-extension://* wildcard) so no extension can call "
+                    "the API until EXTENSION_ID is configured. Set it to your "
+                    "published Chrome Web Store extension id, e.g. "
+                    "`fly secrets set EXTENSION_ID=<your-extension-id>`.",
+                    placeholder=self.CORS_PRODUCTION_PLACEHOLDER_ORIGIN,
+                )
+                emitted = True
+            except (ImportError, AttributeError):
+                emitted = False
+            if not emitted:
+                import logging
+
+                logging.getLogger(__name__).critical(
+                    "EXTENSION_ID is not set in production. CORS will fall back "
+                    "to the placeholder origin '%s' (NOT the chrome-extension://* "
+                    "wildcard). Set EXTENSION_ID to your published Chrome Web "
+                    "Store extension id.",
+                    self.CORS_PRODUCTION_PLACEHOLDER_ORIGIN,
+                )
         return self
 
     @property
