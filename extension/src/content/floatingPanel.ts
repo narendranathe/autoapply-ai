@@ -7,6 +7,7 @@
 
 import type { DetectedField, DetectedQuestion, FieldType, QuestionCategory } from "../shared/types";
 import { FIELD_PATTERNS, QUESTION_CATEGORY_PATTERNS } from "../shared/detection-patterns";
+import { isAllowedAtsOrigin, resolveIframeOrigin } from "../shared/ats-origins";
 import { initAshbyApply } from "./ashbyApply";
 import { initBambooHRApply } from "./bamboohrApply";
 import { initGreenhouseApply } from "./greenhouseApply";
@@ -563,6 +564,7 @@ class FloatingPanel {
 
     // IframeFieldBridge: listen for field scan results from same-origin iframes
     window.addEventListener("message", (e: MessageEvent) => {
+      if (!isAllowedAtsOrigin(e.origin)) return;
       if (e.data?.type === "AAP_FIELDS_RESULT" && Array.isArray(e.data.fields)) {
         const iframeFields = e.data.fields as import("../shared/types").DetectedField[];
         // Find the source iframe
@@ -1123,7 +1125,9 @@ class FloatingPanel {
   private fillFieldSmart(fieldId: string, value: string): void {
     const sourceIframe = this._iframeMap.get(fieldId);
     if (sourceIframe) {
-      sourceIframe.contentWindow?.postMessage({ type: "AAP_FILL_FIELD", fieldId, value }, "*");
+      const origin = resolveIframeOrigin(sourceIframe);
+      if (!origin || !isAllowedAtsOrigin(origin)) return;
+      sourceIframe.contentWindow?.postMessage({ type: "AAP_FILL_FIELD", fieldId, value }, origin);
     } else {
       fillDomField(fieldId, value);
     }
@@ -1181,12 +1185,12 @@ class FloatingPanel {
   private scanIframes(): void {
     const iframes = Array.from(document.querySelectorAll("iframe")) as HTMLIFrameElement[];
     for (const iframe of iframes) {
+      const origin = resolveIframeOrigin(iframe);
+      if (!origin || !isAllowedAtsOrigin(origin)) continue;
       try {
-        // Test same-origin access
-        void iframe.contentWindow?.location.href;
-        iframe.contentWindow?.postMessage({ type: "AAP_SCAN_FIELDS" }, "*");
+        iframe.contentWindow?.postMessage({ type: "AAP_SCAN_FIELDS" }, origin);
       } catch {
-        // Cross-origin — skip silently
+        // Cross-origin or detached frame — skip silently
       }
     }
   }
