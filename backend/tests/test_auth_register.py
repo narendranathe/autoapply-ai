@@ -260,6 +260,44 @@ async def test_get_authenticated_clerk_id_returns_header_value(monkeypatch):
     assert clerk == "clerk_from_header_xyz"
 
 
+@pytest.mark.asyncio
+async def test_get_authenticated_clerk_id_rejects_whitespace_only_header(monkeypatch):
+    """A whitespace-only ``X-Clerk-User-Id`` header is truthy in Python but
+    is not a valid identity. The dependency must reject it with 401 — not
+    pass ``"   "`` through to the DB lookup.
+    """
+    from fastapi import HTTPException
+
+    from app.dependencies import get_authenticated_clerk_id, settings
+
+    monkeypatch.setattr(settings, "CLERK_FRONTEND_API_URL", "")
+
+    for blank in ("   ", "\t", "\n", " \t \n "):
+        with pytest.raises(HTTPException) as exc_info:
+            await get_authenticated_clerk_id(
+                request=_request_without_auth(),
+                x_clerk_user_id=blank,
+            )
+        assert exc_info.value.status_code == 401, f"expected 401 for {blank!r}"
+
+
+@pytest.mark.asyncio
+async def test_get_authenticated_clerk_id_strips_surrounding_whitespace(monkeypatch):
+    """A header padded with whitespace (e.g. from a stray newline in a curl
+    header file) should resolve to the trimmed clerk_id, not the padded
+    value — otherwise the DB lookup would fail to match the stored id.
+    """
+    from app.dependencies import get_authenticated_clerk_id, settings
+
+    monkeypatch.setattr(settings, "CLERK_FRONTEND_API_URL", "")
+
+    clerk = await get_authenticated_clerk_id(
+        request=_request_without_auth(),
+        x_clerk_user_id="  clerk_padded  ",
+    )
+    assert clerk == "clerk_padded"
+
+
 # ---------------------------------------------------------------------------
 # Unit: register_user happy path (mocked DB, no transaction fixture friction)
 # ---------------------------------------------------------------------------
