@@ -395,6 +395,10 @@ async def _dispatch_provider_entry(
     in the multi-provider helpers below to a single gateway call. Returns
     ``(raw_text, provider_used)``. An empty string for the text means the
     gateway exhausted its cascade for this provider entry.
+
+    Issue #188 — propagates the per-entry ``model`` to the gateway so cloud
+    providers honour user-selected variants (e.g. ``gemini-1.5-pro``). For
+    Ollama, the same ``model`` field is used as the local model tag.
     """
     name = p.get("name", "")
     api_key = p.get("api_key", "")
@@ -403,12 +407,25 @@ async def _dispatch_provider_entry(
     # Ollama does not need a key; every other provider does.
     if name != "ollama" and not api_key:
         return ("", name)
+
+    entry_model = p.get("model") or None
+    # For Ollama, the entry's ``model`` is the local model tag. For cloud
+    # providers, it's the API model id forwarded via ``model=``.
+    if name == "ollama":
+        return await _llm_gateway.generate(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            provider=name,
+            api_key=api_key,
+            ollama_model=entry_model or ollama_model,
+        )
     return await _llm_gateway.generate(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
         provider=name,
         api_key=api_key,
         ollama_model=ollama_model,
+        model=entry_model,
     )
 
 
@@ -629,11 +646,15 @@ Write exactly 1 compelling draft answer (180-220 words). Return only the answer 
     async def _call_one(p: dict) -> tuple[str, str]:
         name = p.get("name", "")
         try:
+            # Issue #188: ``_dispatch_provider_entry`` now routes the entry's
+            # ``model`` field per-provider — passing it again as
+            # ``ollama_model`` previously meant a Gemini ``model`` (e.g.
+            # ``"gemini-1.5-pro"``) would be sent to the Ollama fallback hop
+            # as the local model tag. Let the dispatcher handle routing.
             raw, _ = await _dispatch_provider_entry(
                 p,
                 _ANSWER_SYSTEM_PROMPT,
                 user_prompt,
-                ollama_model=p.get("model", "") or "llama3.1:8b",
             )
             return (raw.strip(), name) if raw and len(raw) > 50 else ("", name)
         except Exception as e:

@@ -796,6 +796,7 @@ class LLMGateway:
         provider: str,
         api_key: str = "",
         ollama_model: str = "llama3.1:8b",
+        model: str | None = None,
     ) -> tuple[str, str]:
         """
         Dispatch a completion request through the provider cascade.
@@ -814,6 +815,11 @@ class LLMGateway:
             provider will be skipped and the cascade starts at Ollama.
         ollama_model:
             Ollama model tag (default "llama3.1:8b").
+        model:
+            Optional per-provider model id override. When set, ``gemini``,
+            ``groq``, and ``perplexity`` use this model id instead of their
+            built-in defaults (#188). Ignored for providers that don't
+            accept a runtime model override (anthropic, openai, kimi).
 
         Returns
         -------
@@ -838,14 +844,42 @@ class LLMGateway:
         elif provider == "openai" and api_key:
             cascade.append(("openai", lambda: _call_openai(system_prompt, user_prompt, api_key)))
         elif provider == "groq" and api_key:
-            cascade.append(("groq", lambda: _call_groq(system_prompt, user_prompt, api_key)))
+            cascade.append(
+                (
+                    "groq",
+                    lambda: _call_groq(
+                        system_prompt,
+                        user_prompt,
+                        api_key,
+                        model or "llama-3.3-70b-versatile",
+                    ),
+                )
+            )
         elif provider == "kimi" and api_key:
             cascade.append(("kimi", lambda: _call_kimi(system_prompt, user_prompt, api_key)))
         elif provider == "gemini" and api_key:
-            cascade.append(("gemini", lambda: _call_gemini(system_prompt, user_prompt, api_key)))
+            cascade.append(
+                (
+                    "gemini",
+                    lambda: _call_gemini(
+                        system_prompt,
+                        user_prompt,
+                        api_key,
+                        model or "gemini-1.5-flash",
+                    ),
+                )
+            )
         elif provider == "perplexity" and api_key:
             cascade.append(
-                ("perplexity", lambda: _call_perplexity(system_prompt, user_prompt, api_key))
+                (
+                    "perplexity",
+                    lambda: _call_perplexity(
+                        system_prompt,
+                        user_prompt,
+                        api_key,
+                        model or "sonar",
+                    ),
+                )
             )
         elif provider == "ollama":
             # Ollama needs no key; add it as primary and skip the second append below
