@@ -121,6 +121,21 @@ class Settings(BaseSettings):
     # ── Ollama ────────────────────────────────────────────
     OLLAMA_BASE_URL: str = "http://localhost:11434"
 
+    # ── Issue #197 transition ────────────────────────────
+    # Issue #197 removed the contract where the extension transmitted
+    # decrypted provider API keys on every generation request. The
+    # backend now resolves keys from ``user_provider_configs``.
+    #
+    # During the Chrome Web Store rollout window, older installs still
+    # POST the legacy ``providers_json`` field (which carried the keys).
+    # Setting this flag to ``True`` softens the rejection: the field is
+    # parsed for ``{name, model}`` only, the embedded ``api_key`` is
+    # stripped (the server resolves it anyway), and a WARN log records
+    # the offending user-agent so operators can track rollout progress.
+    # Default is ``False`` — once the new extension has propagated, set
+    # to ``False`` (or leave it) to enforce 422 again.
+    ACCEPT_LEGACY_PROVIDERS_JSON: bool = False
+
     # ── CORS ──────────────────────────────────────────────
     # In production set EXTENSION_ID to your published Chrome extension ID
     # so only your extension can call the API.

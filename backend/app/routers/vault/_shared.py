@@ -10,6 +10,7 @@ from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models.user import User
 from app.models.user_provider_config import UserProviderConfig
 from app.services.ats_service import ATSResult
@@ -46,29 +47,43 @@ def _reject_providers_json(
     user_id: _uuid.UUID | None = None,
     request: Request | None = None,
 ) -> None:
-    """Reject the deprecated ``providers_json`` field with HTTP 422.
+    """Reject or soften the deprecated ``providers_json`` field.
 
     Issue #197 removed the contract where the client transmits decrypted
-    API keys on every request. We refuse the old field outright so
-    misconfigured clients fail loudly instead of silently leaking keys
-    over the wire.
+    API keys on every request. The default behaviour is hard 422 — no
+    backward-compat window — so misconfigured clients fail loudly.
 
     Observability (P1-F): every rejection logs a structured WARNING with
-    the user id and ``User-Agent`` header BEFORE raising
-    ``HTTPException`` so operators can identify which extension installs
-    are still on the legacy contract during the Chrome Web Store
-    rollout. The previous round-1 implementation raised silently — once
-    the exception propagated out, the request was 422'd with no log
-    line and operators had no signal at all about which client versions
-    were still calling.
+    the user id and ``User-Agent`` header so operators can identify
+    which extension installs are still on the legacy contract during
+    the Chrome Web Store rollout.
+
+    Transition window (P0-G): when
+    :attr:`Settings.ACCEPT_LEGACY_PROVIDERS_JSON` is ``True``, the field
+    is NOT rejected. Instead this function returns silently after
+    logging a WARNING. The caller (``_resolve_providers``) is
+    responsible for parsing the legacy payload and stripping the
+    embedded ``api_key`` so it never reaches downstream — the server
+    resolves keys from ``user_provider_configs`` regardless. Operators
+    should flip the flag back to ``False`` once the new extension is
+    fully rolled out.
     """
     if not value or not value.strip():
         return
 
     ua = request.headers.get("user-agent", "<unknown>") if request is not None else "<unknown>"
-    # Log first so operators see WHICH clients are being rejected
-    # (HTTPException doesn't carry request context into the logs by
-    # default).
+    if settings.ACCEPT_LEGACY_PROVIDERS_JSON:
+        # Transition window — log and let the caller strip api_key.
+        logger.warning(
+            "legacy_providers_json_accepted user={} ua={} reason=ACCEPT_LEGACY_PROVIDERS_JSON",
+            user_id,
+            ua,
+        )
+        return
+
+    # Strict mode — log first so operators can see WHICH clients are
+    # being rejected (an HTTPException after this point doesn't carry
+    # request context into the logs by default).
     logger.warning(
         "legacy_providers_json_rejected user={} ua={}",
         user_id,
@@ -116,6 +131,37 @@ def _parse_providers(providers: str) -> list[dict]:
     ]
 
 
+def _parse_legacy_providers_json_stripped(value: str) -> list[dict]:
+    """Parse the legacy ``providers_json`` form field and strip ``api_key``.
+
+    Issue #197 P0-G — only invoked when
+    :attr:`Settings.ACCEPT_LEGACY_PROVIDERS_JSON` is ``True``. The
+    embedded ``api_key`` value is dropped on the floor (the server
+    resolves keys server-side regardless) so even in the transition
+    window a legacy client cannot smuggle a key past us.
+
+    Returns the same shape as ``_parse_providers``. Malformed JSON or a
+    non-list payload is treated as "no providers" so a buggy legacy
+    client falls through to the empty-list server-fallback rather than
+    failing the request — the goal of the flag is to keep old installs
+    working during rollout.
+    """
+    if not value or not value.strip():
+        return []
+    try:
+        parsed = _json.loads(value)
+    except Exception:
+        logger.warning("legacy_providers_json_unparseable — falling back to server enumeration")
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [
+        {"name": str(e.get("name", "")), "model": str(e.get("model", ""))}
+        for e in parsed
+        if isinstance(e, dict)
+    ]
+
+
 async def _resolve_providers(
     providers: str,
     db: "AsyncSession",
@@ -152,6 +198,18 @@ async def _resolve_providers(
         _reject_providers_json(providers_json, user_id=user.id, request=request)
 
     requested = _parse_providers(providers)
+    # P0-G transition window — when the flag is on and the legacy field
+    # carried provider entries, fall back to them so the request still
+    # works. The ``api_key`` inside is stripped by the parser; the
+    # server resolves keys from ``user_provider_configs`` regardless.
+    if (
+        not requested
+        and providers_json
+        and providers_json.strip()
+        and settings.ACCEPT_LEGACY_PROVIDERS_JSON
+    ):
+        requested = _parse_legacy_providers_json_stripped(providers_json)
+
     if requested:
         # Strict mode — the client explicitly named providers. If any of
         # them lacks a server-side key, surface HTTP 400 with the missing

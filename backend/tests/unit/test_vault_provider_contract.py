@@ -61,6 +61,7 @@ from fastapi import HTTPException  # noqa: E402
 
 from app.routers.vault._shared import (  # noqa: E402
     _expose_providers_for_gateway,
+    _parse_legacy_providers_json_stripped,
     _parse_providers,
     _reject_providers_json,
     _resolve_providers,
@@ -695,3 +696,115 @@ def test_reject_providers_json_logs_warning_with_user_and_user_agent():
     assert "AutoApply-Chrome-Ext/1.2.3" in log_output
 
 
+def test_reject_providers_json_accept_flag_logs_warning_and_returns():
+    """P0-G — when ``ACCEPT_LEGACY_PROVIDERS_JSON`` is True, the
+    rejection is suppressed but a WARN line still records the
+    user/UA. The function returns None (no raise)."""
+    from app.config import settings as _settings
+
+    saved = _settings.ACCEPT_LEGACY_PROVIDERS_JSON
+    _settings.ACCEPT_LEGACY_PROVIDERS_JSON = True
+    sink, restore = _install_fresh_loguru_sink()
+    try:
+        user_id = uuid.uuid4()
+        request = MagicMock()
+        request.headers = {"user-agent": "AutoApply-Chrome-Ext/0.9.0"}
+
+        # MUST NOT raise.
+        _reject_providers_json(
+            '[{"name":"groq","api_key":"gsk_x"}]',
+            user_id=user_id,
+            request=request,
+        )
+
+        log_output = sink.getvalue()
+    finally:
+        restore()
+        _settings.ACCEPT_LEGACY_PROVIDERS_JSON = saved
+
+    assert "WARNING" in log_output
+    assert "legacy_providers_json_accepted" in log_output
+    assert str(user_id) in log_output
+    assert "AutoApply-Chrome-Ext/0.9.0" in log_output
+
+
+def test_parse_legacy_providers_json_strips_api_key():
+    """Even with the transition flag on, the embedded ``api_key`` must
+    be dropped on the floor — the server resolves keys server-side
+    regardless. A legacy install cannot smuggle a key past us."""
+    parsed = _parse_legacy_providers_json_stripped(
+        '[{"name":"groq","model":"llama-3.3-70b","api_key":"gsk_LEAK"}]'
+    )
+    assert parsed == [{"name": "groq", "model": "llama-3.3-70b"}]
+    for entry in parsed:
+        assert "api_key" not in entry
+        # Belt-and-braces: serialise and check the plaintext is nowhere.
+        import json as _j
+
+        assert "gsk_LEAK" not in _j.dumps(entry)
+
+
+@pytest.mark.asyncio
+async def test_resolve_providers_accept_legacy_flag_uses_legacy_payload():
+    """P0-G end-to-end — when the flag is on and ``providers=""``, the
+    resolver MUST fall back to the legacy ``providers_json`` payload
+    (stripped of api_key) and resolve keys server-side.
+    """
+    from app.config import settings as _settings
+
+    saved = _settings.ACCEPT_LEGACY_PROVIDERS_JSON
+    _settings.ACCEPT_LEGACY_PROVIDERS_JSON = True
+    try:
+        user = MagicMock()
+        user.id = uuid.uuid4()
+        db = AsyncMock()
+        request = MagicMock()
+        request.headers = {"user-agent": "AutoApply-Chrome-Ext/0.9.0"}
+
+        async def fake_resolve(uid, name, db):
+            return DecryptedKey("sk-server-resolved") if name == "anthropic" else None
+
+        with patch(
+            "app.services.user_provider_configs.resolve_decrypted_key",
+            side_effect=fake_resolve,
+        ):
+            out = await _resolve_providers(
+                providers="",
+                db=db,
+                user=user,
+                providers_json='[{"name":"anthropic","model":"claude-3","api_key":"sk-LEAK"}]',
+                request=request,
+            )
+    finally:
+        _settings.ACCEPT_LEGACY_PROVIDERS_JSON = saved
+
+    assert len(out) == 1
+    assert out[0]["name"] == "anthropic"
+    # The key came from the server-side resolver — NOT from the leaked
+    # legacy payload.
+    assert out[0]["api_key"].expose() == "sk-server-resolved"
+    assert out[0]["api_key"].expose() != "sk-LEAK"
+
+
+@pytest.mark.asyncio
+async def test_resolve_providers_strict_mode_default_rejects_legacy():
+    """P0-G default — flag off (default), legacy payload is rejected
+    with 422 just like before."""
+    from app.config import settings as _settings
+
+    # Default must be False — the assertion both documents the default
+    # and guards against operator misconfiguration.
+    assert _settings.ACCEPT_LEGACY_PROVIDERS_JSON is False
+
+    user = MagicMock()
+    user.id = uuid.uuid4()
+    db = AsyncMock()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _resolve_providers(
+            providers="",
+            db=db,
+            user=user,
+            providers_json='[{"name":"anthropic","api_key":"sk-LEAK"}]',
+        )
+    assert exc_info.value.status_code == 422
