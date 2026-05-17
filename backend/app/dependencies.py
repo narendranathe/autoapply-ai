@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 
 # Module-level JWKS cache: {"keys": list, "fetched_at": float}
 _jwks_cache: dict[str, Any] = {}
-_JWKS_TTL = 3600  # seconds
+_JWKS_TTL = 900  # seconds (15 minutes)
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
@@ -74,12 +74,7 @@ async def get_redis() -> AsyncGenerator[Redis, None]:
         await client.aclose()
 
 
-async def _get_clerk_jwks() -> list[dict]:
-    """Fetch and cache Clerk's JWKS public keys (refreshed every hour)."""
-    now = time.monotonic()
-    if _jwks_cache and (now - _jwks_cache.get("fetched_at", 0)) < _JWKS_TTL:
-        return _jwks_cache["keys"]  # type: ignore[return-value]
-
+async def _fetch_clerk_jwks() -> list[dict]:
     url = f"{settings.CLERK_FRONTEND_API_URL}/.well-known/jwks.json"
     async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.get(url)
@@ -87,8 +82,30 @@ async def _get_clerk_jwks() -> list[dict]:
         keys = resp.json()["keys"]
 
     _jwks_cache["keys"] = keys
-    _jwks_cache["fetched_at"] = now
+    _jwks_cache["fetched_at"] = time.monotonic()
     return keys  # type: ignore[return-value]
+
+
+async def _get_clerk_jwks(force_refresh: bool = False) -> list[dict]:
+    """Fetch and cache Clerk's JWKS public keys (TTL = ``_JWKS_TTL`` seconds)."""
+    now = time.monotonic()
+    if not force_refresh and _jwks_cache and (now - _jwks_cache.get("fetched_at", 0)) < _JWKS_TTL:
+        return _jwks_cache["keys"]  # type: ignore[return-value]
+    return await _fetch_clerk_jwks()
+
+
+def _find_jwk_by_kid(keys: list[dict], kid: str) -> dict | None:
+    return next((k for k in keys if k.get("kid") == kid), None)
+
+
+async def _resolve_jwk_for_kid(kid: str) -> dict | None:
+    """Return the JWK matching ``kid``, force-refreshing once on cache miss."""
+    keys = await _get_clerk_jwks()
+    key = _find_jwk_by_kid(keys, kid)
+    if key is not None:
+        return key
+    keys = await _get_clerk_jwks(force_refresh=True)
+    return _find_jwk_by_kid(keys, kid)
 
 
 async def get_current_user(
@@ -117,11 +134,23 @@ async def get_current_user(
         if auth_header.startswith("Bearer "):
             token = auth_header[7:]
             try:
-                jwks = await _get_clerk_jwks()
+                header = jwt.get_unverified_header(token)
+                kid = header.get("kid")
+                if not kid:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Invalid or expired authentication token.",
+                    )
+                jwk = await _resolve_jwk_for_kid(kid)
+                if jwk is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Invalid or expired authentication token.",
+                    )
                 options = {"verify_aud": bool(settings.CLERK_JWT_AUDIENCE)}
                 payload = jwt.decode(
                     token,
-                    jwks,
+                    jwk,
                     algorithms=["RS256"],
                     audience=settings.CLERK_JWT_AUDIENCE or None,
                     options=options,
