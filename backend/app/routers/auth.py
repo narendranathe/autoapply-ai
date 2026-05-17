@@ -9,36 +9,54 @@ PATCH /api/v1/auth/me         → Update the authenticated user's profile
 import uuid
 
 from fastapi import APIRouter, Depends, status
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies import get_current_user, get_db
+from app.dependencies import get_clerk_user_id, get_current_user, get_db
 from app.models.user import User
 from app.schemas.user import ProfileResponse, ProfileUpdate
 
 router = APIRouter()
 
 
+class RegisterRequest(BaseModel):
+    """
+    Body for POST /api/v1/auth/register.
+
+    SECURITY (Issue #89): the ``clerk_id`` is intentionally NOT part of this
+    schema. It is sourced server-side from validated Clerk credentials via the
+    ``get_clerk_user_id`` dependency. Allowing a client to supply a clerk_id in
+    the body would let any caller create or overwrite user rows under an
+    arbitrary identity (account takeover).
+    """
+
+    email_hash: str = Field(..., min_length=1, max_length=128)
+    github_username: str = Field(default="", max_length=255)
+
+
 @router.post("/register", status_code=status.HTTP_201_CREATED)
 async def register_user(
-    clerk_id: str,
-    email_hash: str,
-    github_username: str = "",
+    body: RegisterRequest,
     db: AsyncSession = Depends(get_db),
+    clerk_id: str = Depends(get_clerk_user_id),
 ):
     """
-    Create or upsert a user record from a Clerk user ID.
+    Create or upsert a user record from the *authenticated* Clerk identity.
 
-    Called by the Clerk webhook (user.created event) or manually on first login.
-    Idempotent — safe to call multiple times for the same clerk_id.
+    The clerk_id is derived from the validated Clerk JWT or the
+    ``X-Clerk-User-Id`` header — never from the request body. Requests without
+    valid Clerk credentials are rejected with 401 by ``get_clerk_user_id``.
+
+    Idempotent — safe to call multiple times for the same authenticated caller.
     """
     existing = await db.execute(select(User).where(User.clerk_id == clerk_id))
     user = existing.scalar_one_or_none()
 
     if user:
         # Update mutable fields
-        if github_username:
-            user.github_username = github_username
+        if body.github_username:
+            user.github_username = body.github_username
         await db.commit()
         await db.refresh(user)
         return {"user_id": str(user.id), "created": False}
@@ -46,8 +64,8 @@ async def register_user(
     user = User(
         id=uuid.uuid4(),
         clerk_id=clerk_id,
-        email_hash=email_hash,
-        github_username=github_username or None,
+        email_hash=body.email_hash,
+        github_username=body.github_username or None,
         resume_repo_name="resume-vault",
         is_active=True,
         total_resumes_generated=0,

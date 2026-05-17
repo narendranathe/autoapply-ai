@@ -218,6 +218,92 @@ async def _resolve_jwk_for_kid(kid: str) -> dict | None:
         return key
 
 
+async def get_clerk_user_id(
+    request: Request,
+    x_clerk_user_id: str | None = Header(None, alias="X-Clerk-User-Id"),
+) -> str:
+    """
+    Resolve the caller's Clerk user id from validated credentials.
+
+    Unlike :func:`get_current_user`, this dependency does NOT require a matching
+    user row in the database — it is intended for endpoints (e.g. ``/register``)
+    that may run before a user record exists. It only returns a clerk_id once
+    the caller's identity has been verified.
+
+    Priority:
+    1. If ``CLERK_FRONTEND_API_URL`` is configured: validate the
+       ``Authorization: Bearer <token>`` JWT against Clerk's JWKS and return
+       ``payload["sub"]``.
+    2. Otherwise fall back to the ``X-Clerk-User-Id`` header (extension / dev).
+    3. In ``ENVIRONMENT=development`` with no header: return
+       ``settings.DEV_TEST_USER_ID``. If empty, raise 401.
+    4. Any other path with no credentials raises 401.
+
+    SECURITY: the clerk_id is *never* read from the request body. Callers
+    must trust only the return value of this dependency.
+    """
+    # ── 1. JWT path (production) ──────────────────────────────────────────
+    if settings.CLERK_FRONTEND_API_URL:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+            try:
+                header = jwt.get_unverified_header(token)
+                kid = header.get("kid")
+                if not kid:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Invalid or expired authentication token.",
+                    )
+                jwk = await _resolve_jwk_for_kid(kid)
+                if jwk is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Invalid or expired authentication token.",
+                    )
+                options = {"verify_aud": bool(settings.CLERK_JWT_AUDIENCE)}
+                payload = jwt.decode(
+                    token,
+                    jwk,
+                    algorithms=_CLERK_JWT_ALGORITHMS,
+                    audience=settings.CLERK_JWT_AUDIENCE or None,
+                    options=options,
+                )
+                sub = payload.get("sub")
+                if sub:
+                    return sub
+            except JOSEError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid or expired authentication token.",
+                ) from exc
+
+    # ── 2. Header path (extension / dev) ─────────────────────────────────
+    if x_clerk_user_id:
+        return x_clerk_user_id
+
+    # ── 3. Dev fallback ───────────────────────────────────────────────────
+    if settings.is_development:
+        if not settings.DEV_TEST_USER_ID:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=(
+                    "Dev auth bypass requires DEV_TEST_USER_ID to be set to a "
+                    "valid clerk_id in your .env. Set it or send a Clerk JWT / "
+                    "X-Clerk-User-Id header."
+                ),
+            )
+        return settings.DEV_TEST_USER_ID
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail=(
+            "Authentication required. "
+            "Send Authorization: Bearer <token> from your Clerk session."
+        ),
+    )
+
+
 async def get_current_user(
     request: Request,
     db: AsyncSession = Depends(get_db),
