@@ -463,3 +463,54 @@ async def test_production_jwt_takes_precedence_over_header(
     )
     assert header_sub not in captured_clerk_ids
     assert user.clerk_id == jwt_sub
+
+
+@pytest.mark.asyncio
+async def test_production_rejects_jwt_from_foreign_tenant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A token signed by a different Clerk tenant (different ``iss`` claim)
+    must be rejected with 401, even when the signature is valid and the
+    ``kid`` resolves through our JWKS — i.e. the JWK we control is also
+    served by the attacker's tenant URL.
+
+    Without ``verify_iss=True`` + ``issuer=settings.CLERK_FRONTEND_API_URL``,
+    a tenant-confusion attack would pass: the signature checks out, the
+    kid is known, and we'd silently resolve the foreign tenant's ``sub``
+    against our local user table. This test pins that the issuer claim
+    must match our configured tenant URL.
+    """
+    from app import dependencies as deps_module
+
+    monkeypatch.setattr(deps_module.settings, "ENVIRONMENT", "production")
+    monkeypatch.setattr(deps_module.settings, "CLERK_FRONTEND_API_URL", _MOCK_CLERK_URL)
+    monkeypatch.setattr(deps_module.settings, "CLERK_JWT_AUDIENCE", "")
+
+    key = _rsa_keypair()
+    jwk = _jwk_from_private(key, _MOCK_KID)
+    # Token signed with the SAME key (kid resolves) but claims a different
+    # tenant URL as issuer — this is the tenant-confusion vector.
+    token = _sign_clerk_token(
+        key,
+        sub="user_from_foreign_tenant",
+        iss="https://attacker-tenant.clerk.accounts.dev",
+    )
+
+    mock_db = AsyncMock()
+    mock_db.execute = AsyncMock()
+
+    with patch.object(
+        deps_module, "_resolve_jwk_for_kid", AsyncMock(return_value=jwk)
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_user(
+                request=_request_with_bearer(token),
+                db=mock_db,
+                x_clerk_user_id=None,
+            )
+
+    assert exc_info.value.status_code == 401
+    # The foreign sub must NEVER be resolved against the local DB.
+    mock_db.execute.assert_not_awaited()
+    # Generic detail — must not leak the foreign issuer to the caller.
+    assert "attacker-tenant" not in exc_info.value.detail
