@@ -111,12 +111,33 @@ class ProviderConfigResponse(BaseModel):
     """
     Safe representation of a single UserProviderConfig row.
 
-    The raw API key is never returned; only a ``has_key`` boolean.
+    The raw API key is never returned; only a ``has_key`` boolean and a
+    ``key_fingerprint`` — the first 8 chars of ``sha256(plaintext_key)``.
+
+    The fingerprint lets the migration client compare the value it PUT
+    against the value the server actually stored, without exposing the
+    plaintext. It is not a secret (truncated hash of a high-entropy
+    input), but it is unique enough that the client can detect:
+
+    - a stale server-side key that was already there (PUT happened to
+      be a no-op because some other client wrote first) — fingerprints
+      will differ.
+    - a partial PUT that silently dropped the body — fingerprint will
+      be empty / different.
+
     ``is_enabled`` is derived server-side from ``has_key``.
     """
 
     provider_name: str
     has_key: bool
+    key_fingerprint: str | None = Field(
+        default=None,
+        description=(
+            "First 8 hex chars of sha256(plaintext_key). Null when no key "
+            "is configured. Used by the migration client to verify the "
+            "server actually stored the key it PUT."
+        ),
+    )
     model_override: str | None
     is_enabled: bool = Field(
         description="Derived: true iff an api key is configured for this provider.",

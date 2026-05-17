@@ -284,3 +284,161 @@ async def test_put_provider_configs_response_enabled_derived_from_api_key():
     )
     assert cleared_resp.has_key is False
     assert cleared_resp.is_enabled is False
+
+
+# ---------------------------------------------------------------------------
+# P0-A: key_fingerprint in PUT and GET responses  (issue #198 round 2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_put_provider_config_returns_sha256_fingerprint() -> None:
+    """PUT must echo first-8-hex-chars of sha256(plaintext) so the
+    migration client can verify the server stored what it sent."""
+    import hashlib
+
+    from app.routers.users import upsert_provider_config
+    from app.schemas.user import ProviderConfigUpsert
+
+    mock_user = MagicMock()
+    mock_user.id = uuid.uuid4()
+
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = None
+    mock_db = AsyncMock()
+    mock_db.execute = AsyncMock(return_value=mock_result)
+    mock_db.add = MagicMock()
+    mock_db.commit = AsyncMock()
+    mock_db.refresh = AsyncMock()
+
+    plaintext = "sk-real-key-xyz"
+    expected = hashlib.sha256(plaintext.encode()).hexdigest()[:8]
+
+    resp = await upsert_provider_config(
+        provider_name="openai",
+        payload=ProviderConfigUpsert(api_key=plaintext, model_override="gpt-4o-mini"),
+        db=mock_db,
+        user=mock_user,
+    )
+    assert resp.has_key is True
+    assert resp.key_fingerprint == expected
+    # 8 hex chars only — not the full hash.
+    assert len(resp.key_fingerprint) == 8
+
+
+@pytest.mark.asyncio
+async def test_put_provider_config_with_empty_key_returns_null_fingerprint() -> None:
+    """PUT with empty api_key returns has_key=False and key_fingerprint=None."""
+    from app.routers.users import upsert_provider_config
+    from app.schemas.user import ProviderConfigUpsert
+
+    mock_user = MagicMock()
+    mock_user.id = uuid.uuid4()
+
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = None
+    mock_db = AsyncMock()
+    mock_db.execute = AsyncMock(return_value=mock_result)
+    mock_db.add = MagicMock()
+    mock_db.commit = AsyncMock()
+    mock_db.refresh = AsyncMock()
+
+    resp = await upsert_provider_config(
+        provider_name="anthropic",
+        payload=ProviderConfigUpsert(api_key="", model_override=None),
+        db=mock_db,
+        user=mock_user,
+    )
+    assert resp.has_key is False
+    assert resp.key_fingerprint is None
+
+
+@pytest.mark.asyncio
+async def test_get_provider_configs_returns_fingerprint_per_row(monkeypatch) -> None:
+    """GET /provider-configs returns the fingerprint for each row with a key.
+
+    Rows without a key (encrypted_api_key='') return key_fingerprint=None.
+    """
+    import hashlib
+
+    from app.routers.users import get_provider_configs
+
+    mock_user = MagicMock()
+    mock_user.id = uuid.uuid4()
+
+    row_a = MagicMock()
+    row_a.provider_name = "openai"
+    row_a.encrypted_api_key = "ENC_BLOB_A"
+    row_a.model_override = "gpt-4o"
+
+    row_b = MagicMock()
+    row_b.provider_name = "anthropic"
+    row_b.encrypted_api_key = ""  # cleared
+    row_b.model_override = None
+
+    mock_scalars = MagicMock()
+    mock_scalars.all.return_value = [row_a, row_b]
+    mock_result = MagicMock()
+    mock_result.scalars.return_value = mock_scalars
+
+    mock_db = AsyncMock()
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    # Patch decrypt to return a predictable plaintext for row_a.
+    plaintext = "sk-decrypted-openai-key"
+    expected_fp = hashlib.sha256(plaintext.encode()).hexdigest()[:8]
+
+    def fake_decrypt(value: str) -> str:
+        if value == "ENC_BLOB_A":
+            return plaintext
+        raise ValueError("not the right blob")
+
+    monkeypatch.setattr("app.routers.users.decrypt_value", fake_decrypt)
+
+    response = await get_provider_configs(db=mock_db, user=mock_user)
+    configs = {c.provider_name: c for c in response.configs}
+
+    assert configs["openai"].has_key is True
+    assert configs["openai"].key_fingerprint == expected_fp
+
+    # Cleared row has no fingerprint at all.
+    assert configs["anthropic"].has_key is False
+    assert configs["anthropic"].key_fingerprint is None
+
+
+@pytest.mark.asyncio
+async def test_get_provider_configs_fingerprint_is_none_when_decrypt_fails(
+    monkeypatch,
+) -> None:
+    """If decrypt raises (e.g. FERNET_KEY mismatch), the row still
+    surfaces as has_key=True but key_fingerprint must be None — the
+    migration client interprets that as "verification failed, keep the
+    local copy", which is the correct safe default."""
+    from app.routers.users import get_provider_configs
+
+    mock_user = MagicMock()
+    mock_user.id = uuid.uuid4()
+
+    row = MagicMock()
+    row.provider_name = "openai"
+    row.encrypted_api_key = "CORRUPT_BLOB"
+    row.model_override = "gpt-4o"
+
+    mock_scalars = MagicMock()
+    mock_scalars.all.return_value = [row]
+    mock_result = MagicMock()
+    mock_result.scalars.return_value = mock_scalars
+
+    mock_db = AsyncMock()
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    def raising_decrypt(value: str) -> str:
+        raise ValueError("decrypt failed")
+
+    monkeypatch.setattr("app.routers.users.decrypt_value", raising_decrypt)
+
+    response = await get_provider_configs(db=mock_db, user=mock_user)
+    configs = {c.provider_name: c for c in response.configs}
+
+    assert configs["openai"].has_key is True
+    assert configs["openai"].key_fingerprint is None

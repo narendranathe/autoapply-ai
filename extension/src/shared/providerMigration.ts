@@ -126,14 +126,42 @@ export interface MigrateOptions {
 }
 
 /**
- * Migrate one provider key to the backend, then **verify** by GET before
+ * Compute the same fingerprint the backend returns: first 8 hex chars of
+ * ``sha256(plaintext)``. Pure helper exported for tests.
+ */
+export async function computeKeyFingerprint(plaintext: string): Promise<string> {
+  if (!plaintext) return "";
+  const enc = new TextEncoder().encode(plaintext);
+  const digest = await crypto.subtle.digest("SHA-256", enc);
+  const bytes = new Uint8Array(digest);
+  // Hex-encode the first 4 bytes → 8 hex chars, matching backend.
+  return Array.from(bytes.subarray(0, 4))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/**
+ * Migrate one provider key to the backend, then **verify** before the
  * caller strips the local copy.
  *
- * Sequence:
- *   1. ``PUT /users/provider-configs/{name}`` with the plaintext key (TLS).
- *   2. ``GET /users/provider-configs`` and check the row reports
- *      ``has_key=true`` for this provider.
- *   3. Only return ``{ok: true}`` when both succeed — caller may then strip.
+ * P0-A (#198 round 2): the previous PUT → GET → check ``has_key=true``
+ * gate was forgeable. If some other row already had a stale key for the
+ * same provider, the GET reported ``has_key=true`` and the local key got
+ * stripped even when the PUT silently failed. To close this we now:
+ *
+ *   1. Locally compute ``sha256(plaintext)[:8]`` as the expected
+ *      fingerprint.
+ *   2. ``PUT /users/provider-configs/{name}`` — server echoes the
+ *      fingerprint of the plaintext it just received.
+ *   3. Compare the PUT response fingerprint to the expected one. If they
+ *      mismatch, the server stored something other than what we sent
+ *      (or returned a stale row from cache) — bail out, keep the local
+ *      key.
+ *   4. ``GET /users/provider-configs`` and re-check the fingerprint
+ *      matches. This catches the case where the PUT response was forged
+ *      / the underlying store rolled back.
+ *
+ * Only on both fingerprint matches do we return ``{ok: true}``.
  */
 export async function migrateProviderKey(
   name: string,
@@ -143,6 +171,8 @@ export async function migrateProviderKey(
 ): Promise<MigrateResult> {
   if (!apiKey) return { name, ok: false, reason: "no local key to migrate" };
   if (!opts.apiBase) return { name, ok: false, reason: "no apiBase configured" };
+
+  const expectedFingerprint = await computeKeyFingerprint(apiKey);
 
   // Step 1: PUT
   let putResp: Response;
@@ -159,9 +189,28 @@ export async function migrateProviderKey(
     return { name, ok: false, reason: `PUT failed: ${putResp.status}` };
   }
 
-  // Step 2: GET to verify the server actually has the key. This protects
-  // against silent server-side rejections (e.g. encryption errors that the
-  // PUT may or may not surface).
+  // Step 1.5: parse PUT response, compare fingerprint. A non-JSON or
+  // missing-fingerprint response is treated as a verification failure —
+  // the server must opt in to the new contract.
+  let putJson: { has_key?: boolean; key_fingerprint?: string | null } = {};
+  try {
+    putJson = (await putResp.json()) as typeof putJson;
+  } catch {
+    return { name, ok: false, reason: "PUT: invalid JSON" };
+  }
+  if (!putJson.key_fingerprint) {
+    return { name, ok: false, reason: "PUT: missing key_fingerprint (backend out of date)" };
+  }
+  if (putJson.key_fingerprint !== expectedFingerprint) {
+    return {
+      name,
+      ok: false,
+      reason: `PUT: fingerprint mismatch (server=${putJson.key_fingerprint} local=${expectedFingerprint})`,
+    };
+  }
+
+  // Step 2: GET to verify the row truly persisted with our key (not a
+  // cached / stale entry from a previous PUT).
   let getResp: Response;
   try {
     getResp = await fetchFn(`${opts.apiBase}/users/provider-configs`, {
@@ -175,7 +224,9 @@ export async function migrateProviderKey(
     return { name, ok: false, reason: `verification GET failed: ${getResp.status}` };
   }
 
-  let json: { configs?: Array<{ provider_name?: string; has_key?: boolean }> } = {};
+  let json: {
+    configs?: Array<{ provider_name?: string; has_key?: boolean; key_fingerprint?: string | null }>;
+  } = {};
   try {
     json = (await getResp.json()) as typeof json;
   } catch {
@@ -185,6 +236,16 @@ export async function migrateProviderKey(
   const row = (json.configs ?? []).find((c) => c.provider_name === name);
   if (!row) return { name, ok: false, reason: "verification: provider missing from response" };
   if (row.has_key !== true) return { name, ok: false, reason: "verification: has_key is false" };
+  if (!row.key_fingerprint) {
+    return { name, ok: false, reason: "verification: missing key_fingerprint" };
+  }
+  if (row.key_fingerprint !== expectedFingerprint) {
+    return {
+      name,
+      ok: false,
+      reason: `verification: fingerprint mismatch (server=${row.key_fingerprint} local=${expectedFingerprint})`,
+    };
+  }
 
   return { name, ok: true };
 }

@@ -26,7 +26,13 @@ const {
   unmigratedProviderNames,
   migrateProviderKey,
   stripLocalKey,
+  computeKeyFingerprint,
 } = mod;
+
+// Convenience: precompute fingerprints for the canonical test keys.
+const FP_SK_ANT_XYZ = await computeKeyFingerprint("sk-ant-xyz");
+const FP_SK_ANT = await computeKeyFingerprint("sk-ant");
+const FP_SK_OAI = await computeKeyFingerprint("sk-oai");
 
 // ── buildProviderList — pure, never includes a key ──────────────────────────
 
@@ -151,10 +157,15 @@ const BASE = "https://api.example.test/api/v1";
 
 test("migrateProviderKey: PUT → GET verifies has_key=true → ok:true", async () => {
   const { fetchFn, calls } = makeFetchSequence([
-    okResponse({ provider_name: "anthropic", has_key: true }),
+    okResponse({ provider_name: "anthropic", has_key: true, key_fingerprint: FP_SK_ANT_XYZ }),
     okResponse({
       configs: [
-        { provider_name: "anthropic", has_key: true, is_enabled: true },
+        {
+          provider_name: "anthropic",
+          has_key: true,
+          is_enabled: true,
+          key_fingerprint: FP_SK_ANT_XYZ,
+        },
       ],
     }),
   ]);
@@ -194,8 +205,10 @@ test("migrateProviderKey: PUT returns 500 → ok:false, no GET issued", async ()
 
 test("migrateProviderKey: GET verification returns has_key=false → ok:false", async () => {
   const { fetchFn } = makeFetchSequence([
-    okResponse({ provider_name: "anthropic", has_key: true }),
-    okResponse({ configs: [{ provider_name: "anthropic", has_key: false }] }),
+    okResponse({ provider_name: "anthropic", has_key: true, key_fingerprint: FP_SK_ANT }),
+    okResponse({
+      configs: [{ provider_name: "anthropic", has_key: false, key_fingerprint: null }],
+    }),
   ]);
   const res = await migrateProviderKey("anthropic", "sk-ant", fetchFn, { apiBase: BASE, authHeaders: AUTH });
   assert.equal(res.ok, false);
@@ -204,8 +217,10 @@ test("migrateProviderKey: GET verification returns has_key=false → ok:false", 
 
 test("migrateProviderKey: GET verification omits the provider → ok:false", async () => {
   const { fetchFn } = makeFetchSequence([
-    okResponse({ provider_name: "anthropic", has_key: true }),
-    okResponse({ configs: [{ provider_name: "openai", has_key: true }] }),
+    okResponse({ provider_name: "anthropic", has_key: true, key_fingerprint: FP_SK_ANT }),
+    okResponse({
+      configs: [{ provider_name: "openai", has_key: true, key_fingerprint: FP_SK_OAI }],
+    }),
   ]);
   const res = await migrateProviderKey("anthropic", "sk-ant", fetchFn, { apiBase: BASE, authHeaders: AUTH });
   assert.equal(res.ok, false);
@@ -217,7 +232,7 @@ test("migrateProviderKey: GET verification network failure → ok:false", async 
     if (String(url).endsWith("/users/provider-configs")) {
       throw new Error("connection refused");
     }
-    return okResponse({ provider_name: "anthropic", has_key: true });
+    return okResponse({ provider_name: "anthropic", has_key: true, key_fingerprint: FP_SK_ANT });
   };
   const res = await migrateProviderKey("anthropic", "sk-ant", fetchFn, { apiBase: BASE, authHeaders: AUTH });
   assert.equal(res.ok, false);
@@ -226,7 +241,7 @@ test("migrateProviderKey: GET verification network failure → ok:false", async 
 
 test("migrateProviderKey: GET returns non-JSON body → ok:false", async () => {
   const { fetchFn } = makeFetchSequence([
-    okResponse({ provider_name: "anthropic", has_key: true }),
+    okResponse({ provider_name: "anthropic", has_key: true, key_fingerprint: FP_SK_ANT }),
     {
       ok: true,
       status: 200,
@@ -241,8 +256,10 @@ test("migrateProviderKey: GET returns non-JSON body → ok:false", async () => {
 
 test("migrateProviderKey: includes model_override in PUT body when provided", async () => {
   const { fetchFn, calls } = makeFetchSequence([
-    okResponse({ provider_name: "anthropic", has_key: true }),
-    okResponse({ configs: [{ provider_name: "anthropic", has_key: true }] }),
+    okResponse({ provider_name: "anthropic", has_key: true, key_fingerprint: FP_SK_ANT }),
+    okResponse({
+      configs: [{ provider_name: "anthropic", has_key: true, key_fingerprint: FP_SK_ANT }],
+    }),
   ]);
   await migrateProviderKey("anthropic", "sk-ant", fetchFn, {
     apiBase: BASE,
@@ -251,6 +268,103 @@ test("migrateProviderKey: includes model_override in PUT body when provided", as
   });
   const body = JSON.parse(calls[0].init.body);
   assert.equal(body.model_override, "claude-sonnet-4-6");
+});
+
+// ── P0-A fingerprint verification (#198 round 2) ───────────────────────────
+
+test("migrateProviderKey: PUT response missing key_fingerprint → ok:false", async () => {
+  // Simulates an old backend that hasn't deployed the fingerprint contract.
+  const { fetchFn } = makeFetchSequence([
+    okResponse({ provider_name: "anthropic", has_key: true }), // no fingerprint
+  ]);
+  const res = await migrateProviderKey("anthropic", "sk-ant", fetchFn, {
+    apiBase: BASE,
+    authHeaders: AUTH,
+  });
+  assert.equal(res.ok, false);
+  assert.match(res.reason, /missing key_fingerprint/);
+});
+
+test("migrateProviderKey: PUT fingerprint mismatch → ok:false (forgery defence)", async () => {
+  // Simulates the attack scenario: the server has a stale row from a prior
+  // PUT under a different key; the listing route returns has_key=true but
+  // the fingerprint doesn't match what the client just sent.
+  const { fetchFn } = makeFetchSequence([
+    okResponse({
+      provider_name: "anthropic",
+      has_key: true,
+      key_fingerprint: "deadbeef", // wrong fingerprint
+    }),
+  ]);
+  const res = await migrateProviderKey("anthropic", "sk-ant", fetchFn, {
+    apiBase: BASE,
+    authHeaders: AUTH,
+  });
+  assert.equal(res.ok, false);
+  assert.match(res.reason, /PUT: fingerprint mismatch/);
+});
+
+test("migrateProviderKey: PUT non-JSON body → ok:false", async () => {
+  const { fetchFn } = makeFetchSequence([
+    {
+      ok: true,
+      status: 200,
+      text: async () => "yo",
+      json: async () => { throw new Error("parse"); },
+    },
+  ]);
+  const res = await migrateProviderKey("anthropic", "sk-ant", fetchFn, {
+    apiBase: BASE,
+    authHeaders: AUTH,
+  });
+  assert.equal(res.ok, false);
+  assert.match(res.reason, /PUT: invalid JSON/);
+});
+
+test("migrateProviderKey: GET fingerprint mismatch → ok:false (forgery defence)", async () => {
+  // The PUT echoes the correct fingerprint, but the subsequent GET
+  // returns a different one — server-side rollback / race / poisoned
+  // cache. Keep the local key.
+  const { fetchFn } = makeFetchSequence([
+    okResponse({ provider_name: "anthropic", has_key: true, key_fingerprint: FP_SK_ANT }),
+    okResponse({
+      configs: [
+        { provider_name: "anthropic", has_key: true, key_fingerprint: "deadbeef" },
+      ],
+    }),
+  ]);
+  const res = await migrateProviderKey("anthropic", "sk-ant", fetchFn, {
+    apiBase: BASE,
+    authHeaders: AUTH,
+  });
+  assert.equal(res.ok, false);
+  assert.match(res.reason, /verification: fingerprint mismatch/);
+});
+
+test("migrateProviderKey: GET missing key_fingerprint → ok:false", async () => {
+  const { fetchFn } = makeFetchSequence([
+    okResponse({ provider_name: "anthropic", has_key: true, key_fingerprint: FP_SK_ANT }),
+    okResponse({
+      configs: [{ provider_name: "anthropic", has_key: true }], // no fingerprint
+    }),
+  ]);
+  const res = await migrateProviderKey("anthropic", "sk-ant", fetchFn, {
+    apiBase: BASE,
+    authHeaders: AUTH,
+  });
+  assert.equal(res.ok, false);
+  assert.match(res.reason, /verification: missing key_fingerprint/);
+});
+
+test("computeKeyFingerprint: deterministic + 8 hex chars + matches backend sha256[:8]", async () => {
+  const fp = await computeKeyFingerprint("sk-ant-xyz");
+  assert.equal(fp.length, 8);
+  assert.match(fp, /^[0-9a-f]{8}$/);
+  // sha256("sk-ant-xyz") starts with these 8 hex chars (per node crypto):
+  // verified once and pinned.
+  const { createHash } = await import("node:crypto");
+  const expected = createHash("sha256").update("sk-ant-xyz").digest("hex").slice(0, 8);
+  assert.equal(fp, expected);
 });
 
 // ── stripLocalKey — pure helper, single-row mutation ───────────────────────
@@ -285,10 +399,14 @@ test("migration sequence: two providers, one succeeds + one fails → partial st
   };
 
   const { fetchFn } = makeFetchSequence([
-    okResponse({ provider_name: "anthropic", has_key: true }),
-    okResponse({ configs: [{ provider_name: "anthropic", has_key: true }] }),
-    okResponse({ provider_name: "openai", has_key: true }),
-    okResponse({ configs: [{ provider_name: "anthropic", has_key: true }] }), // openai missing
+    okResponse({ provider_name: "anthropic", has_key: true, key_fingerprint: FP_SK_ANT }),
+    okResponse({
+      configs: [{ provider_name: "anthropic", has_key: true, key_fingerprint: FP_SK_ANT }],
+    }),
+    okResponse({ provider_name: "openai", has_key: true, key_fingerprint: FP_SK_OAI }),
+    okResponse({
+      configs: [{ provider_name: "anthropic", has_key: true, key_fingerprint: FP_SK_ANT }],
+    }), // openai missing
   ]);
 
   const r1 = await migrateProviderKey("anthropic", configs.anthropic.apiKey, fetchFn, { apiBase: BASE, authHeaders: AUTH });
