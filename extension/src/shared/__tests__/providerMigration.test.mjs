@@ -388,6 +388,64 @@ test("stripLocalKey: unknown provider → original map returned unchanged", () =
   assert.equal(after, before);
 });
 
+// ── P1-C: disabled-provider handling (#198 round 2) ────────────────────────
+
+test("P1-C: countUnmigratedKeys skips entries with enabled:false", () => {
+  // A user might have disabled a provider but kept the key. That row
+  // must NOT be flagged for migration — migrating it would silently
+  // re-enable the provider.
+  const configs = {
+    anthropic: { apiKey: "a", enabled: true, model: "claude-sonnet-4-6" },
+    openai: { apiKey: "o", enabled: false, model: "gpt-4o" },       // disabled
+    groq: { apiKey: "g", model: "llama-3.3-70b-versatile" },          // legacy: no enabled flag
+    gemini: { apiKey: "", enabled: true, model: "gemini-1.5-flash" }, // no local key
+  };
+  assert.equal(countUnmigratedKeys(configs), 2); // anthropic + groq
+});
+
+test("P1-C: unmigratedProviderNames excludes disabled-with-key rows", () => {
+  const configs = {
+    anthropic: { apiKey: "a", enabled: true, model: "claude-sonnet-4-6" },
+    openai: { apiKey: "o", enabled: false, model: "gpt-4o" },
+    groq: { apiKey: "g", model: "llama-3.3-70b-versatile" },
+  };
+  const names = unmigratedProviderNames(configs);
+  assert.deepEqual(names.sort(), ["anthropic", "groq"]);
+  // explicit: openai never appears.
+  assert.ok(!names.includes("openai"));
+});
+
+test("P1-C: stripLocalKey preserves enabled:false (does not force enable)", () => {
+  const before = {
+    openai: { apiKey: "o", enabled: false, model: "gpt-4o" },
+  };
+  const after = stripLocalKey(before, "openai");
+  assert.equal(after.openai.apiKey, "");
+  // The critical assertion: a disabled provider stays disabled.
+  assert.equal(after.openai.enabled, false);
+});
+
+test("P1-C: stripLocalKey preserves explicit enabled:true", () => {
+  const before = {
+    anthropic: { apiKey: "a", enabled: true, model: "claude-sonnet-4-6" },
+  };
+  const after = stripLocalKey(before, "anthropic");
+  assert.equal(after.anthropic.apiKey, "");
+  assert.equal(after.anthropic.enabled, true);
+});
+
+test("P1-C: stripLocalKey defaults missing enabled → true (legacy migration path)", () => {
+  // Legacy entries (pre-#21) often don't have an ``enabled`` field at
+  // all. After stripping the key we still want the row to read as
+  // enabled so the post-migration provider list keeps it.
+  const before = {
+    groq: { apiKey: "g", model: "llama-3.3-70b-versatile" },
+  };
+  const after = stripLocalKey(before, "groq");
+  assert.equal(after.groq.apiKey, "");
+  assert.equal(after.groq.enabled, true);
+});
+
 // ── End-to-end migration sequence ──────────────────────────────────────────
 
 test("migration sequence: two providers, one succeeds + one fails → partial state", async () => {

@@ -94,21 +94,42 @@ export function buildProviderList(configs: ProvidersMap | undefined | null): Pro
 }
 
 /**
- * Count providers that still have a local ``apiKey`` — these are the rows
- * the migration banner reports as "remaining".
+ * Whether a row should be considered an "unmigrated" candidate.
+ *
+ * P1-C (#198 round 2): a provider that the user explicitly disabled
+ * (``enabled === false``) but kept a local key for is *not* a migration
+ * candidate. Without this check the migration would silently re-enable
+ * the provider when it ran, contradicting the user's choice.
+ *
+ * The pre-migration default is ``enabled === undefined`` (the field
+ * may not exist yet on legacy entries). Those rows are still counted —
+ * we only skip the row when ``enabled`` is *explicitly* false.
  */
-export function countUnmigratedKeys(configs: ProvidersMap | undefined | null): number {
-  if (!configs) return 0;
-  return Object.values(configs).filter((cfg) => !!cfg && !!cfg.apiKey).length;
+function _isUnmigratedCandidate(cfg: ProviderEntry | undefined): boolean {
+  if (!cfg) return false;
+  if (!cfg.apiKey) return false;
+  if (cfg.enabled === false) return false;
+  return true;
 }
 
 /**
- * Names of providers that still have a local ``apiKey``.
+ * Count providers that still have a local ``apiKey`` *and* are not
+ * explicitly disabled — these are the rows the migration banner reports
+ * as "remaining" and the migration loop will attempt.
+ */
+export function countUnmigratedKeys(configs: ProvidersMap | undefined | null): number {
+  if (!configs) return 0;
+  return Object.values(configs).filter(_isUnmigratedCandidate).length;
+}
+
+/**
+ * Names of providers that still have a local ``apiKey`` and are not
+ * explicitly disabled.
  */
 export function unmigratedProviderNames(configs: ProvidersMap | undefined | null): string[] {
   if (!configs) return [];
   return Object.entries(configs)
-    .filter(([, cfg]) => !!cfg && !!cfg.apiKey)
+    .filter(([, cfg]) => _isUnmigratedCandidate(cfg))
     .map(([name]) => name);
 }
 
@@ -252,13 +273,21 @@ export async function migrateProviderKey(
 
 /**
  * Pure: return a copy of ``configs`` with ``apiKey`` cleared on the given
- * provider. The row is kept (now ``enabled: true`` with empty key) so the
- * UI can still show the provider as configured server-side.
+ * provider. The row is kept (now empty ``apiKey``) so the UI can still
+ * show the provider as configured server-side.
+ *
+ * P1-C (#198 round 2): we DO NOT force ``enabled: true``. Forcing it
+ * would silently re-enable a provider the user had explicitly disabled
+ * (``enabled: false``). When ``enabled`` was never set on the entry we
+ * default it to ``true`` so a pre-migration row that had a key (and
+ * was implicitly active by virtue of having a key) keeps working.
  */
 export function stripLocalKey(configs: ProvidersMap, name: string): ProvidersMap {
   const existing = configs[name];
   if (!existing) return configs;
   const next: ProvidersMap = { ...configs };
-  next[name] = { ...existing, apiKey: "", enabled: true };
+  // Preserve an explicit choice; default undefined → true.
+  const enabled = existing.enabled === false ? false : (existing.enabled ?? true);
+  next[name] = { ...existing, apiKey: "", enabled };
   return next;
 }
