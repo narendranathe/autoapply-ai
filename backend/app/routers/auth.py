@@ -9,6 +9,7 @@ PATCH /api/v1/auth/me         → Update the authenticated user's profile
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +19,12 @@ from app.models.user import User
 from app.schemas.user import ProfileResponse, ProfileUpdate, RegisterRequest
 
 router = APIRouter()
+
+# PostgreSQL SQLSTATE for unique_violation. We narrow the IntegrityError
+# race-recovery branch to this code so a NOT-NULL / CHECK / FK violation
+# (which indicates a real bug, not a concurrent insert) surfaces as a clean
+# 500 instead of being swallowed by the "re-SELECT the winning row" path.
+_PG_UNIQUE_VIOLATION = "23505"
 
 
 @router.post("/register", status_code=status.HTTP_201_CREATED)
@@ -65,22 +72,46 @@ async def register_user(
     try:
         await db.commit()
     except IntegrityError as exc:
-        # Race condition: a concurrent first-register call for the same
-        # ``clerk_id`` won the unique-index race. Roll back our failed
-        # insert, re-SELECT the row the winning request created, and
-        # respond idempotently with ``created=False`` instead of leaking
-        # a 500 to the second caller.
+        # Narrow recovery to PostgreSQL's unique_violation (SQLSTATE 23505).
+        # A broader ``except IntegrityError`` would also swallow NOT-NULL /
+        # FK / CHECK violations — those indicate a real bug (or schema
+        # drift), not a concurrent first-register race, and must surface as
+        # a 500 with the original cause logged so we can debug them.
         await db.rollback()
+        pgcode = getattr(getattr(exc, "orig", None), "pgcode", None)
+        if pgcode != _PG_UNIQUE_VIOLATION:
+            logger.exception(
+                "Unexpected IntegrityError in /auth/register: pgcode={} " "clerk_id_prefix={}",
+                pgcode,
+                clerk_id[:8] if clerk_id else None,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Registration failed due to database constraint.",
+            ) from exc
+
+        # Race condition: a concurrent first-register call for the same
+        # ``clerk_id`` won the unique-index race. Re-SELECT the row the
+        # winning request created and respond idempotently with
+        # ``created=False`` instead of leaking a 500 to the second caller.
         existing = await db.execute(select(User).where(User.clerk_id == clerk_id))
         user = existing.scalar_one_or_none()
         if user is None:
             # Should be unreachable: the unique-key collision means a row
             # for this clerk_id exists. If we genuinely cannot find it,
             # surface a clean error rather than masking it as a 201.
+            logger.error(
+                "IntegrityError 23505 on /auth/register but no row found for " "clerk_id_prefix={}",
+                clerk_id[:8] if clerk_id else None,
+            )
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Registration conflict could not be resolved.",
             ) from exc
+        logger.warning(
+            "Concurrent /auth/register race resolved idempotently for " "clerk_id_prefix={}",
+            clerk_id[:8] if clerk_id else None,
+        )
         return {"user_id": str(user.id), "created": False}
     await db.refresh(user)
     return {"user_id": str(user.id), "created": True}

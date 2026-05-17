@@ -431,13 +431,33 @@ async def test_register_user_ignores_clerk_id_attempted_via_body_overload():
 # ---------------------------------------------------------------------------
 
 
+def _unique_violation_orig():
+    """Build an ``orig`` exception that mimics psycopg's ``UniqueViolation``
+    well enough for the route's narrowed handler (``pgcode == "23505"``).
+
+    Using ``types.SimpleNamespace`` keeps the test fixture independent of
+    whichever DBAPI driver the project ships with — we only need the
+    attribute the route reads."""
+    import types
+
+    return types.SimpleNamespace(pgcode="23505")
+
+
+def _not_null_violation_orig():
+    """Mimic psycopg's ``NotNullViolation`` (SQLSTATE 23502). The route
+    must classify this as a real bug and 500, not as a race recovery."""
+    import types
+
+    return types.SimpleNamespace(pgcode="23502")
+
+
 @pytest.mark.asyncio
 async def test_register_user_handles_concurrent_insert_race():
     """When two concurrent first-register calls for the same ``clerk_id``
     both see NULL on the initial SELECT, the loser's INSERT raises
-    ``IntegrityError`` on the unique constraint. The route must catch
-    it, re-SELECT, and return an idempotent ``created=False`` response —
-    not bubble a 500.
+    ``IntegrityError`` on the unique constraint (pgcode 23505). The route
+    must catch it, re-SELECT, and return an idempotent ``created=False``
+    response — not bubble a 500.
     """
     from sqlalchemy.exc import IntegrityError
 
@@ -467,7 +487,7 @@ async def test_register_user_handles_concurrent_insert_race():
     db.execute = AsyncMock(side_effect=_execute)
     db.add = MagicMock()
     db.commit = AsyncMock(
-        side_effect=IntegrityError("INSERT", params=None, orig=Exception("duplicate key"))
+        side_effect=IntegrityError("INSERT", params=None, orig=_unique_violation_orig())
     )
     db.rollback = AsyncMock()
     db.refresh = AsyncMock()
@@ -490,16 +510,19 @@ async def test_register_user_handles_concurrent_insert_race():
 
 @pytest.mark.asyncio
 async def test_register_user_500s_if_integrity_error_without_recoverable_row():
-    """Defensive: if commit raises IntegrityError but the post-rollback
-    SELECT still returns NULL (should be unreachable), the route returns
-    500 rather than silently fabricating a fake idempotent response."""
+    """Defensive: if commit raises IntegrityError with pgcode 23505 but the
+    post-rollback SELECT still returns NULL (should be unreachable), the
+    route returns 500 rather than silently fabricating a fake idempotent
+    response."""
     from fastapi import HTTPException
     from sqlalchemy.exc import IntegrityError
 
     db = AsyncMock()
     db.execute = AsyncMock(return_value=_FakeResult(None))  # always NULL
     db.add = MagicMock()
-    db.commit = AsyncMock(side_effect=IntegrityError("INSERT", params=None, orig=Exception("dup")))
+    db.commit = AsyncMock(
+        side_effect=IntegrityError("INSERT", params=None, orig=_unique_violation_orig())
+    )
     db.rollback = AsyncMock()
     db.refresh = AsyncMock()
 
@@ -511,3 +534,85 @@ async def test_register_user_500s_if_integrity_error_without_recoverable_row():
             db=db,
         )
     assert exc_info.value.status_code == 500
+
+
+@pytest.mark.asyncio
+async def test_register_user_500s_on_non_unique_integrity_error():
+    """A non-unique IntegrityError (e.g. NOT NULL, FK, CHECK violation)
+    must NOT be silently absorbed by the race-recovery branch — those
+    indicate real schema bugs and must surface as a 500 with the original
+    exception chained.
+
+    This pins the narrowing of the ``except IntegrityError`` block from
+    Round 3: an earlier overly-broad catch would re-SELECT and mask the
+    bug as a successful idempotent response (if any row happened to
+    exist) or as a misleading "conflict could not be resolved" 500 with
+    the wrong detail string.
+    """
+    from fastapi import HTTPException
+    from sqlalchemy.exc import IntegrityError
+
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=_FakeResult(None))
+    db.add = MagicMock()
+    db.commit = AsyncMock(
+        side_effect=IntegrityError("INSERT", params=None, orig=_not_null_violation_orig())
+    )
+    db.rollback = AsyncMock()
+    db.refresh = AsyncMock()
+
+    body = RegisterRequest(email_hash="a" * 64)
+    with pytest.raises(HTTPException) as exc_info:
+        await register_user(
+            body=body,
+            clerk_id="clerk_schema_bug",
+            db=db,
+        )
+
+    assert exc_info.value.status_code == 500
+    # The detail string distinguishes a schema bug from the
+    # "conflict could not be resolved" race-path detail, so operators
+    # can grep production logs / responses to triage.
+    assert exc_info.value.detail == "Registration failed due to database constraint."
+    # We still rolled back so the session is clean for the next request.
+    db.rollback.assert_awaited_once()
+    # Crucially, the route must NOT have re-SELECTed for the winning row —
+    # that branch is reserved for 23505. Only the initial pre-insert SELECT
+    # happened.
+    assert db.execute.await_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Unit: production header-bypass is closed even on /auth/register
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_register_rejects_header_only_auth_in_production(monkeypatch):
+    """Round 3 / Critic 2 regression: when ``CLERK_FRONTEND_API_URL`` is set
+    (production posture), a request that presents ONLY the ``X-Clerk-User-Id``
+    header (no ``Authorization: Bearer`` JWT) MUST be rejected with 401.
+
+    The header is a trusted claim with no cryptographic binding — honouring
+    it in production would re-open exactly the auth-bypass vector Issue #90
+    closes. ``get_authenticated_clerk_id`` backs ``POST /auth/register``, so
+    this also closes the original #89 takeover vector on the production
+    posture.
+    """
+    from fastapi import HTTPException
+
+    from app.dependencies import get_authenticated_clerk_id, settings
+
+    # Production posture: URL is set, so ``settings.clerk_jwt_enforced`` is True.
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "CLERK_FRONTEND_API_URL", "https://clerk.example.com")
+    assert settings.clerk_jwt_enforced is True
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_authenticated_clerk_id(
+            request=_request_without_auth(),
+            x_clerk_user_id="user_attacker_supplied",
+        )
+    assert exc_info.value.status_code == 401
+    # The attacker-supplied identity must never appear in the error detail.
+    assert "user_attacker_supplied" not in exc_info.value.detail
