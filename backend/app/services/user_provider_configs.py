@@ -130,10 +130,28 @@ async def resolve_decrypted_key(
     return DecryptedKey(plaintext)
 
 
+class ProviderNotConfiguredError(Exception):
+    """Raised when a client-requested provider has no server-side key.
+
+    The endpoint translates this into HTTP 400 with the missing provider
+    name in the detail. Distinct from a generic 422 so the extension can
+    surface a specific "Add the API key in Options" prompt to the user.
+    """
+
+    def __init__(self, provider_name: str) -> None:
+        self.provider_name = provider_name
+        super().__init__(
+            f"Provider '{provider_name}' is not configured. "
+            "Add the API key in Options before generating."
+        )
+
+
 async def resolve_user_providers(
     user_id: uuid.UUID,
     requested: list[dict],
     db: AsyncSession,
+    *,
+    strict: bool = False,
 ) -> list[dict]:
     """Resolve client-supplied ``[{name, model}, ...]`` into provider dicts
     enriched with decrypted API keys (still wrapped in ``DecryptedKey``).
@@ -145,9 +163,21 @@ async def resolve_user_providers(
             ...
         ]
 
-    Providers without a server-side key are silently dropped. Ollama is a
-    special case — it needs no API key, so it passes through with
+    Ollama is the only keyless provider — it passes through with
     ``api_key=None``.
+
+    Modes
+    -----
+    * ``strict=False`` (default, used by the empty-list server fallback):
+      providers without a server-side key are dropped with an INFO log so
+      operators can see which configurations are missing keys. The caller
+      decides what to do with an empty result.
+    * ``strict=True`` (used when the client explicitly named providers):
+      the first provider whose row is missing / un-decryptable raises
+      :class:`ProviderNotConfiguredError`. The endpoint catches it and
+      returns HTTP 400 with the provider name in the detail. This is the
+      contract documented in Issue #197 — "client list resolves to zero
+      providers" must surface as a loud error, not a silent fallback.
 
     Callers should call ``entry["api_key"].expose()`` exactly when
     handing the key to the LLM provider HTTP call.
@@ -163,8 +193,12 @@ async def resolve_user_providers(
             continue
         key = await resolve_decrypted_key(user_id, name, db)
         if key is None:
-            logger.debug(
-                "resolve_user_providers: no server-side key for user={} provider={} — skipping",
+            if strict:
+                raise ProviderNotConfiguredError(name)
+            # Promoted from DEBUG → INFO so the silent drop is visible at
+            # the default log level (Issue #197 P1-F observability gap).
+            logger.info(
+                "provider_skipped user={} provider={} reason=no_server_key",
                 user_id,
                 name,
             )

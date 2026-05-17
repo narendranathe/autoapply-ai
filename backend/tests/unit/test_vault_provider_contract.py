@@ -65,7 +65,11 @@ from app.routers.vault._shared import (  # noqa: E402
     _reject_providers_json,
     _resolve_providers,
 )
-from app.services.user_provider_configs import DecryptedKey  # noqa: E402
+from app.services.user_provider_configs import (  # noqa: E402
+    DecryptedKey,
+    ProviderNotConfiguredError,
+    resolve_user_providers,
+)
 
 # ---------------------------------------------------------------------------
 # providers_json rejection (AC 1: 422 with clear error)
@@ -146,6 +150,95 @@ async def test_resolve_providers_rejects_providers_json_with_422():
             providers_json='[{"name":"groq","api_key":"gsk_x"}]',
         )
     assert exc_info.value.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_resolve_providers_raises_400_when_requested_provider_missing_key():
+    """Issue #197 P1-B — client explicitly names a provider that has no
+    server-side key. The endpoint must return HTTP 400 with the provider
+    name in the detail so the extension can show "Add the API key in
+    Options" rather than silently falling back to keyword-only output.
+    """
+    user = MagicMock()
+    user.id = uuid.uuid4()
+    db = AsyncMock()
+
+    async def fake_resolve(uid, name, db):
+        return None  # no server-side key for any provider
+
+    with patch(
+        "app.services.user_provider_configs.resolve_decrypted_key",
+        side_effect=fake_resolve,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await _resolve_providers(
+                providers='[{"name":"openai","model":"gpt-4o-mini"}]',
+                db=db,
+                user=user,
+            )
+
+    assert exc_info.value.status_code == 400
+    detail = exc_info.value.detail
+    assert isinstance(detail, dict)
+    assert detail["error"] == "provider_not_configured"
+    assert detail["provider"] == "openai"
+    # The user-facing message must name the missing provider.
+    assert "openai" in detail["message"]
+    assert "Options" in detail["message"]
+
+
+@pytest.mark.asyncio
+async def test_resolve_user_providers_strict_raises_for_missing_key():
+    """Unit-level mirror of the endpoint contract: strict=True surfaces a
+    ProviderNotConfiguredError with the offending provider name."""
+    user_id = uuid.uuid4()
+    db = AsyncMock()
+
+    async def fake_resolve(uid, name, db):
+        return None
+
+    with patch(
+        "app.services.user_provider_configs.resolve_decrypted_key",
+        side_effect=fake_resolve,
+    ):
+        with pytest.raises(ProviderNotConfiguredError) as exc_info:
+            await resolve_user_providers(
+                user_id,
+                [
+                    {"name": "anthropic", "model": "claude-3"},
+                    {"name": "openai", "model": "gpt-4"},
+                ],
+                db,
+                strict=True,
+            )
+
+    assert exc_info.value.provider_name == "anthropic"
+
+
+@pytest.mark.asyncio
+async def test_resolve_user_providers_non_strict_drops_missing():
+    """Default (non-strict) mode keeps the silent-drop behaviour for the
+    server-enumerated fallback path."""
+    user_id = uuid.uuid4()
+    db = AsyncMock()
+
+    async def fake_resolve(uid, name, db):
+        return DecryptedKey("k") if name == "anthropic" else None
+
+    with patch(
+        "app.services.user_provider_configs.resolve_decrypted_key",
+        side_effect=fake_resolve,
+    ):
+        out = await resolve_user_providers(
+            user_id,
+            [
+                {"name": "anthropic", "model": "claude-3"},
+                {"name": "openai", "model": "gpt-4"},
+            ],
+            db,
+            strict=False,
+        )
+    assert [p["name"] for p in out] == ["anthropic"]
 
 
 @pytest.mark.asyncio

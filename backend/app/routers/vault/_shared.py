@@ -15,7 +15,11 @@ from app.services.ats_service import ATSResult
 from app.services.github_service import GitHubService
 from app.services.resume_parser import ResumeParser
 from app.services.retrieval_agent import ResumeWithScore, RetrievalAgent
-from app.services.user_provider_configs import resolve_decrypted_key, resolve_user_providers
+from app.services.user_provider_configs import (
+    ProviderNotConfiguredError,
+    resolve_decrypted_key,
+    resolve_user_providers,
+)
 
 # ── Singletons ─────────────────────────────────────────────────────────────
 
@@ -121,11 +125,29 @@ async def _resolve_providers(
 
     requested = _parse_providers(providers)
     if requested:
-        return await resolve_user_providers(user.id, requested, db)
+        # Strict mode — the client explicitly named providers. If any of
+        # them lacks a server-side key, surface HTTP 400 with the missing
+        # provider name so the extension can prompt the user to add the
+        # key in Options instead of silently falling back to keyword-only
+        # generation (which would look like a quality regression).
+        try:
+            return await resolve_user_providers(user.id, requested, db, strict=True)
+        except ProviderNotConfiguredError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "provider_not_configured",
+                    "provider": exc.provider_name,
+                    "message": str(exc),
+                },
+            ) from exc
 
-    # No client-supplied list — pull every configured provider from the DB
-    # so existing flows (which historically relied on the server-side
-    # fallback path) keep working.
+    # No client-supplied list — server-side fallback: pull every
+    # configured provider from the DB. This is the documented
+    # backward-compatible path for clients that send ``providers=""`` and
+    # let the server enumerate user configs. Drops (corrupt rows, decrypt
+    # failures) are logged at INFO so operators can spot them; the empty
+    # final list flows through to the keyword fallback in the endpoint.
     result = await db.execute(
         select(UserProviderConfig)
         .where(
@@ -140,8 +162,12 @@ async def _resolve_providers(
     for row in rows:
         key = await resolve_decrypted_key(user.id, row.provider_name, db)
         if key is None:
-            logger.debug(
-                "_resolve_providers: skipping {} (decrypt returned None)", row.provider_name
+            # Promoted from DEBUG → INFO so the silent drop is visible at
+            # the default log level (Issue #197 P1-F observability gap).
+            logger.info(
+                "provider_skipped user={} provider={} reason=decrypt_failed_or_empty",
+                user.id,
+                row.provider_name,
             )
             continue
         enriched.append(
