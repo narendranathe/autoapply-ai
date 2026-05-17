@@ -151,11 +151,12 @@ cd dist && zip -r ../autoapply-ai.zip . && cd ..
 ### 4f. Set Extension ID in backend
 After your extension is published:
 1. Find your **Extension ID** in the Chrome Web Store URL: `...detail/YOUR_EXTENSION_ID`
-2. In Render dashboard → autoapply-ai-api → Environment:
-   ```
-   EXTENSION_ID=YOUR_EXTENSION_ID
-   ```
-3. This enables CORS to only allow requests from your extension
+2. Set it on the backend (required when `ENVIRONMENT=production`):
+   - Render: dashboard → autoapply-ai-api → Environment → `EXTENSION_ID=YOUR_EXTENSION_ID`
+   - Fly.io: `fly secrets set EXTENSION_ID=YOUR_EXTENSION_ID`
+3. This restricts CORS to that one extension. The backend refuses to start in
+   production without it — the `chrome-extension://*` wildcard in
+   `ALLOWED_ORIGINS` would otherwise let any installed extension call the API.
 
 ---
 
@@ -223,7 +224,7 @@ See `backend/.env.example` for the full list with descriptions.
 | `GITHUB_REPO_NAME` | ✅ | Private resume vault repo name |
 | `ENVIRONMENT` | — | `development` / `production` / `testing` |
 | `OLLAMA_BASE_URL` | — | Default: `http://localhost:11434` |
-| `EXTENSION_ID` | — | Set after Chrome Web Store publish |
+| `EXTENSION_ID` | ✅ (prod) | Required when `ENVIRONMENT=production`; set after Chrome Web Store publish |
 | `SENTRY_DSN` | — | Sentry error tracking (optional) |
 
 ---
@@ -265,8 +266,10 @@ For production use beyond hobby tier, upgrade to Render's **Starter plan** ($7/m
 - Verify `API_BASE` in `api.ts` points to your deployed Render URL
 
 **CORS errors in extension**
-- Set `EXTENSION_ID` env var in Render to your published extension's ID
+- Set `EXTENSION_ID` to your published extension's ID
+  (Render dashboard or `fly secrets set EXTENSION_ID=<id>`)
 - In dev: `EXTENSION_ID` can be left empty (allows all origins)
+- In production: the backend raises `RuntimeError` at startup if `EXTENSION_ID` is unset
 
 **Clerk auth 401**
 - Verify `CLERK_FRONTEND_API_URL` matches your Clerk instance (no trailing slash)

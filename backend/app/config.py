@@ -122,9 +122,20 @@ class Settings(BaseSettings):
     def cors_origins(self) -> list[str]:
         """
         Returns effective CORS origins.
-        In production with a known extension ID, restricts to that extension only.
+        In production EXTENSION_ID is required so CORS is restricted to a single
+        published extension; falling back to a chrome-extension://* wildcard
+        would let any extension call the API. Raises RuntimeError at startup
+        when the production deploy is missing the secret.
         """
-        if self.is_production and self.EXTENSION_ID:
+        if self.is_production:
+            if not self.EXTENSION_ID:
+                raise RuntimeError(
+                    "EXTENSION_ID must be set when ENVIRONMENT=production. "
+                    "The chrome-extension://* wildcard in ALLOWED_ORIGINS would "
+                    "otherwise let any installed extension call the API. "
+                    "Set it to your published Chrome Web Store extension id, e.g. "
+                    "`fly secrets set EXTENSION_ID=<your-extension-id>`."
+                )
             return [
                 f"chrome-extension://{self.EXTENSION_ID}",
                 *[o for o in self.ALLOWED_ORIGINS if not o.startswith("chrome-extension://")],
