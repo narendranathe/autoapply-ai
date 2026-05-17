@@ -21,7 +21,8 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 from fastapi import Depends, Header, HTTPException, Request, status
-from jose import JWTError, jwt
+from jose import jwt
+from jose.exceptions import JOSEError
 from loguru import logger
 from redis.asyncio import Redis
 from sqlalchemy import select
@@ -47,6 +48,11 @@ _JWKS_UNKNOWN_KIDS_MAX = 1024
 
 # Coalesce concurrent force-refreshes so we hit Clerk at most once per stampede.
 _jwks_refresh_lock = asyncio.Lock()
+
+# Clerk signs JWTs with RS256 only. This allowlist is the single security
+# boundary that blocks algorithm-confusion attacks (HS256, none, etc.) and
+# is exported so regression tests pin the exact same value.
+_CLERK_JWT_ALGORITHMS = ["RS256"]
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
@@ -255,12 +261,12 @@ async def get_current_user(
                 payload = jwt.decode(
                     token,
                     jwk,
-                    algorithms=["RS256"],
+                    algorithms=_CLERK_JWT_ALGORITHMS,
                     audience=settings.CLERK_JWT_AUDIENCE or None,
                     options=options,
                 )
                 clerk_id = payload.get("sub")
-            except JWTError as exc:
+            except JOSEError as exc:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Invalid or expired authentication token.",

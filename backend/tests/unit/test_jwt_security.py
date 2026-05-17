@@ -22,9 +22,11 @@ from typing import Any
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from jose import JWTError, jwt
+from jose import jwt
+from jose.exceptions import JOSEError
 
-ALGORITHMS = ["RS256"]
+from app.dependencies import _CLERK_JWT_ALGORITHMS
+
 GOOD_KID = "clerk-good-kid"
 
 
@@ -90,7 +92,7 @@ def test_valid_rs256_token_decodes(jwks: dict[str, Any], signing_pem: bytes) -> 
         algorithm="RS256",
         headers={"kid": GOOD_KID},
     )
-    payload = jwt.decode(token, jwks, algorithms=ALGORITHMS)
+    payload = jwt.decode(token, jwks, algorithms=_CLERK_JWT_ALGORITHMS)
     assert payload["sub"] == "user_legit"
 
 
@@ -100,7 +102,16 @@ def test_hs256_confusion_rejected(
     """Classic algorithm-confusion: attacker signs an HS256 token using
     the RSA public-key PEM as the HMAC secret. python-jose refuses to
     forge this token via ``jwt.encode`` (it blocks asymmetric keys from
-    being used as HMAC secrets) so the token is crafted by hand."""
+    being used as HMAC secrets) so the token is crafted by hand.
+
+    A real Clerk JWKS only contains RSA keys, but to make this test a
+    sharp regression detector we extend the JWKS with an ``oct`` (HMAC)
+    entry under the same ``kid`` whose secret matches the attacker's
+    forged signature. If ``_CLERK_JWT_ALGORITHMS`` is ever broadened to
+    include HS256, python-jose will resolve to the ``oct`` entry and
+    accept the forged token — the ``pytest.raises`` call will then
+    receive no exception and this test will fail loudly.
+    """
     _, pub_pem = rsa_keypair
     header = _b64url(json.dumps({"alg": "HS256", "typ": "JWT", "kid": GOOD_KID}))
     payload = _b64url(json.dumps({"sub": "attacker"}))
@@ -108,9 +119,29 @@ def test_hs256_confusion_rejected(
     sig = hmac.new(pub_pem, signing_input, hashlib.sha256).digest()
     token = f"{header}.{payload}.{_b64url(sig)}"
 
-    with pytest.raises(JWTError) as excinfo:
-        jwt.decode(token, jwks, algorithms=ALGORITHMS)
-    assert "alg" in str(excinfo.value).lower()
+    # Prepend an HS256-compatible key under the same kid so the only
+    # thing preventing forgery is the algorithm allowlist itself.
+    # python-jose resolves keys by walking the JWKS in order and
+    # returning the first kid match, so the ``oct`` entry must come
+    # first for an HS256 token to land on it.
+    jwks_with_oct: dict[str, Any] = {
+        "keys": [
+            {
+                "kty": "oct",
+                "use": "sig",
+                "kid": GOOD_KID,
+                "alg": "HS256",
+                "k": _b64url(pub_pem),
+            },
+            *jwks["keys"],
+        ]
+    }
+
+    # JOSEError is the common parent of JWTError and JWKError. python-jose
+    # may raise either depending on where the algorithm allowlist trips
+    # (header-level JWTError vs key-type JWKError when HS256 is loosened).
+    with pytest.raises(JOSEError):
+        jwt.decode(token, jwks_with_oct, algorithms=_CLERK_JWT_ALGORITHMS)
 
 
 def test_alg_none_rejected(jwks: dict[str, Any]) -> None:
@@ -120,8 +151,8 @@ def test_alg_none_rejected(jwks: dict[str, Any]) -> None:
     payload = _b64url(json.dumps({"sub": "attacker"}))
     token = f"{header}.{payload}."
 
-    with pytest.raises(JWTError) as excinfo:
-        jwt.decode(token, jwks, algorithms=ALGORITHMS)
+    with pytest.raises(JOSEError) as excinfo:
+        jwt.decode(token, jwks, algorithms=_CLERK_JWT_ALGORITHMS)
     assert "alg" in str(excinfo.value).lower()
 
 
@@ -142,8 +173,8 @@ def test_kid_swap_rejected(jwks: dict[str, Any]) -> None:
         headers={"kid": GOOD_KID},
     )
 
-    with pytest.raises(JWTError):
-        jwt.decode(token, jwks, algorithms=ALGORITHMS)
+    with pytest.raises(JOSEError):
+        jwt.decode(token, jwks, algorithms=_CLERK_JWT_ALGORITHMS)
 
 
 def test_missing_alg_rejected(jwks: dict[str, Any]) -> None:
@@ -153,8 +184,8 @@ def test_missing_alg_rejected(jwks: dict[str, Any]) -> None:
     payload = _b64url(json.dumps({"sub": "attacker"}))
     token = f"{header}.{payload}."
 
-    with pytest.raises(JWTError):
-        jwt.decode(token, jwks, algorithms=ALGORITHMS)
+    with pytest.raises(JOSEError):
+        jwt.decode(token, jwks, algorithms=_CLERK_JWT_ALGORITHMS)
 
 
 def test_empty_alg_rejected(jwks: dict[str, Any]) -> None:
@@ -164,5 +195,5 @@ def test_empty_alg_rejected(jwks: dict[str, Any]) -> None:
     payload = _b64url(json.dumps({"sub": "attacker"}))
     token = f"{header}.{payload}."
 
-    with pytest.raises(JWTError):
-        jwt.decode(token, jwks, algorithms=ALGORITHMS)
+    with pytest.raises(JOSEError):
+        jwt.decode(token, jwks, algorithms=_CLERK_JWT_ALGORITHMS)
