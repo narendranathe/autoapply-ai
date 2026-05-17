@@ -8,7 +8,12 @@
  * 4. Drain the offline sync queue when connectivity is restored
  */
 
-import type { Message, PageContext } from "../shared/types";
+import type { Message, OfflineEdit, PageContext } from "../shared/types";
+import {
+  OFFLINE_QUEUE_FAILED_KEY,
+  OFFLINE_QUEUE_KEY,
+  processOfflineQueue,
+} from "./offlineQueue";
 
 // Open sidepanel when user clicks the toolbar icon (required for MV3)
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
@@ -405,14 +410,12 @@ self.addEventListener("online", () => {
 });
 
 async function drainOfflineQueue(): Promise<void> {
-  const result = await chrome.storage.local.get("offline_queue");
-  const queue: Array<{
-    id: string;
-    versionTag: string;
-    markdownContent: string;
-    timestamp: number;
-    synced: boolean;
-  }> = result.offline_queue || [];
+  const stored = await chrome.storage.local.get([
+    OFFLINE_QUEUE_KEY,
+    OFFLINE_QUEUE_FAILED_KEY,
+  ]);
+  const queue: OfflineEdit[] = stored[OFFLINE_QUEUE_KEY] || [];
+  const existingFailed: OfflineEdit[] = stored[OFFLINE_QUEUE_FAILED_KEY] || [];
 
   const pending = queue.filter((e) => !e.synced);
   if (pending.length === 0) return;
@@ -422,28 +425,28 @@ async function drainOfflineQueue(): Promise<void> {
   const { apiBaseUrl } = await chrome.storage.local.get(["apiBaseUrl"]);
   const apiBase = (apiBaseUrl as string | undefined) || "https://autoapply-ai-api.fly.dev/api/v1";
 
-  for (const entry of pending) {
-    try {
-      const fd = new FormData();
-      fd.append("version_tag", entry.versionTag);
-      fd.append("markdown_content", entry.markdownContent);
-      fd.append("timestamp", String(entry.timestamp));
+  const { active, newlyDeadLettered, syncedCount } = await processOfflineQueue(
+    queue,
+    fetch,
+    `${apiBase}/vault/sync-markdown`,
+  );
 
-      const resp = await fetch(`${apiBase}/vault/sync-markdown`, {
-        method: "POST",
-        body: fd,
-      });
-
-      if (resp.ok) {
-        entry.synced = true;
-        console.log(`[AutoApply] Synced edit for ${entry.versionTag}`);
-      }
-    } catch {
-      // Stay pending — will retry on next online event
-    }
+  if (syncedCount > 0) {
+    console.log(`[AutoApply] Synced ${syncedCount} offline edit(s).`);
+  }
+  if (newlyDeadLettered.length > 0) {
+    console.warn(
+      `[AutoApply] Dead-lettered ${newlyDeadLettered.length} offline edit(s) after ${
+        newlyDeadLettered[0]?.failureCount ?? 0
+      } retries.`,
+    );
   }
 
-  await chrome.storage.local.set({ offline_queue: queue });
+  const updates: Record<string, unknown> = { [OFFLINE_QUEUE_KEY]: active };
+  if (newlyDeadLettered.length > 0) {
+    updates[OFFLINE_QUEUE_FAILED_KEY] = [...existingFailed, ...newlyDeadLettered];
+  }
+  await chrome.storage.local.set(updates);
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
