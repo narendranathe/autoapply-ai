@@ -372,3 +372,78 @@ async def test_concurrent_refreshes_coalesce():
     # Only one upstream force-refresh fired despite two concurrent callers.
     assert call_count == 1
     assert results == [None, None]
+
+
+# ---------------------------------------------------------------------------
+# A kid that was negatively cached must be unblocked the moment Clerk
+# publishes it; otherwise legitimate users stay 401'd for the TTL window.
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_negative_cache_invalidated_on_successful_refresh():
+    # Pre-populate the negative cache with a recent miss for kid-X.
+    dependencies._jwks_unknown_kids["kid-X"] = time.monotonic()
+    assert "kid-X" in dependencies._jwks_unknown_kids
+
+    jwk = _jwk_from_private(_rsa_keypair(), "kid-X")
+
+    async def fake_get(url):  # noqa: ANN001
+        class _Resp:
+            def raise_for_status(self) -> None:  # pragma: no cover - noop
+                return None
+
+            def json(self) -> dict:
+                return {"keys": [jwk]}
+
+        return _Resp()
+
+    class _FakeClient:
+        def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+            pass
+
+        async def __aenter__(self) -> _FakeClient:
+            return self
+
+        async def __aexit__(self, *exc) -> None:  # noqa: ANN002
+            return None
+
+        async def get(self, url):  # noqa: ANN001
+            return await fake_get(url)
+
+    with patch.object(dependencies.httpx, "AsyncClient", _FakeClient):
+        keys = await dependencies._fetch_clerk_jwks()
+
+    assert any(k["kid"] == "kid-X" for k in keys)
+    # The freshly-published kid must be evicted from the negative cache.
+    assert "kid-X" not in dependencies._jwks_unknown_kids
+
+
+# ---------------------------------------------------------------------------
+# Negative cache must FIFO-evict to bound memory under random-kid spam.
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_negative_cache_fifo_eviction():
+    cap = dependencies._JWKS_UNKNOWN_KIDS_MAX
+    # Fill the negative cache to capacity with monotonically increasing ts.
+    base = time.monotonic()
+    for i in range(cap):
+        dependencies._jwks_unknown_kids[f"kid-{i:04d}"] = base + i
+
+    assert len(dependencies._jwks_unknown_kids) == cap
+    oldest_key = f"kid-{0:04d}"
+    assert oldest_key in dependencies._jwks_unknown_kids
+
+    # Trigger a fresh miss via _resolve_jwk_for_kid; only kid "kid-current"
+    # exists upstream, so "kid-new" will be recorded as a negative-cache entry.
+    keys = [_jwk_from_private(_rsa_keypair(), "kid-current")]
+    fetch_mock = AsyncMock(return_value=keys)
+
+    with patch.object(dependencies, "_fetch_clerk_jwks", fetch_mock):
+        result = await dependencies._resolve_jwk_for_kid("kid-new")
+
+    assert result is None
+    # Cap is preserved.
+    assert len(dependencies._jwks_unknown_kids) == cap
+    # New kid is in.
+    assert "kid-new" in dependencies._jwks_unknown_kids
+    # Oldest kid was evicted.
+    assert oldest_key not in dependencies._jwks_unknown_kids

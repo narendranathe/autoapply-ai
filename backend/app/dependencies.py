@@ -42,6 +42,8 @@ _JWKS_TTL = 900  # seconds (15 minutes)
 # attacker from amplifying random-kid requests into upstream JWKS fetches.
 _jwks_unknown_kids: dict[str, float] = {}
 _JWKS_UNKNOWN_KID_TTL = 60  # seconds
+# Hard cap on the negative cache to bound memory under random-kid spam.
+_JWKS_UNKNOWN_KIDS_MAX = 1024
 
 # Coalesce concurrent force-refreshes so we hit Clerk at most once per stampede.
 _jwks_refresh_lock = asyncio.Lock()
@@ -93,6 +95,10 @@ async def _fetch_clerk_jwks() -> list[dict]:
 
     _jwks_cache["keys"] = keys
     _jwks_cache["fetched_at"] = time.monotonic()
+    # Invalidate negative cache entries for kids that just became known so
+    # legitimate requests are not blocked for the remainder of the TTL.
+    for key in keys:
+        _jwks_unknown_kids.pop(key.get("kid"), None)
     return keys  # type: ignore[return-value]
 
 
@@ -195,6 +201,13 @@ async def _resolve_jwk_for_kid(kid: str) -> dict | None:
 
         key = _find_jwk_by_kid(keys, kid)
         if key is None:
+            # FIFO eviction to bound memory under random-kid spam.
+            if len(_jwks_unknown_kids) >= _JWKS_UNKNOWN_KIDS_MAX:
+                oldest_kid = min(
+                    _jwks_unknown_kids,
+                    key=lambda k: _jwks_unknown_kids[k],
+                )
+                _jwks_unknown_kids.pop(oldest_kid, None)
             _jwks_unknown_kids[kid] = time.monotonic()
         return key
 
