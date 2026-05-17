@@ -6,7 +6,7 @@ Classifies an email body into one of the 8 application statuses:
 
 Strategy:
   1. Strip HTML from email body
-  2. Try LLM (provider from llm_service.PROVIDERS) — expects JSON response
+  2. Try LLM (provider from llm_gateway.PROVIDERS) — expects JSON response
   3. Fall back to keyword matching if LLM fails or returns invalid JSON
 
 LLM prompt returns JSON: {"status": "...", "confidence": 0.0-1.0, "reasoning": "..."}
@@ -20,7 +20,7 @@ import re
 from loguru import logger
 
 from app.schemas.application import ParseEmailResponse
-from app.services.llm_service import PROVIDERS, InvalidAPIKeyError, RateLimitError
+from app.services.llm_gateway import PROVIDERS, InvalidAPIKeyError, RateLimitError
 
 # ── Valid statuses ────────────────────────────────────────────────────────────
 
