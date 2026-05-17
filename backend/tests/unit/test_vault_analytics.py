@@ -42,7 +42,7 @@ _loguru_mod.logger = types.SimpleNamespace(  # type: ignore
     debug=lambda *a, **k: None,
 )
 
-from app.routers.vault import _compute_reward, _levenshtein  # noqa: E402
+from app.routers.vault import _compute_reward, _levenshtein, _levenshtein_ratio  # noqa: E402
 
 
 class TestLevenshtein:
@@ -104,3 +104,57 @@ class TestComputeReward:
     def test_reward_is_float(self):
         result = _compute_reward("used_as_is")
         assert isinstance(result, float)
+
+
+class TestLevenshteinRatio:
+    def test_identical_strings_ratio_1(self):
+        assert _levenshtein_ratio("hello world", "hello world") == 1.0
+
+    def test_completely_different_ratio_0(self):
+        # No characters in common, equal length → ratio == 0.0
+        assert _levenshtein_ratio("aaaa", "bbbb") == 0.0
+
+    def test_both_empty_ratio_1(self):
+        assert _levenshtein_ratio("", "") == 1.0
+
+    def test_partial_similarity_in_range(self):
+        ratio = _levenshtein_ratio("hello world", "hello globe")
+        assert 0.0 < ratio < 1.0
+
+
+class TestComputeRewardRatio:
+    def test_edited_ratio_zero_maps_to_0_4(self):
+        # ratio 0.0 → 0.4 + 0.0 * 0.4 = 0.4
+        score = _compute_reward("edited", ratio=0.0)
+        assert score == 0.4
+
+    def test_edited_ratio_half_maps_to_0_6(self):
+        # ratio 0.5 → 0.4 + 0.5 * 0.4 = 0.6
+        score = _compute_reward("edited", ratio=0.5)
+        assert abs(score - 0.6) < 1e-9
+
+    def test_edited_ratio_one_maps_to_0_8(self):
+        # ratio 1.0 → 0.4 + 1.0 * 0.4 = 0.8
+        score = _compute_reward("edited", ratio=1.0)
+        assert abs(score - 0.8) < 1e-9
+
+    def test_edited_missing_ratio_fallback_to_0_8(self):
+        # No ratio + no edit_distance → backward-compat 0.8
+        assert _compute_reward("edited") == 0.8
+
+    def test_edited_ratio_clamped_above_1(self):
+        score = _compute_reward("edited", ratio=1.5)
+        assert abs(score - 0.8) < 1e-9
+
+    def test_edited_ratio_clamped_below_0(self):
+        score = _compute_reward("edited", ratio=-0.3)
+        assert score == 0.4
+
+    def test_used_as_is_unaffected_by_ratio(self):
+        assert _compute_reward("used_as_is", ratio=0.0) == 1.0
+
+    def test_regenerated_unaffected_by_ratio(self):
+        assert _compute_reward("regenerated", ratio=1.0) == 0.2
+
+    def test_skipped_unaffected_by_ratio(self):
+        assert _compute_reward("skipped", ratio=1.0) == 0.0
