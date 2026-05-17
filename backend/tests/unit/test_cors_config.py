@@ -87,15 +87,12 @@ def test_non_production_without_extension_id_warns_but_starts(env: str) -> None:
         warnings.simplefilter("always")
         s = _settings(ENVIRONMENT=env, EXTENSION_ID="")
     # Settings instantiated successfully
-    assert s.ENVIRONMENT == env
+    assert env == s.ENVIRONMENT
     assert s.EXTENSION_ID == ""
     # A wildcard-warning was emitted
-    wildcard_warnings = [
-        w for w in caught if "chrome-extension://*" in str(w.message)
-    ]
+    wildcard_warnings = [w for w in caught if "chrome-extension://*" in str(w.message)]
     assert wildcard_warnings, (
-        f"expected a wildcard UserWarning in {env}, "
-        f"got: {[str(w.message) for w in caught]}"
+        f"expected a wildcard UserWarning in {env}, " f"got: {[str(w.message) for w in caught]}"
     )
 
 
@@ -140,9 +137,7 @@ def test_production_with_extension_id_does_not_emit_wildcard_warning() -> None:
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         _settings(ENVIRONMENT="production", EXTENSION_ID="abcdefghijklmnopabcdefghijklmnop")
-    wildcard_warnings = [
-        w for w in caught if "chrome-extension://*" in str(w.message)
-    ]
+    wildcard_warnings = [w for w in caught if "chrome-extension://*" in str(w.message)]
     assert not wildcard_warnings, (
         f"production with EXTENSION_ID should not warn, "
         f"got: {[str(w.message) for w in wildcard_warnings]}"
