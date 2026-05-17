@@ -187,9 +187,7 @@ class Settings(BaseSettings):
         ``require_extension_id_in_production``.
         """
         if v and not re.fullmatch(r"^[a-p]{32}$", v):
-            raise ValueError(
-                f"EXTENSION_ID must be exactly 32 lowercase letters (a-p), got {v!r}"
-            )
+            raise ValueError(f"EXTENSION_ID must be exactly 32 lowercase letters (a-p), got {v!r}")
         return v
 
     @field_validator("ENVIRONMENT")
