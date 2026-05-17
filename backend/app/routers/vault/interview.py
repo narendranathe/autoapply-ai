@@ -14,6 +14,8 @@ from app.models.user import User
 from app.models.work_history import WorkHistoryEntry
 from app.services.llm_gateway import LLMGateway
 
+from ._shared import _expose_providers_for_gateway, _resolve_providers
+
 router = APIRouter()
 
 
@@ -48,7 +50,8 @@ async def generate_interview_prep(
     company_name: str = Form(...),
     role_title: str = Form(""),
     jd_text: str = Form(""),
-    providers_json: str = Form(""),
+    providers: str = Form(""),  # JSON: [{"name": "groq", "model": "..."}]
+    providers_json: str = Form(""),  # DEPRECATED — rejected with 422
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -67,13 +70,13 @@ async def generate_interview_prep(
     wh_entries = list(wh_result.scalars().all())
     work_history_text = "\n\n".join(e.to_text_block() for e in wh_entries)
 
-    # Parse providers list
-    providers_list: list[dict] = []
-    if providers_json.strip():
-        try:
-            providers_list = _json.loads(providers_json)
-        except Exception:
-            logger.warning("interview-prep: invalid providers_json")
+    # Issue #197 — server-side key resolution; the client sends only
+    # ``{name, model}``. ``providers_json`` (legacy) is rejected by
+    # ``_resolve_providers`` with a 422.
+    providers_list_wrapped: list[dict] = await _resolve_providers(
+        providers, db, user, providers_json=providers_json
+    )
+    providers_list: list[dict] = _expose_providers_for_gateway(providers_list_wrapped)
 
     user_prompt = f"""Candidate work history:
 {work_history_text or "Not provided."}

@@ -72,6 +72,13 @@ async def test_generate_resume_calls_rag_and_passes_context():
         ),
         patch("app.routers.vault.score_resume", return_value=None),
         patch("app.routers.vault.build_tfidf_vector", return_value=[]),
+        # Issue #197: resolve_decrypted_key is called by generate_resume.
+        # Stub it so the test doesn't need a real DB row.
+        patch(
+            "app.services.user_provider_configs.resolve_decrypted_key",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
         # Prevent actual DB insert
         patch.object(mock_db, "add"),
         patch.object(mock_db, "commit", new_callable=AsyncMock),
@@ -95,8 +102,8 @@ async def test_generate_resume_calls_rag_and_passes_context():
             work_history_text="Worked at Acme.",
             education_text="B.S. CS",
             llm_provider="mock",
-            llm_api_key="test-key",
             ollama_model="llama3.1:8b",
+            providers_json="",  # Issue #197 — legacy field, kept blank
             base_resume_id=None,
             db=mock_db,
             user=mock_user,
@@ -146,6 +153,12 @@ async def test_generate_resume_empty_rag_context_forwarded():
         ),
         patch("app.routers.vault.score_resume", return_value=None),
         patch("app.routers.vault.build_tfidf_vector", return_value=[]),
+        # Issue #197: resolve_decrypted_key is called by generate_resume.
+        patch(
+            "app.services.user_provider_configs.resolve_decrypted_key",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
         patch.object(mock_db, "add"),
         patch.object(mock_db, "commit", new_callable=AsyncMock),
         patch.object(mock_db, "refresh", new_callable=AsyncMock),
@@ -167,8 +180,8 @@ async def test_generate_resume_empty_rag_context_forwarded():
             work_history_text="Worked at Beta Corp.",
             education_text="M.S. CS",
             llm_provider="mock",
-            llm_api_key="test-key",
             ollama_model="llama3.1:8b",
+            providers_json="",  # Issue #197 — legacy field, kept blank
             base_resume_id=None,
             db=mock_db,
             user=mock_user,

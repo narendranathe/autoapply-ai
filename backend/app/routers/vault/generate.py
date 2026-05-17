@@ -2,9 +2,7 @@
 Vault sub-module: resume and content generation endpoints.
 """
 
-import contextlib
 import hashlib
-import json as _json
 import sys
 import uuid
 
@@ -20,7 +18,12 @@ from app.models.work_history import WorkHistoryEntry
 from app.services.ats_service import ATSResult
 from app.services.resume_generator import PersonalProfile
 
-from ._shared import _github_service
+from ._shared import (
+    _expose_providers_for_gateway,
+    _github_service,
+    _reject_providers_json,
+    _resolve_providers,
+)
 
 
 def _score_resume():
@@ -80,10 +83,10 @@ async def generate_resume(
     portfolio_label: str = Form(""),
     work_history_text: str = Form(...),
     education_text: str = Form(""),
-    # LLM config
+    # LLM config — Issue #197: API keys live server-side only.
     llm_provider: str = Form("anthropic"),
-    llm_api_key: str | None = Form(None),
     ollama_model: str = Form("llama3.1:8b"),
+    providers_json: str = Form(""),  # DEPRECATED — rejected with 422
     # Base resume for ATS pre-scoring
     base_resume_id: str | None = Form(None),
     db: AsyncSession = Depends(get_db),
@@ -133,6 +136,19 @@ async def generate_resume(
         education_text=education_text,
     )
 
+    # Issue #197 — reject the deprecated client-side ``providers_json``
+    # field before doing any work.
+    _reject_providers_json(providers_json)
+
+    # Resolve the server-side key for ``llm_provider`` (if any). The
+    # client no longer transmits ``llm_api_key`` — it is decrypted from
+    # ``user_provider_configs`` here and exposed at the single boundary
+    # below.
+    from app.services.user_provider_configs import resolve_decrypted_key
+
+    decrypted = await resolve_decrypted_key(user.id, llm_provider, db)
+    api_key_plain = decrypted.expose() if decrypted is not None else ""
+
     generated = await _generate_full_latex_resume()(
         profile=profile,
         jd_text=jd_text,
@@ -141,7 +157,7 @@ async def generate_resume(
         job_id=job_id,
         ats_result=ats_result,
         provider=llm_provider,
-        api_key=llm_api_key or user.encrypted_llm_api_key or "",
+        api_key=api_key_plain,
         ollama_model=ollama_model,
         rag_context=rag_ctx,
     )
@@ -230,7 +246,8 @@ async def generate_tailored_resume(
     jd_text: str = Form(...),
     company_name: str = Form(...),
     role_title: str = Form(""),
-    providers_json: str = Form(""),  # JSON: [{"name":"groq","api_key":"...","model":"..."}]
+    providers: str = Form(""),  # JSON: [{"name": "groq", "model": "..."}]
+    providers_json: str = Form(""),  # DEPRECATED — rejected with 422
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -287,19 +304,20 @@ async def generate_tailored_resume(
         education_text="",
     )
 
-    # Resolve provider — use first entry in providers_json, fallback to user's stored key
-    providers_list: list[dict] = []
-    if providers_json.strip():
-        try:
-            providers_list = _json.loads(providers_json)
-        except Exception:
-            logger.warning("generate/tailored: invalid providers_json — using fallback")
+    # Issue #197 — keys come from server-side configs. Reject the
+    # deprecated ``providers_json`` field, parse ``providers``, and
+    # decrypt at a single ``.expose()`` boundary below.
+    providers_list_wrapped: list[dict] = await _resolve_providers(
+        providers, db, user, providers_json=providers_json
+    )
 
     provider = "anthropic"
-    api_key = user.encrypted_llm_api_key or ""
-    if providers_list:
-        provider = providers_list[0].get("name", "anthropic")
-        api_key = providers_list[0].get("api_key", "") or api_key
+    api_key = ""
+    if providers_list_wrapped:
+        first = providers_list_wrapped[0]
+        provider = first.get("name", "anthropic")
+        key_obj = first.get("api_key")
+        api_key = key_obj.expose() if key_obj is not None else ""
 
     generated = await _generate_full_latex_resume()(
         profile=profile,
@@ -363,7 +381,8 @@ async def generate_summary_endpoint(
     jd_text: str = Form(""),
     word_limit: int = Form(80),
     candidate_name: str = Form(""),
-    providers_json: str = Form(""),
+    providers: str = Form(""),  # JSON: [{"name": "groq", "model": "..."}]
+    providers_json: str = Form(""),  # DEPRECATED — rejected with 422
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict:
@@ -371,10 +390,10 @@ async def generate_summary_endpoint(
     Generate a 2-4 sentence professional summary tailored to a role.
     Returns {summary, provider_used, word_count}.
     """
-    providers_list: list[dict] = []
-    with contextlib.suppress(Exception):
-        if providers_json.strip():
-            providers_list = _json.loads(providers_json)
+    providers_list_wrapped: list[dict] = await _resolve_providers(
+        providers, db, user, providers_json=providers_json
+    )
+    providers_list: list[dict] = _expose_providers_for_gateway(providers_list_wrapped)
 
     from app.models.work_history import WorkHistoryEntry as WHModel
 
@@ -420,7 +439,8 @@ async def generate_bullets_endpoint(
     jd_text: str = Form(""),
     num_bullets: int = Form(5),
     target_company_for_context: str = Form(""),
-    providers_json: str = Form(""),
+    providers: str = Form(""),  # JSON: [{"name": "groq", "model": "..."}]
+    providers_json: str = Form(""),  # DEPRECATED — rejected with 422
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict:
@@ -428,10 +448,10 @@ async def generate_bullets_endpoint(
     Generate ATS-optimized bullet points for a specific role, grounded in work history.
     Returns {bullets, provider_used, count}.
     """
-    providers_list: list[dict] = []
-    with contextlib.suppress(Exception):
-        if providers_json.strip():
-            providers_list = _json.loads(providers_json)
+    providers_list_wrapped: list[dict] = await _resolve_providers(
+        providers, db, user, providers_json=providers_json
+    )
+    providers_list: list[dict] = _expose_providers_for_gateway(providers_list_wrapped)
 
     from app.models.work_history import WorkHistoryEntry as WHModel
 
@@ -478,7 +498,8 @@ async def generate_cover_letter_endpoint(
     tone: str = Form("professional"),  # professional|enthusiastic|concise|conversational
     word_limit: int = Form(400),
     candidate_name: str = Form(""),
-    providers_json: str = Form(""),
+    providers: str = Form(""),  # JSON: [{"name": "groq", "model": "..."}]
+    providers_json: str = Form(""),  # DEPRECATED — rejected with 422
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict:
@@ -486,10 +507,10 @@ async def generate_cover_letter_endpoint(
     Generate cover letter drafts — one per enabled LLM provider, run in parallel.
     Accepts tone and word_limit controls. Returns up to N drafts (one per provider).
     """
-    providers_list: list[dict] = []
-    with contextlib.suppress(Exception):
-        if providers_json.strip():
-            providers_list = _json.loads(providers_json)
+    providers_list_wrapped: list[dict] = await _resolve_providers(
+        providers, db, user, providers_json=providers_json
+    )
+    providers_list: list[dict] = _expose_providers_for_gateway(providers_list_wrapped)
 
     # Load candidate work history
     from app.models.work_history import WorkHistoryEntry as WHModel  # local import avoids circular

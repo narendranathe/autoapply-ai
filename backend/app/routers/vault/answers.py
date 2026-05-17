@@ -2,9 +2,7 @@
 Vault sub-module: answer generation, saving, feedback, search, and retrieval.
 """
 
-import contextlib
 import hashlib
-import json as _json
 import sys
 import unicodedata
 import uuid
@@ -28,7 +26,7 @@ from app.services.resume_generator import (
     generate_answer_drafts_parallel,
 )
 
-from ._shared import _resolve_providers
+from ._shared import _expose_providers_for_gateway, _reject_providers_json, _resolve_providers
 
 
 def _agent():
@@ -51,9 +49,13 @@ async def generate_answers(
     jd_text: str = Form(""),
     work_history_text: str = Form(""),  # optional — auto-filled from DB if empty
     llm_provider: str = Form("anthropic"),
-    llm_api_key: str | None = Form(None),
     ollama_model: str = Form("llama3.1:8b"),
-    providers_json: str = Form(""),  # JSON: [{"name":"groq","api_key":"...","model":"..."}]
+    # Issue #197 — client now sends only ``{name, model}`` per provider.
+    # ``providers_json`` is the legacy field that used to carry decrypted
+    # API keys; we accept it as a form field only so we can reject it
+    # with a clear 422 (the legacy contract is gone).
+    providers: str = Form(""),  # JSON: [{"name": "groq", "model": "..."}]
+    providers_json: str = Form(""),  # DEPRECATED — rejected with 422
     max_length: int = Form(0),  # textarea maxlength — 0 means no limit
     category_instructions: str = Form(""),  # per-category style instructions from user settings
     db: AsyncSession = Depends(get_db),
@@ -88,8 +90,16 @@ async def generate_answers(
     past_texts = [ans.answer_text for _, ans in best_past if (ans.reward_score or 0) >= 0.6]
 
     # Cascade mode: try providers in priority order, use first that works for all 3 drafts
-    # #25: prefer server-side config when client sends empty providers_json
-    providers_list: list[dict] = await _resolve_providers(providers_json, db, user)
+    # Issue #197 — keys are resolved server-side; ``providers_json`` is
+    # rejected upfront and ``providers`` carries only ``{name, model}``.
+    providers_list_wrapped: list[dict] = await _resolve_providers(
+        providers, db, user, providers_json=providers_json
+    )
+    # Unwrap DecryptedKey for the downstream generator helpers, which
+    # pass ``api_key`` straight to ``LLMGateway.generate``. Calling
+    # ``.expose()`` here keeps the leak surface to a single, auditable
+    # boundary.
+    providers_list: list[dict] = _expose_providers_for_gateway(providers_list_wrapped)
 
     # Resolve candidate name for cover letter greeting
     candidate_name = ""
@@ -148,6 +158,11 @@ async def generate_answers(
             if provider_used and provider_used != "fallback":
                 draft_providers = [provider_used] * len(drafts)
     else:
+        # No server-side providers configured — fall through to the
+        # keyword/rule-based path inside ``generate_answer_drafts``.
+        # Issue #197: client no longer transmits llm_api_key; the per-
+        # user legacy ``encrypted_llm_api_key`` column is not in scope
+        # for this issue.
         drafts = await generate_answer_drafts(
             question_text=question_text,
             question_category=question_category,
@@ -156,7 +171,7 @@ async def generate_answers(
             jd_text=jd_text,
             work_history_text=work_history_text,
             provider=llm_provider,
-            api_key=llm_api_key or user.encrypted_llm_api_key or "",
+            api_key="",
             ollama_model=ollama_model,
             past_accepted_answers=past_texts or None,
             rag_context=answer_rag_ctx,
@@ -178,7 +193,8 @@ async def generate_answers(
 async def trim_answer(
     answer_text: str = Form(...),
     max_chars: int = Form(...),
-    providers_json: str = Form(""),
+    providers: str = Form(""),  # JSON: [{"name": "groq", "model": "..."}]
+    providers_json: str = Form(""),  # DEPRECATED — rejected with 422
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict:
@@ -190,10 +206,9 @@ async def trim_answer(
     if len(answer_text) <= max_chars:
         return {"trimmed": answer_text, "char_count": len(answer_text), "provider_used": "none"}
 
-    providers_list: list[dict] = []
-    if providers_json.strip():
-        with contextlib.suppress(Exception):
-            providers_list = _json.loads(providers_json)
+    _reject_providers_json(providers_json)
+    providers_list_wrapped: list[dict] = await _resolve_providers(providers, db, user)
+    providers_list: list[dict] = _expose_providers_for_gateway(providers_list_wrapped)
 
     system_prompt = "You are a precise editor. Your only task is to shorten text to fit a strict character limit while preserving meaning, tone, and all key facts. Return ONLY the shortened text — no commentary."
     target_words = max(30, (max_chars // 5) - 10)

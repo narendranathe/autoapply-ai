@@ -4,14 +4,18 @@ Shared helpers and singletons used across vault sub-modules.
 
 import json as _json
 
+from fastapi import HTTPException, status
 from loguru import logger
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import User
+from app.models.user_provider_config import UserProviderConfig
 from app.services.ats_service import ATSResult
 from app.services.github_service import GitHubService
 from app.services.resume_parser import ResumeParser
 from app.services.retrieval_agent import ResumeWithScore, RetrievalAgent
+from app.services.user_provider_configs import resolve_decrypted_key, resolve_user_providers
 
 # ── Singletons ─────────────────────────────────────────────────────────────
 
@@ -20,36 +24,108 @@ _resume_parser = ResumeParser()
 _github_service = GitHubService()
 
 
-# ── Provider resolution ────────────────────────────────────────────────────
+# ── Provider resolution (Issue #197 — server-side keys only) ───────────────
+
+
+_PROVIDERS_JSON_REJECT_MSG = (
+    "providers_json is no longer accepted. The client must send "
+    "`providers` as a JSON list of {name, model} objects; API keys are "
+    "resolved server-side from the user's provider configs (Issue #197)."
+)
+
+
+def _reject_providers_json(value: str, *, field_name: str = "providers_json") -> None:
+    """Raise 422 if the deprecated ``providers_json`` field is present.
+
+    Issue #197 removed the contract where the client transmits decrypted
+    API keys on every request. We refuse the old field outright (no
+    silent fallback) so misconfigured clients fail loudly instead of
+    silently leaking keys over the wire.
+    """
+    if value and value.strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"error": "providers_json_removed", "message": _PROVIDERS_JSON_REJECT_MSG},
+        )
+
+
+def _parse_providers(providers: str) -> list[dict]:
+    """Parse the new ``providers`` form field — JSON list of ``{name, model}``.
+
+    Returns ``[]`` for empty / whitespace-only input. Raises 422 on
+    malformed JSON or a non-list payload so the client gets a clear
+    error.
+    """
+    if not providers or not providers.strip():
+        return []
+    try:
+        parsed = _json.loads(providers)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "error": "invalid_providers",
+                "message": f"providers field must be JSON: {exc}",
+            },
+        ) from exc
+    if not isinstance(parsed, list):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "error": "invalid_providers",
+                "message": "providers must be a JSON list of {name, model} objects",
+            },
+        )
+    # Strip out any stray api_key keys the client might still send — they
+    # are explicitly ignored now.
+    return [
+        {"name": str(e.get("name", "")), "model": str(e.get("model", ""))}
+        for e in parsed
+        if isinstance(e, dict)
+    ]
 
 
 async def _resolve_providers(
-    providers_json: str,
+    providers: str,
     db: "AsyncSession",
     user: "User",
+    *,
+    providers_json: str | None = None,
 ) -> list[dict]:
+    """Resolve the provider list for a generation endpoint.
+
+    Issue #197 — the request body now carries only ``providers`` as a
+    JSON list of ``{name, model}``. API keys live in the
+    ``user_provider_configs`` table and are decrypted in-memory via
+    :func:`resolve_decrypted_key`.
+
+    The legacy ``providers_json`` parameter (which used to carry decrypted
+    API keys from the client) is rejected with 422 — no backward-compat
+    window. Callers must pass it to this helper so we get a single,
+    consistent rejection path.
+
+    Returned entries::
+
+        [{"name": "anthropic", "model": "...", "api_key": DecryptedKey}, ...]
+
+    ``api_key`` is a :class:`DecryptedKey` instance — call ``.expose()``
+    only at the boundary that hands it to the LLM provider.
+
+    When ``providers`` is empty, fall back to *every* server-side config
+    the user has stored (legacy behaviour for clients that just send
+    ``providers=""``). Each row goes through ``resolve_decrypted_key`` so
+    a corrupt row is skipped rather than crashing the request.
     """
-    Resolve the provider list for a generation endpoint.
+    if providers_json is not None:
+        _reject_providers_json(providers_json)
 
-    Priority:
-    1. providers_json from request body (client-configured, backward-compat)
-    2. Server-side UserProviderConfig rows (if providers_json is empty)
-    3. Empty list → keyword fallback handled downstream
+    requested = _parse_providers(providers)
+    if requested:
+        return await resolve_user_providers(user.id, requested, db)
 
-    This implements issue #25: server-side provider authority.
-    """
-    from sqlalchemy import select
-
-    from app.models.user_provider_config import UserProviderConfig
-    from app.utils.encryption import decrypt_value
-
-    if providers_json.strip():
-        try:
-            return _json.loads(providers_json)  # type: ignore[return-value]
-        except Exception:
-            logger.warning("Invalid providers_json — falling back to server-side config")
-
-    # Read from server-side storage
+    # No client-supplied list — pull every configured provider from the DB
+    # so existing flows (which historically relied on the server-side
+    # fallback path) keep working.
     result = await db.execute(
         select(UserProviderConfig)
         .where(
@@ -59,17 +135,56 @@ async def _resolve_providers(
         .order_by(UserProviderConfig.provider_name)
     )
     rows = result.scalars().all()
-    providers = []
+
+    enriched: list[dict] = []
     for row in rows:
-        try:
-            api_key = decrypt_value(row.encrypted_api_key) if row.encrypted_api_key else ""
-        except Exception:
-            api_key = ""
-        if api_key:
-            providers.append(
-                {"name": row.provider_name, "api_key": api_key, "model": row.model_override or ""}
+        key = await resolve_decrypted_key(user.id, row.provider_name, db)
+        if key is None:
+            logger.debug(
+                "_resolve_providers: skipping {} (decrypt returned None)", row.provider_name
             )
-    return providers
+            continue
+        enriched.append(
+            {
+                "name": row.provider_name,
+                "model": row.model_override or "",
+                "api_key": key,
+            }
+        )
+    return enriched
+
+
+def _expose_providers_for_gateway(providers: list[dict]) -> list[dict]:
+    """Convert ``DecryptedKey``-wrapped entries to plaintext-key entries.
+
+    The downstream ``resume_generator`` helpers still expect
+    ``{"name", "api_key": str, "model"}`` because they pass ``api_key``
+    straight to ``LLMGateway.generate(api_key=...)``. We unwrap exactly
+    here so ``.expose()`` is invoked at a single, auditable boundary.
+
+    Ollama entries have ``api_key=None`` and are emitted as ``""`` for
+    the gateway call.
+    """
+    out: list[dict] = []
+    for p in providers:
+        raw = p.get("api_key")
+        if raw is None:
+            plaintext = ""
+        elif isinstance(raw, str):
+            # Defensive — shouldn't happen after resolve_user_providers,
+            # but the cascade helpers occasionally re-enter with already
+            # plain entries (tests).
+            plaintext = raw
+        else:
+            plaintext = raw.expose()
+        out.append(
+            {
+                "name": p.get("name", ""),
+                "model": p.get("model", ""),
+                "api_key": plaintext,
+            }
+        )
+    return out
 
 
 # ── Serialisation helpers ──────────────────────────────────────────────────
