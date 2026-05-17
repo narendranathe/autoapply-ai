@@ -17,6 +17,7 @@ from app.models.user import User
 from app.models.work_history import WorkHistoryEntry
 from app.services.ats_service import ATSResult
 from app.services.resume_generator import PersonalProfile
+from app.services.user_provider_configs import resolve_decrypted_key
 
 from ._shared import (
     _expose_providers_for_gateway,
@@ -24,6 +25,36 @@ from ._shared import (
     _reject_providers_json,
     _resolve_providers,
 )
+
+
+def _first_provider_for_gateway(
+    wrapped: list[dict],
+    *,
+    default_provider: str = "anthropic",
+) -> tuple[str, str]:
+    """Pick the first wrapped provider entry and expose its key.
+
+    Issue #197 P1-E — both ``generate_resume`` and ``generate_tailored_resume``
+    used to open-code ``key_obj.expose() if key_obj is not None else ""``
+    at the call site. That drift duplicates the single sanctioned
+    ``.expose()`` boundary and makes the leak surface harder to audit.
+
+    Returns ``(provider_name, plaintext_api_key)``. When ``wrapped`` is
+    empty the defaults flow through (``default_provider``, ``""``).
+    Ollama entries have ``api_key=None`` and emit ``""`` for the
+    gateway call (gateway treats it as the no-auth marker).
+    """
+    if not wrapped:
+        return default_provider, ""
+    first = wrapped[0]
+    name = first.get("name") or default_provider
+    key_obj = first.get("api_key")
+    if key_obj is None:
+        return name, ""
+    if isinstance(key_obj, str):
+        # Defensive — tests sometimes build provider dicts directly.
+        return name, key_obj
+    return name, key_obj.expose()
 
 
 def _score_resume():
@@ -142,12 +173,13 @@ async def generate_resume(
 
     # Resolve the server-side key for ``llm_provider`` (if any). The
     # client no longer transmits ``llm_api_key`` — it is decrypted from
-    # ``user_provider_configs`` here and exposed at the single boundary
-    # below.
-    from app.services.user_provider_configs import resolve_decrypted_key
-
+    # ``user_provider_configs`` here and exposed via the shared helper
+    # so every ``.expose()`` site is auditable from one place.
     decrypted = await resolve_decrypted_key(user.id, llm_provider, db)
-    api_key_plain = decrypted.expose() if decrypted is not None else ""
+    _, api_key_plain = _first_provider_for_gateway(
+        [{"name": llm_provider, "model": "", "api_key": decrypted}],
+        default_provider=llm_provider,
+    )
 
     generated = await _generate_full_latex_resume()(
         profile=profile,
@@ -306,18 +338,12 @@ async def generate_tailored_resume(
 
     # Issue #197 — keys come from server-side configs. Reject the
     # deprecated ``providers_json`` field, parse ``providers``, and
-    # decrypt at a single ``.expose()`` boundary below.
+    # decrypt at the single shared ``.expose()`` boundary
+    # (``_first_provider_for_gateway``).
     providers_list_wrapped: list[dict] = await _resolve_providers(
         providers, db, user, providers_json=providers_json
     )
-
-    provider = "anthropic"
-    api_key = ""
-    if providers_list_wrapped:
-        first = providers_list_wrapped[0]
-        provider = first.get("name", "anthropic")
-        key_obj = first.get("api_key")
-        api_key = key_obj.expose() if key_obj is not None else ""
+    provider, api_key = _first_provider_for_gateway(providers_list_wrapped)
 
     generated = await _generate_full_latex_resume()(
         profile=profile,
