@@ -109,7 +109,7 @@ def test_non_production_cors_origins_returns_allowed_origins(env: str) -> None:
 
 def test_dev_with_extension_id_still_returns_allowed_origins_unchanged() -> None:
     """Dev mode never rewrites ALLOWED_ORIGINS even if EXTENSION_ID is set."""
-    s = _settings(ENVIRONMENT="development", EXTENSION_ID="abcdefghijklmnop")
+    s = _settings(ENVIRONMENT="development", EXTENSION_ID="abcdefghijklmnopabcdefghijklmnop")
     assert s.cors_origins == s.ALLOWED_ORIGINS
 
 
@@ -118,9 +118,9 @@ def test_dev_with_extension_id_still_returns_allowed_origins_unchanged() -> None
 
 def test_production_with_extension_id_pins_to_specific_extension() -> None:
     """Happy path: production + EXTENSION_ID set -> pinned CORS, no wildcard."""
-    s = _settings(ENVIRONMENT="production", EXTENSION_ID="abcdefghijklmnop")
+    s = _settings(ENVIRONMENT="production", EXTENSION_ID="abcdefghijklmnopabcdefghijklmnop")
     origins = s.cors_origins
-    assert "chrome-extension://abcdefghijklmnop" in origins
+    assert "chrome-extension://abcdefghijklmnopabcdefghijklmnop" in origins
     # No wildcard, no placeholder, anywhere
     assert "chrome-extension://*" not in origins
     assert all(not o.startswith("chrome-extension://*") for o in origins)
@@ -128,7 +128,7 @@ def test_production_with_extension_id_pins_to_specific_extension() -> None:
 
 def test_production_with_extension_id_preserves_non_extension_origins() -> None:
     """Pinning the extension origin should not drop http://localhost etc."""
-    s = _settings(ENVIRONMENT="production", EXTENSION_ID="abcdefghijklmnop")
+    s = _settings(ENVIRONMENT="production", EXTENSION_ID="abcdefghijklmnopabcdefghijklmnop")
     origins = s.cors_origins
     # Non-chrome-extension origins from ALLOWED_ORIGINS survive
     assert "http://localhost:3000" in origins
@@ -139,7 +139,7 @@ def test_production_with_extension_id_does_not_emit_wildcard_warning() -> None:
     """Properly configured production should be silent re: the wildcard."""
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        _settings(ENVIRONMENT="production", EXTENSION_ID="abcdefghijklmnop")
+        _settings(ENVIRONMENT="production", EXTENSION_ID="abcdefghijklmnopabcdefghijklmnop")
     wildcard_warnings = [
         w for w in caught if "chrome-extension://*" in str(w.message)
     ]
@@ -158,7 +158,7 @@ def test_cors_origins_raises_if_production_extension_id_is_mutated_away() -> Non
     Even if someone mutates the Settings object after construction (bypassing
     the model validator), the property must refuse to return a wildcard.
     """
-    s = _settings(ENVIRONMENT="production", EXTENSION_ID="abcdefghijklmnop")
+    s = _settings(ENVIRONMENT="production", EXTENSION_ID="abcdefghijklmnopabcdefghijklmnop")
     # Bypass the validator by mutating directly
     s.EXTENSION_ID = ""
     with pytest.raises(RuntimeError) as exc_info:
@@ -168,7 +168,7 @@ def test_cors_origins_raises_if_production_extension_id_is_mutated_away() -> Non
 
 def test_cors_origins_never_contains_star_wildcard_in_production() -> None:
     """No production code path may yield a star-wildcard origin."""
-    s = _settings(ENVIRONMENT="production", EXTENSION_ID="my-ext-id-12345")
+    s = _settings(ENVIRONMENT="production", EXTENSION_ID="ponmlkjihgfedcbaponmlkjihgfedcba")
     for o in s.cors_origins:
         assert o != "chrome-extension://*"
         assert not o.endswith("/*")

@@ -9,6 +9,7 @@ Usage:
     print(settings.DATABASE_URL)
 """
 
+import re
 from functools import lru_cache
 from typing import Self
 
@@ -169,6 +170,27 @@ class Settings(BaseSettings):
                 *[o for o in self.ALLOWED_ORIGINS if not o.startswith("chrome-extension://")],
             ]
         return self.ALLOWED_ORIGINS
+
+    @field_validator("EXTENSION_ID")
+    @classmethod
+    def validate_extension_id(cls, v: str) -> str:
+        """
+        Chrome extension IDs are exactly 32 lowercase letters (a-p) — they are
+        a base16 encoding using a-p instead of 0-f. An operator typo such as
+        ``*`` or ``"   "`` would otherwise be embedded literally into the CORS
+        allowlist as ``chrome-extension://*`` / ``chrome-extension://   `` and
+        defeat the fail-fast guarantee. Validate the format here so bad values
+        are rejected at startup (issue #92).
+
+        Empty string is allowed — it is the documented dev/staging default and
+        is rejected separately in production by
+        ``require_extension_id_in_production``.
+        """
+        if v and not re.fullmatch(r"^[a-p]{32}$", v):
+            raise ValueError(
+                f"EXTENSION_ID must be exactly 32 lowercase letters (a-p), got {v!r}"
+            )
+        return v
 
     @field_validator("ENVIRONMENT")
     @classmethod
