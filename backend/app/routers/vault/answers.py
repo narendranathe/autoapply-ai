@@ -6,6 +6,7 @@ import contextlib
 import hashlib
 import json as _json
 import sys
+import unicodedata
 import uuid
 
 from fastapi import APIRouter, Depends, Form, HTTPException, status
@@ -409,10 +410,15 @@ def _levenshtein(a: str, b: str) -> int:
 
 
 def _levenshtein_ratio(original: str, submitted: str) -> float:
-    """Levenshtein similarity ratio in [0.0, 1.0]; higher = less changed."""
+    """Levenshtein similarity ratio in [0.0, 1.0]; higher = less changed.
+
+    Inputs are NFC-normalized so visually-identical Unicode (e.g. precomposed
+    vs. decomposed accents) compare as equal. Inputs are truncated to the
+    first 1000 characters to match `_levenshtein` and bound CPU cost.
+    """
+    original = unicodedata.normalize("NFC", original)[:1000]
+    submitted = unicodedata.normalize("NFC", submitted)[:1000]
     if original == submitted:
-        return 1.0
-    if not original and not submitted:
         return 1.0
     return float(_RFLevenshtein.normalized_similarity(original, submitted))
 
@@ -455,8 +461,8 @@ def _compute_reward(
 async def record_answer_feedback(
     answer_id: str,
     feedback: str = Form(...),  # used_as_is | edited | regenerated | skipped
-    edited_answer: str | None = Form(None),  # final text if user edited before using
-    submitted_text: str | None = Form(None),  # final text used for ratio-based reward
+    edited_answer: str | None = Form(None, max_length=20000),  # final text if user edited
+    submitted_text: str | None = Form(None, max_length=20000),  # final text for ratio reward
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -464,10 +470,15 @@ async def record_answer_feedback(
     Record the outcome of a generated answer draft (RL reward signal).
     Called by the extension after the user decides what to do with a draft.
 
-    When `feedback=edited`, the reward is computed from the Levenshtein
-    similarity ratio between the original draft and `submitted_text`.
-    If `submitted_text` is omitted, the reward falls back to the legacy
-    flat 0.8 for backward compatibility.
+    When `feedback=edited` and either `submitted_text` or `edited_answer` is
+    supplied (and non-blank), the reward is computed from the Levenshtein
+    similarity ratio between the original draft and the supplied text.
+    If neither is supplied (or both are blank/whitespace-only), the reward
+    falls back to the legacy flat 0.8 and the stored answer text is left
+    unchanged for backward compatibility.
+
+    `submitted_text` takes precedence over `edited_answer` when both are
+    provided. Both fields are capped at 20 000 characters to bound CPU cost.
     """
     stmt = select(ApplicationAnswer).where(
         ApplicationAnswer.id == uuid.UUID(answer_id),
@@ -482,25 +493,33 @@ async def record_answer_feedback(
     if feedback not in valid_feedback:
         raise HTTPException(status_code=422, detail=f"feedback must be one of {valid_feedback}")
 
-    final_text = submitted_text if submitted_text is not None else edited_answer
+    # Prefer submitted_text, then edited_answer. Treat blank/whitespace-only
+    # as "not provided" so an empty string never wipes the stored answer.
+    final_text: str | None = None
+    if submitted_text is not None and submitted_text.strip():
+        final_text = submitted_text
+    elif edited_answer is not None and edited_answer.strip():
+        final_text = edited_answer
 
     edit_dist = 0
-    ratio: float | None = None
+    similarity_ratio: float | None = None
     if feedback == "edited" and final_text is not None:
         original_text = ans.answer_text
         edit_dist = _levenshtein(original_text, final_text)
-        ratio = _levenshtein_ratio(original_text, final_text)
+        similarity_ratio = _levenshtein_ratio(original_text, final_text)
         ans.answer_text = final_text
         ans.word_count = len(final_text.split())
 
     ans.feedback = feedback
     ans.edit_distance = edit_dist
-    ans.reward_score = _compute_reward(feedback, edit_dist, len(ans.answer_text), ratio=ratio)
+    ans.reward_score = _compute_reward(
+        feedback, edit_dist, len(ans.answer_text), ratio=similarity_ratio
+    )
 
     await db.commit()
     logger.info(
         f"Answer feedback: {feedback} reward={ans.reward_score:.2f} "
-        f"edit_dist={edit_dist} ratio={ratio} answer_id={answer_id}"
+        f"edit_dist={edit_dist} similarity_ratio={similarity_ratio} answer_id={answer_id}"
     )
 
     return {
@@ -508,7 +527,7 @@ async def record_answer_feedback(
         "feedback": feedback,
         "reward_score": ans.reward_score,
         "edit_distance": edit_dist,
-        "ratio": ratio,
+        "similarity_ratio": similarity_ratio,
     }
 
 
