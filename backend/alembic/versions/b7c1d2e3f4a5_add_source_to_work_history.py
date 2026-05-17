@@ -32,14 +32,25 @@ def upgrade() -> None:
         "work_history_entries",
         sa.Column("source_url", sa.String(500), nullable=True),
     )
+    # Partial UNIQUE index on (user_id, source_url) — only enforced where
+    # source_url is not null. This prevents the duplicate-row race between two
+    # concurrent /import/github calls (the router catches IntegrityError and
+    # treats it as "another concurrent call already created it"). The partial
+    # predicate avoids treating every manual row (source_url IS NULL) as
+    # duplicating every other manual row.
     op.create_index(
-        "ix_work_history_user_source_url",
+        "ix_work_history_user_source_url_unique",
         "work_history_entries",
         ["user_id", "source_url"],
+        unique=True,
+        postgresql_where=sa.text("source_url IS NOT NULL"),
     )
 
 
 def downgrade() -> None:
-    op.drop_index("ix_work_history_user_source_url", table_name="work_history_entries")
+    op.drop_index(
+        "ix_work_history_user_source_url_unique",
+        table_name="work_history_entries",
+    )
     op.drop_column("work_history_entries", "source_url")
     op.drop_column("work_history_entries", "source")

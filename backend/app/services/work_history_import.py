@@ -9,6 +9,8 @@ but a callable httpx.AsyncClient factory can be injected for tests.
 
 from __future__ import annotations
 
+import re
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -19,6 +21,25 @@ from app.utils.encryption import decrypt_value
 
 class WorkHistoryImportError(Exception):
     """Base exception for import failures (auth, parsing, rate limit)."""
+
+
+class WorkHistoryAuthError(WorkHistoryImportError):
+    """GitHub token is invalid or expired (HTTP 401 upstream)."""
+
+
+class WorkHistoryPermissionError(WorkHistoryImportError):
+    """GitHub returned a true 403 (permission denied, not rate-limit)."""
+
+
+class WorkHistoryRateLimitError(WorkHistoryImportError):
+    """
+    Upstream rate limit hit. ``retry_after`` is seconds the caller should
+    wait before retrying (computed from the ``X-RateLimit-Reset`` header).
+    """
+
+    def __init__(self, message: str = "GitHub API rate limit exceeded.", *, retry_after: int = 60):
+        super().__init__(message)
+        self.retry_after = max(0, int(retry_after))
 
 
 # ── GitHub ─────────────────────────────────────────────────────────────────
@@ -65,8 +86,11 @@ def repo_to_entry_kwargs(repo: dict[str, Any]) -> dict[str, Any]:
     technologies: list[str] = [language] if language else []
 
     return {
-        "entry_type": "work",
-        "company_name": "",  # GitHub repos have no employer
+        # GitHub repositories are personal projects, not employment.
+        # Mark explicitly as "project" so to_text_block/UI can render
+        # appropriately (e.g. "PROJECT: my-repo on GitHub").
+        "entry_type": "project",
+        "company_name": "GitHub",
         "role_title": name,
         "start_date": created_at or "",
         "end_date": pushed_at or None,
@@ -107,11 +131,23 @@ async def fetch_github_repos(
             headers=_build_github_headers(token),
         )
         if resp.status_code == 401:
-            raise WorkHistoryImportError(
-                "GitHub token is invalid or expired. Reconnect in settings."
-            )
+            raise WorkHistoryAuthError("GitHub token is invalid or expired. Reconnect in settings.")
         if resp.status_code == 403:
-            raise WorkHistoryImportError("GitHub API rate limit or permission denied.")
+            # Distinguish rate-limit (X-RateLimit-Remaining: 0) from a true
+            # permission denial. GitHub uses 403 for both — the header is
+            # the only reliable signal.
+            remaining = resp.headers.get("X-RateLimit-Remaining")
+            if remaining == "0":
+                try:
+                    reset_ts = int(resp.headers.get("X-RateLimit-Reset", "0"))
+                except (TypeError, ValueError):
+                    reset_ts = 0
+                retry_after = reset_ts - int(time.time()) if reset_ts else 60
+                raise WorkHistoryRateLimitError(
+                    "GitHub API rate limit exceeded. Try again later.",
+                    retry_after=retry_after,
+                )
+            raise WorkHistoryPermissionError(f"GitHub API permission denied: {resp.text[:200]}")
         if resp.status_code >= 400:
             raise WorkHistoryImportError(f"GitHub API error {resp.status_code}: {resp.text[:200]}")
         data = resp.json()
@@ -121,6 +157,49 @@ async def fetch_github_repos(
 
 
 # ── LinkedIn ───────────────────────────────────────────────────────────────
+
+
+# Upload + parsing safety caps. LinkedIn Profile.json exports are typically
+# under 1 MB and contain at most a few dozen positions; numbers well above
+# these reflect either bad input or a DoS attempt.
+MAX_LINKEDIN_FILE_BYTES = 5 * 1024 * 1024  # 5 MB
+MAX_LINKEDIN_POSITIONS = 500
+MAX_BULLET_CHARS = 500
+MAX_BULLETS_PER_POSITION = 20
+
+
+# Control chars (excluding tab/newline/CR), zero-width chars, bidi overrides:
+# these are common prompt-injection vectors when the description is later
+# concatenated into an LLM prompt.
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+_ZERO_WIDTH_RE = re.compile("[​-‏‪-‮⁠-⁩]")
+# Prompt-injection sentinels: lines starting with role markers like
+# "system:", "assistant:", "user:", or with "<|" tags used by chat templates.
+_PROMPT_INJECTION_RE = re.compile(r"(?i)^(?:system|assistant|user)\s*:\s*")
+
+
+def _sanitize_bullet(text: str) -> str | None:
+    """
+    Clean a LinkedIn description bullet before it reaches any LLM prompt.
+
+    Returns None for bullets that should be dropped entirely (e.g. lines that
+    look like a prompt-injection role marker).
+    """
+    if not text:
+        return None
+    cleaned = _CONTROL_CHAR_RE.sub("", text)
+    cleaned = _ZERO_WIDTH_RE.sub("", cleaned)
+    cleaned = cleaned.strip()
+    if not cleaned:
+        return None
+    # Drop obvious prompt-injection lines outright rather than try to neutralize
+    if _PROMPT_INJECTION_RE.match(cleaned):
+        return None
+    if cleaned.startswith("<|"):
+        return None
+    if len(cleaned) > MAX_BULLET_CHARS:
+        cleaned = cleaned[: MAX_BULLET_CHARS - 3].rstrip() + "..."
+    return cleaned
 
 
 def _linkedin_date_to_string(date_obj: Any) -> str:
@@ -211,7 +290,14 @@ def parse_linkedin_positions(profile: dict[str, Any]) -> list[dict[str, Any]]:
         description = (
             pos.get("description") or pos.get("summary") or pos.get("Description") or ""
         ).strip()
-        bullets = [line.strip() for line in description.splitlines() if line.strip()]
+        bullets: list[str] = []
+        for line in description.splitlines():
+            cleaned = _sanitize_bullet(line)
+            if cleaned is None:
+                continue
+            bullets.append(cleaned)
+            if len(bullets) >= MAX_BULLETS_PER_POSITION:
+                break
 
         location = pos.get("location") or pos.get("Location") or None
         if isinstance(location, str):
@@ -300,8 +386,15 @@ GitHubRepoFetcher = Callable[[str], Awaitable[list[dict[str, Any]]]]
 __all__ = [
     "GITHUB_API_BASE",
     "GITHUB_REPOS_PATH",
+    "MAX_BULLET_CHARS",
+    "MAX_BULLETS_PER_POSITION",
+    "MAX_LINKEDIN_FILE_BYTES",
+    "MAX_LINKEDIN_POSITIONS",
     "GitHubRepoFetcher",
+    "WorkHistoryAuthError",
     "WorkHistoryImportError",
+    "WorkHistoryPermissionError",
+    "WorkHistoryRateLimitError",
     "dedupe_github",
     "dedupe_linkedin",
     "fetch_github_repos",

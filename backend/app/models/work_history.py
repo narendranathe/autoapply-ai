@@ -25,7 +25,7 @@ class WorkHistoryEntry(Base, TimestampMixin):
     # --- Entry type ---
     entry_type: Mapped[str] = mapped_column(
         String(20), nullable=False, default="work"
-    )  # "work" | "education" | "certification"
+    )  # "work" | "education" | "certification" | "project"
 
     # --- Role identity ---
     company_name: Mapped[str] = mapped_column(String(200), nullable=False)
@@ -59,8 +59,14 @@ class WorkHistoryEntry(Base, TimestampMixin):
     def to_text_block(self) -> str:
         """Format as a dense text block for LLM injection."""
         date_range = f"{self.start_date} – {'present' if self.is_current else self.end_date or '?'}"
-        status = "CURRENT" if self.is_current else "PAST"
-        lines = [f"{status} ROLE: {self.role_title} at {self.company_name} ({date_range})"]
+        if self.entry_type == "project":
+            # Personal projects (e.g. GitHub repos): "PROJECT: name on GitHub (...)"
+            # Use ``company_name`` as the host (defaults to "GitHub" for imports).
+            host = (self.company_name or "GitHub").strip() or "GitHub"
+            lines = [f"PROJECT: {self.role_title} on {host} ({date_range})"]
+        else:
+            status = "CURRENT" if self.is_current else "PAST"
+            lines = [f"{status} ROLE: {self.role_title} at {self.company_name} ({date_range})"]
         for b in self.bullets:
             lines.append(f"• {b}")
         if self.technologies:

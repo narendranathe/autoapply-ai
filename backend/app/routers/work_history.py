@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, s
 from loguru import logger
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_current_user, get_db
@@ -35,7 +36,12 @@ from app.services.resume_generator import (
 )
 from app.services.resume_parser import ResumeParser
 from app.services.work_history_import import (
+    MAX_LINKEDIN_FILE_BYTES,
+    MAX_LINKEDIN_POSITIONS,
+    WorkHistoryAuthError,
     WorkHistoryImportError,
+    WorkHistoryPermissionError,
+    WorkHistoryRateLimitError,
     dedupe_github,
     dedupe_linkedin,
     fetch_github_repos,
@@ -507,6 +513,12 @@ async def import_work_history_from_github(
     name as the title and the description + primary language as bullets.
     Deduplication key is the repo ``html_url`` stored in ``source_url`` —
     re-running the endpoint is a no-op once a repo is imported.
+
+    Error mapping:
+      * 401 — token invalid/expired (re-auth)
+      * 403 — true permission denied (token lacks ``repo`` scope, etc.)
+      * 429 — GitHub rate limit; ``Retry-After`` header is set
+      * 502 — any other upstream failure
     """
     if not user.encrypted_github_token:
         raise HTTPException(
@@ -516,6 +528,22 @@ async def import_work_history_from_github(
 
     try:
         repos = await fetch_github_repos(user.encrypted_github_token)
+    except WorkHistoryAuthError as exc:
+        logger.warning(f"[import/github] user={user.id} auth failed: {exc}")
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except WorkHistoryRateLimitError as exc:
+        logger.warning(
+            f"[import/github] user={user.id} rate-limited, retry_after={exc.retry_after}s"
+        )
+        # FastAPI forwards the ``headers`` kwarg straight to the response.
+        raise HTTPException(
+            status_code=429,
+            detail=str(exc),
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
+    except WorkHistoryPermissionError as exc:
+        logger.warning(f"[import/github] user={user.id} permission denied: {exc}")
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except WorkHistoryImportError as exc:
         logger.warning(f"[import/github] user={user.id} fetch failed: {exc}")
         raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -535,7 +563,22 @@ async def import_work_history_from_github(
     for kwargs in new_entries:
         db.add(WorkHistoryEntry(user_id=user.id, **kwargs))
 
-    await db.commit()
+    # Two concurrent calls can both pass the dedupe check above (e.g. a double-click)
+    # and try to insert the same (user_id, source_url) row. The partial unique index
+    # added in migration ``b7c1d2e3f4a5`` makes the second commit fail with
+    # IntegrityError — treat it as "another concurrent call already created it"
+    # and report all candidates as skipped.
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        logger.info(
+            f"[import/github] user={user.id} concurrent insert hit unique index; "
+            f"treating as skipped ({exc.__class__.__name__})"
+        )
+        skipped += len(new_entries)
+        new_entries = []
+
     logger.info(
         f"[import/github] user={user.id} created={len(new_entries)} skipped={skipped} "
         f"total_repos={len(repos)}"
@@ -557,8 +600,20 @@ async def import_work_history_from_linkedin(
 
     Each entry in ``positions[]`` becomes a ``WorkHistoryEntry(source='linkedin')``.
     Dedupe key: (company_name, role_title, start_date) — case-insensitive.
+
+    Upload limits (anti-DoS):
+      * file size <= ``MAX_LINKEDIN_FILE_BYTES`` (5 MB)
+      * positions count <= ``MAX_LINKEDIN_POSITIONS`` (500)
+    Anything larger is rejected with 413.
     """
-    raw = await file.read()
+    # Read with a hard cap (one byte over the limit so we can detect overflow
+    # without slurping arbitrarily large bodies into memory).
+    raw = await file.read(MAX_LINKEDIN_FILE_BYTES + 1)
+    if len(raw) > MAX_LINKEDIN_FILE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Profile.json too large; LinkedIn exports are typically <1 MB.",
+        )
     if not raw:
         raise HTTPException(status_code=400, detail="Empty file upload.")
     try:
@@ -571,6 +626,16 @@ async def import_work_history_from_linkedin(
 
     if not isinstance(profile, dict):
         raise HTTPException(status_code=400, detail="Profile.json must be a JSON object.")
+
+    raw_positions = profile.get("positions") or profile.get("Positions") or []
+    if isinstance(raw_positions, list) and len(raw_positions) > MAX_LINKEDIN_POSITIONS:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=(
+                f"Profile contains too many positions "
+                f"(>{MAX_LINKEDIN_POSITIONS}); please split the import."
+            ),
+        )
 
     candidates = parse_linkedin_positions(profile)
     if not candidates:
@@ -597,7 +662,20 @@ async def import_work_history_from_linkedin(
     for kwargs in new_entries:
         db.add(WorkHistoryEntry(user_id=user.id, **kwargs))
 
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        # LinkedIn entries don't carry a source_url so the partial unique index
+        # rarely fires here, but a future migration adding a (user, company,
+        # role, start) constraint would surface the same race. Swallow it.
+        await db.rollback()
+        logger.info(
+            f"[import/linkedin] user={user.id} concurrent insert hit unique index; "
+            f"treating as skipped ({exc.__class__.__name__})"
+        )
+        skipped += len(new_entries)
+        new_entries = []
+
     logger.info(
         f"[import/linkedin] user={user.id} created={len(new_entries)} skipped={skipped} "
         f"total_positions={len(candidates)}"
