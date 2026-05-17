@@ -209,6 +209,39 @@ class Settings(BaseSettings):
             )
         return self
 
+    @model_validator(mode="after")
+    def require_clerk_frontend_api_url_in_production(self) -> Self:
+        """
+        Refuse to start in production without ``CLERK_FRONTEND_API_URL``.
+
+        Without this URL, JWKS validation in ``get_current_user`` is skipped and
+        any caller can present an arbitrary ``X-Clerk-User-Id`` header to
+        impersonate any user (Issue #90 — P0 auth bypass).
+
+        In staging/development the URL is optional, but a missing value emits a
+        clear warning so operators do not silently rely on the header-only path.
+        """
+        if not self.CLERK_FRONTEND_API_URL:
+            if self.is_production:
+                raise ValueError(
+                    "CLERK_FRONTEND_API_URL must be set when ENVIRONMENT=production. "
+                    "Without it, Clerk JWT signatures cannot be verified and the "
+                    "backend would silently trust the X-Clerk-User-Id header — an "
+                    "auth bypass. Set it to your Clerk Frontend API URL, e.g. "
+                    "`fly secrets set CLERK_FRONTEND_API_URL=https://<app>.clerk.accounts.dev`."
+                )
+            # Non-production: emit a clear warning so the missing URL is visible
+            # in dev/staging logs instead of being a silent bypass.
+            import warnings
+
+            warnings.warn(
+                "CLERK_FRONTEND_API_URL is unset — Clerk JWT signatures will NOT "
+                "be verified; the backend will accept the X-Clerk-User-Id header "
+                "without proof. This is only safe in local development.",
+                stacklevel=2,
+            )
+        return self
+
     @property
     def is_production(self) -> bool:
         return self.ENVIRONMENT == "production"

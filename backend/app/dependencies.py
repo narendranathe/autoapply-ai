@@ -238,6 +238,21 @@ async def get_current_user(
 
     clerk_id: str | None = None
 
+    # ── 0. Fail-closed guard for misconfigured production ─────────────────
+    # The Settings validator already refuses to start in production without
+    # CLERK_FRONTEND_API_URL, but we re-check here for defense in depth: if
+    # the validator is ever bypassed or settings are mutated at runtime, the
+    # backend must NOT silently trust the X-Clerk-User-Id header.
+    if not settings.CLERK_FRONTEND_API_URL and settings.is_production:
+        logger.error(
+            "CLERK_FRONTEND_API_URL is unset in production — refusing to "
+            "authenticate any request (would otherwise be an auth bypass)."
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Auth not configured",
+        )
+
     # ── 1. JWT path (production) ──────────────────────────────────────────
     if settings.CLERK_FRONTEND_API_URL:
         auth_header = request.headers.get("Authorization", "")

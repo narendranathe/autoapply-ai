@@ -44,8 +44,16 @@ def test_settings_allows_dev_test_user_id_in_development():
 
 
 def test_settings_allows_empty_dev_test_user_id_in_production():
-    """ENVIRONMENT=production with empty DEV_TEST_USER_ID must validate cleanly."""
-    s = Settings(ENVIRONMENT="production", DEV_TEST_USER_ID="")
+    """ENVIRONMENT=production with empty DEV_TEST_USER_ID must validate cleanly.
+
+    Also supplies CLERK_FRONTEND_API_URL because production startup now refuses
+    to boot without it (Issue #90).
+    """
+    s = Settings(
+        ENVIRONMENT="production",
+        DEV_TEST_USER_ID="",
+        CLERK_FRONTEND_API_URL="https://app.clerk.accounts.dev",
+    )
     assert s.DEV_TEST_USER_ID == ""
     assert s.is_production is True
 
@@ -154,6 +162,40 @@ async def test_non_development_without_credentials_raises_401(monkeypatch):
         await get_current_user(request=_request_without_auth(), db=mock_db, x_clerk_user_id=None)
 
     assert exc_info.value.status_code == 401
+    mock_db.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_misconfigured_production_rejects_request_with_401(monkeypatch):
+    """Issue #90 — defense-in-depth.
+
+    Startup validation already refuses to boot in production without
+    CLERK_FRONTEND_API_URL, but if settings are mutated at runtime (or the
+    validator is somehow bypassed), every authenticated request must still
+    fail closed with 401 "Auth not configured" — NOT trust the
+    X-Clerk-User-Id header.
+    """
+    from app.dependencies import settings
+
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "DEV_TEST_USER_ID", "")
+    monkeypatch.setattr(settings, "CLERK_FRONTEND_API_URL", "")
+
+    mock_db = AsyncMock()
+    mock_db.execute = AsyncMock()
+
+    with pytest.raises(HTTPException) as exc_info:
+        # Even with an X-Clerk-User-Id header that would otherwise be trusted,
+        # the misconfigured-production guard MUST short-circuit to 401 and
+        # never touch the database.
+        await get_current_user(
+            request=_request_without_auth(),
+            db=mock_db,
+            x_clerk_user_id="user_attacker_supplied",
+        )
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "Auth not configured"
     mock_db.execute.assert_not_awaited()
 
 
