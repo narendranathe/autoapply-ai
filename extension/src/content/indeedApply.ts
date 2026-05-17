@@ -262,9 +262,10 @@ async function runFill(applyRoot: HTMLElement, btn: HTMLButtonElement): Promise<
 
   const apiBase = (raw.apiBaseUrl as string | undefined) || "https://autoapply-ai-api.fly.dev/api/v1";
   const configs = (raw.providerConfigs as Record<string, ProviderCfg> | undefined) ?? {};
+  // P0 #198: only ship {name, model} — apiKey stays out of the payload.
   const providers = Object.entries(configs)
-    .filter(([, c]) => !!c.apiKey)
-    .map(([name, c]) => ({ name, api_key: c.apiKey, model: c.model }));
+    .filter(([, c]) => !!c.apiKey || c.enabled === true)
+    .map(([name, c]) => ({ name, model: c.model ?? "" }));
 
   // Use the currently visible step, or the whole apply root
   const stepRoot =

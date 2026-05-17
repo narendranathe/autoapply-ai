@@ -462,7 +462,9 @@ class FloatingPanel {
   private clerkUserId: string | null = null;
   private clerkToken: string | null = null;
   private clerkTokenExp: number = 0;
-  private providers: Array<{ name: string; api_key: string; model: string }> = [];
+  // P0 #198: provider list carries only {name, model}. The backend reads
+  // the encrypted key from user_provider_configs by user_id.
+  private providers: Array<{ name: string; model: string }> = [];
   private profile: Profile = {
     firstName: "", lastName: "", email: "", phone: "",
     city: "", state: "", zip: "", country: "United States",
@@ -527,9 +529,11 @@ class FloatingPanel {
     if (data.categoryModelRoutes) this.categoryModelRoutes = data.categoryModelRoutes as Record<string, string>;
     if (data.providerConfigs) {
       const RANK: Record<string, number> = { anthropic: 1, openai: 2, gemini: 3, groq: 4, perplexity: 5, kimi: 6 };
-      this.providers = Object.entries(data.providerConfigs as Record<string, { enabled: boolean; apiKey: string; model: string }>)
-        .filter(([, cfg]) => !!cfg.apiKey)  // enabled = has a key
-        .map(([name, cfg]) => ({ name, api_key: cfg.apiKey, model: cfg.model }))
+      // Include providers that either still have a local key (pre-migration)
+      // or have been explicitly enabled (post-migration: backend holds the key).
+      this.providers = Object.entries(data.providerConfigs as Record<string, { enabled?: boolean; apiKey?: string; model?: string }>)
+        .filter(([, cfg]) => !!cfg && (!!cfg.apiKey || cfg.enabled === true))
+        .map(([name, cfg]) => ({ name, model: cfg.model ?? "" }))
         .sort((a, b) => (RANK[a.name] ?? 50) - (RANK[b.name] ?? 50));
     }
 

@@ -165,6 +165,19 @@
         <h2>LLM Providers</h2>
         <p class="hint" style="margin-bottom:14px">Enable providers you have keys for. The best available provider is used first — falls back automatically if it fails.</p>
 
+        <!-- P0 #198: migration banner. Shows only when one or more provider
+             keys are still stored locally in chrome.storage.local. The
+             "Migrate" button does PUT → GET-verify per provider; only on
+             verified success is the local key stripped. -->
+        <div id="provider-migrate-banner" style="display:none;background:#332b00;border:1px solid #b45309;border-radius:8px;padding:10px 12px;margin-bottom:14px;color:#fde68a;font-size:13px;">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+            <strong style="color:#fcd34d;">Action needed:</strong>
+            <span id="provider-migrate-banner-text">N keys still stored locally — click to migrate.</span>
+            <button class="btn" id="provider-migrate-btn" style="margin-left:auto;background:#b45309;color:#fff;border:1px solid #92400e;">Migrate keys to server</button>
+          </div>
+          <div id="provider-migrate-status" class="status" style="margin-top:6px;"></div>
+        </div>
+
         <!-- Anthropic (Priority 1) -->
         <div class="provider-row" id="provider-anthropic">
           <div class="provider-header">

@@ -237,6 +237,28 @@ export interface GenerateTailoredResponse {
   warnings: string[];
 }
 
+// ── Provider serialisation ─────────────────────────────────────────────────
+//
+// P0 #198 (implementation B): the extension MUST NOT send plaintext API keys
+// over the wire on every generation request. The backend reads each user's
+// key from the encrypted ``user_provider_configs`` table. We only send the
+// provider name + optional model so the server can honour user preference
+// for which provider to call first.
+//
+// This helper is the single chokepoint — every ``providers_json`` payload
+// flows through it. Tests assert the output never contains an ``api_key``
+// field, regardless of what shape the call site passes in.
+function serializeProvidersForApi(
+  providers: ReadonlyArray<{ name: string; model?: string; apiKey?: string }> | undefined,
+): string | null {
+  if (!providers || providers.length === 0) return null;
+  return JSON.stringify(
+    providers.map((p) => ({ name: p.name, model: p.model ?? "" })),
+  );
+}
+
+export { serializeProvidersForApi as __serializeProvidersForApi };
+
 // ── Vault endpoints ────────────────────────────────────────────────────────
 
 export const vaultApi = {
@@ -267,8 +289,12 @@ export const vaultApi = {
     workHistoryText: string;
     maxLength?: number;    // textarea character limit — passed to LLM to respect
     categoryInstructions?: string;  // per-category style instructions from settings
-    providers?: Array<{ name: string; apiKey: string; model?: string }>;
-    // legacy single-provider fallback
+    // P0 #198: providers carry only {name, model}. The backend reads the
+    // encrypted key from user_provider_configs. apiKey is accepted but
+    // ignored to keep the call sites that still pass it from breaking
+    // during the migration window.
+    providers?: Array<{ name: string; model?: string; apiKey?: string }>;
+    // legacy single-provider fallback — still permitted but apiKey is dropped
     llmProvider?: string;
     llmApiKey?: string;
     ollamaModel?: string;
@@ -282,13 +308,13 @@ export const vaultApi = {
     fd.append("work_history_text", params.workHistoryText);
     if (params.maxLength) fd.append("max_length", String(params.maxLength));
     if (params.categoryInstructions) fd.append("category_instructions", params.categoryInstructions);
-    if (params.providers && params.providers.length > 0) {
-      fd.append("providers_json", JSON.stringify(
-        params.providers.map((p) => ({ name: p.name, api_key: p.apiKey, model: p.model ?? "" }))
-      ));
+    const providersJson = serializeProvidersForApi(params.providers);
+    if (providersJson) {
+      fd.append("providers_json", providersJson);
     } else {
       if (params.llmProvider) fd.append("llm_provider", params.llmProvider);
-      if (params.llmApiKey) fd.append("llm_api_key", params.llmApiKey);
+      // P0 #198: ``llm_api_key`` is intentionally not sent. The backend
+      // falls back to the encrypted server-side key by user_id.
       if (params.ollamaModel) fd.append("ollama_model", params.ollamaModel);
     }
     return post("/vault/generate/answers", fd);
@@ -508,17 +534,18 @@ export const vaultApi = {
     jdText: string;
     companyName: string;
     roleTitle?: string;
-    providers?: Array<{ name: string; apiKey: string; model?: string }>;
+    providers?: Array<{ name: string; model?: string; apiKey?: string }>;
   }): Promise<GenerateTailoredResponse> {
     const fd = new FormData();
     fd.append("base_resume_id", params.baseResumeId);
     fd.append("jd_text", params.jdText);
     fd.append("company_name", params.companyName);
     if (params.roleTitle) fd.append("role_title", params.roleTitle);
-    if (params.providers?.length) {
-      fd.append("providers_json", JSON.stringify(
-        params.providers.map((p) => ({ name: p.name, api_key: p.apiKey, model: p.model ?? "" }))
-      ));
+    {
+      // P0 #198: never ship api_key on the wire — backend reads from
+      // user_provider_configs (encrypted at rest, decrypted per request).
+      const providersJson = serializeProvidersForApi(params.providers);
+      if (providersJson) fd.append("providers_json", providersJson);
     }
     return post("/vault/generate/tailored", fd);
   },
@@ -528,16 +555,17 @@ export const vaultApi = {
     companyName: string;
     roleTitle?: string;
     jdText?: string;
-    providers?: Array<{ name: string; apiKey: string; model?: string }>;
+    providers?: Array<{ name: string; model?: string; apiKey?: string }>;
   }): Promise<{ questions: InterviewQuestion[]; total: number }> {
     const fd = new FormData();
     fd.append("company_name", params.companyName);
     if (params.roleTitle) fd.append("role_title", params.roleTitle);
     if (params.jdText) fd.append("jd_text", params.jdText);
-    if (params.providers?.length) {
-      fd.append("providers_json", JSON.stringify(
-        params.providers.map((p) => ({ name: p.name, api_key: p.apiKey, model: p.model ?? "" }))
-      ));
+    {
+      // P0 #198: never ship api_key on the wire — backend reads from
+      // user_provider_configs (encrypted at rest, decrypted per request).
+      const providersJson = serializeProvidersForApi(params.providers);
+      if (providersJson) fd.append("providers_json", providersJson);
     }
     return post("/vault/interview-prep", fd);
   },
@@ -550,7 +578,7 @@ export const vaultApi = {
     tone?: "professional" | "enthusiastic" | "concise" | "conversational";
     wordLimit?: number;
     candidateName?: string;
-    providers?: Array<{ name: string; apiKey: string; model?: string }>;
+    providers?: Array<{ name: string; model?: string; apiKey?: string }>;
   }): Promise<{ drafts: string[]; draft_providers: string[]; tone: string; word_limit: number }> {
     const fd = new FormData();
     fd.append("company_name", params.companyName);
@@ -559,10 +587,11 @@ export const vaultApi = {
     if (params.tone) fd.append("tone", params.tone);
     if (params.wordLimit) fd.append("word_limit", String(params.wordLimit));
     if (params.candidateName) fd.append("candidate_name", params.candidateName);
-    if (params.providers?.length) {
-      fd.append("providers_json", JSON.stringify(
-        params.providers.map((p) => ({ name: p.name, api_key: p.apiKey, model: p.model ?? "" }))
-      ));
+    {
+      // P0 #198: never ship api_key on the wire — backend reads from
+      // user_provider_configs (encrypted at rest, decrypted per request).
+      const providersJson = serializeProvidersForApi(params.providers);
+      if (providersJson) fd.append("providers_json", providersJson);
     }
     return post("/vault/generate/cover-letter", fd);
   },
@@ -591,15 +620,16 @@ export const vaultApi = {
   trimAnswer(params: {
     answerText: string;
     maxChars: number;
-    providers?: Array<{ name: string; apiKey: string; model?: string }>;
+    providers?: Array<{ name: string; model?: string; apiKey?: string }>;
   }): Promise<{ trimmed: string; char_count: number; provider_used: string }> {
     const fd = new FormData();
     fd.append("answer_text", params.answerText);
     fd.append("max_chars", String(params.maxChars));
-    if (params.providers?.length) {
-      fd.append("providers_json", JSON.stringify(
-        params.providers.map((p) => ({ name: p.name, api_key: p.apiKey, model: p.model ?? "" }))
-      ));
+    {
+      // P0 #198: never ship api_key on the wire — backend reads from
+      // user_provider_configs (encrypted at rest, decrypted per request).
+      const providersJson = serializeProvidersForApi(params.providers);
+      if (providersJson) fd.append("providers_json", providersJson);
     }
     return post("/vault/generate/answers/trim", fd);
   },
@@ -611,7 +641,7 @@ export const vaultApi = {
     jdText: string;
     wordLimit?: number;
     candidateName?: string;
-    providers?: Array<{ name: string; apiKey: string; model?: string }>;
+    providers?: Array<{ name: string; model?: string; apiKey?: string }>;
   }): Promise<{ summary: string; provider_used: string; word_count: number }> {
     const fd = new FormData();
     fd.append("company_name", params.companyName);
@@ -619,10 +649,11 @@ export const vaultApi = {
     fd.append("jd_text", params.jdText);
     if (params.wordLimit != null) fd.append("word_limit", String(params.wordLimit));
     if (params.candidateName) fd.append("candidate_name", params.candidateName);
-    if (params.providers?.length) {
-      fd.append("providers_json", JSON.stringify(
-        params.providers.map((p) => ({ name: p.name, api_key: p.apiKey, model: p.model ?? "" }))
-      ));
+    {
+      // P0 #198: never ship api_key on the wire — backend reads from
+      // user_provider_configs (encrypted at rest, decrypted per request).
+      const providersJson = serializeProvidersForApi(params.providers);
+      if (providersJson) fd.append("providers_json", providersJson);
     }
     return post("/vault/generate/summary", fd);
   },
@@ -634,7 +665,7 @@ export const vaultApi = {
     jdText: string;
     numBullets?: number;
     targetCompany?: string;
-    providers?: Array<{ name: string; apiKey: string; model?: string }>;
+    providers?: Array<{ name: string; model?: string; apiKey?: string }>;
   }): Promise<{ bullets: string[]; provider_used: string; count: number }> {
     const fd = new FormData();
     fd.append("company_name", params.companyName);
@@ -642,10 +673,11 @@ export const vaultApi = {
     fd.append("jd_text", params.jdText);
     if (params.numBullets != null) fd.append("num_bullets", String(params.numBullets));
     if (params.targetCompany) fd.append("target_company_for_context", params.targetCompany);
-    if (params.providers?.length) {
-      fd.append("providers_json", JSON.stringify(
-        params.providers.map((p) => ({ name: p.name, api_key: p.apiKey, model: p.model ?? "" }))
-      ));
+    {
+      // P0 #198: never ship api_key on the wire — backend reads from
+      // user_provider_configs (encrypted at rest, decrypted per request).
+      const providersJson = serializeProvidersForApi(params.providers);
+      if (providersJson) fd.append("providers_json", providersJson);
     }
     return post("/vault/generate/bullets", fd);
   },
@@ -922,7 +954,7 @@ export const workHistoryApi = {
 
   importFromResume(
     file: File,
-    providers?: Array<{ name: string; apiKey: string; model?: string }>
+    providers?: Array<{ name: string; model?: string; apiKey?: string }>
   ): Promise<{
     created: number;
     skipped: number;
@@ -935,10 +967,10 @@ export const workHistoryApi = {
   }> {
     const fd = new FormData();
     fd.append("file", file, file.name);
-    if (providers?.length) {
-      fd.append("providers_json", JSON.stringify(
-        providers.map((p) => ({ name: p.name, api_key: p.apiKey, model: p.model ?? "" }))
-      ));
+    {
+      // P0 #198: never ship api_key.
+      const providersJson = serializeProvidersForApi(providers);
+      if (providersJson) fd.append("providers_json", providersJson);
     }
     return post("/work-history/import-from-resume", fd);
   },

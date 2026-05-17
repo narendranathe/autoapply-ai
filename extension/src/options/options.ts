@@ -10,6 +10,13 @@ import {
 } from "../shared/detection-thresholds";
 import type { DetectionThresholds } from "../shared/types";
 import { validateApiBaseUrl } from "../background/offlineQueue";
+import {
+  countUnmigratedKeys,
+  unmigratedProviderNames,
+  migrateProviderKey,
+  stripLocalKey,
+  type ProvidersMap as MigrationProvidersMap,
+} from "../shared/providerMigration";
 
 const API_DEFAULT = "https://autoapply-ai-api.fly.dev/api/v1";
 
@@ -658,12 +665,12 @@ async function importFromResume() {
   showStatus("wh-import-status", "Parsing resume…", "info");
 
   try {
-    // Read enabled providers from storage for LLM extraction
+    // Read provider preference list for LLM extraction (P0 #198: no apiKey).
     const data = await chrome.storage.local.get("providerConfigs");
-    const configs = (data.providerConfigs as Record<string, { enabled: boolean; apiKey: string; model: string }> | undefined) ?? {};
+    const configs = (data.providerConfigs as Record<string, { enabled?: boolean; apiKey?: string; model?: string }> | undefined) ?? {};
     const providers = Object.entries(configs)
-      .filter(([, cfg]) => cfg.enabled && cfg.apiKey)
-      .map(([name, cfg]) => ({ name, apiKey: cfg.apiKey, model: cfg.model }));
+      .filter(([, cfg]) => !!cfg.apiKey || cfg.enabled === true)
+      .map(([name, cfg]) => ({ name, model: cfg.model ?? "" }));
 
     const result = await workHistoryApi.importFromResume(_importFile, providers);
 
@@ -1171,6 +1178,130 @@ function wireDetectionThresholds(): void {
   (document.getElementById("rag-doc-filename") as HTMLInputElement).value = defaultNames[type] ?? "document.md";
 });
 
+// ── Provider-key migration (P0 issue #198, implementation B) ──────────────
+//
+// Strategy: persistent banner that surfaces the count of provider keys still
+// stored in chrome.storage.local. The user must click "Migrate keys to
+// server" to confirm — we never silently mutate storage on page load.
+//
+// Per provider we PUT to /users/provider-configs/{name} then GET to verify
+// has_key=true. Only on verified success is the local apiKey stripped.
+
+async function refreshProviderMigrationBanner(): Promise<void> {
+  const banner = document.getElementById("provider-migrate-banner") as HTMLDivElement | null;
+  const text = document.getElementById("provider-migrate-banner-text");
+  if (!banner || !text) return;
+  const data = await chrome.storage.local.get("providerConfigs");
+  const configs = (data.providerConfigs as MigrationProvidersMap | undefined) ?? {};
+  const remaining = countUnmigratedKeys(configs);
+  if (remaining === 0) {
+    banner.style.display = "none";
+    return;
+  }
+  banner.style.display = "block";
+  const names = unmigratedProviderNames(configs).join(", ");
+  text.textContent = `${remaining} key${remaining === 1 ? "" : "s"} still stored locally (${names}) — click to migrate to the server.`;
+}
+
+function buildAuthHeadersForMigration(
+  data: Record<string, unknown>,
+): Record<string, string> | null {
+  const userId = data.clerkUserId as string | undefined;
+  const token = data.clerkToken as string | undefined;
+  const tokenExp = (data.clerkTokenExp as number | undefined) ?? 0;
+  const tokenValid = token && (tokenExp === 0 || Date.now() / 1000 < tokenExp - 30);
+  if (tokenValid) return { Authorization: `Bearer ${token}` };
+  if (userId) return { "X-Clerk-User-Id": userId };
+  return null;
+}
+
+async function migrateProviderKeysOnClick(): Promise<void> {
+  const btn = document.getElementById("provider-migrate-btn") as HTMLButtonElement | null;
+  if (!btn) return;
+  btn.disabled = true;
+  const original = btn.textContent ?? "Migrate keys to server";
+  btn.textContent = "Migrating…";
+  showStatus("provider-migrate-status", "Starting migration…", "info");
+
+  try {
+    const data = await chrome.storage.local.get([
+      "providerConfigs",
+      "apiBaseUrl",
+      "clerkUserId",
+      "clerkToken",
+      "clerkTokenExp",
+    ]);
+    const authHeaders = buildAuthHeadersForMigration(data);
+    if (!authHeaders) {
+      showStatus(
+        "provider-migrate-status",
+        "Not authenticated — save your User ID in Authentication first.",
+        "err",
+      );
+      return;
+    }
+    const apiBase = (data.apiBaseUrl as string | undefined) || API_DEFAULT;
+    let configs = (data.providerConfigs as MigrationProvidersMap | undefined) ?? {};
+    const todo = unmigratedProviderNames(configs);
+
+    const successes: string[] = [];
+    const failures: Array<{ name: string; reason: string }> = [];
+
+    for (const name of todo) {
+      const entry = configs[name];
+      const key = entry?.apiKey ?? "";
+      if (!key) continue;
+      const res = await migrateProviderKey(name, key, fetch.bind(globalThis), {
+        apiBase,
+        authHeaders,
+        modelOverride: entry?.model ?? null,
+      });
+      if (res.ok) {
+        configs = stripLocalKey(configs, name);
+        // Persist after each success so a later failure can't roll back work.
+        await chrome.storage.local.set({ providerConfigs: configs });
+        successes.push(name);
+      } else {
+        failures.push({ name, reason: res.reason });
+      }
+    }
+
+    if (failures.length === 0 && successes.length > 0) {
+      showStatus(
+        "provider-migrate-status",
+        `Migrated ${successes.length} key${successes.length === 1 ? "" : "s"}: ${successes.join(", ")}.`,
+        "ok",
+      );
+    } else if (successes.length > 0) {
+      showStatus(
+        "provider-migrate-status",
+        `Migrated ${successes.join(", ")}. Failed: ${failures.map((f) => `${f.name} (${f.reason})`).join("; ")}.`,
+        "warn",
+      );
+    } else {
+      showStatus(
+        "provider-migrate-status",
+        failures.length > 0
+          ? `Migration failed: ${failures.map((f) => `${f.name} (${f.reason})`).join("; ")}.`
+          : "Nothing to migrate.",
+        "err",
+      );
+    }
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+    await refreshProviderMigrationBanner();
+  }
+}
+
+// Keep the banner in sync with storage changes (e.g. after saveLlm or after a
+// successful migration).
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes.providerConfigs) {
+    void refreshProviderMigrationBanner();
+  }
+});
+
 // Module scripts are deferred — DOM is fully parsed when this runs.
 wireProviderAutoEnable();
 loadSettings();
@@ -1197,3 +1328,8 @@ get("offline-queue-refresh-btn").addEventListener("click", loadOfflineQueueStatu
 get("offline-queue-clear-btn").addEventListener("click", clearFailedOfflineQueue);
 wireDetectionThresholds();
 loadDetectionThresholdsUi();
+
+// Provider key migration banner — initial paint + click handler.
+void refreshProviderMigrationBanner();
+const migrateBtn = document.getElementById("provider-migrate-btn");
+if (migrateBtn) migrateBtn.addEventListener("click", () => void migrateProviderKeysOnClick());

@@ -264,9 +264,10 @@ async function fillCurrentStep(modal: HTMLElement, btn: HTMLButtonElement): Prom
 
   const apiBase = storageData.apiBaseUrl || "https://autoapply-ai-api.fly.dev/api/v1";
   const providerConfigs = storageData.providerConfigs ?? {};
+  // P0 #198: only ship {name, model} — apiKey stays out of the payload.
   const providers = Object.entries(providerConfigs)
-    .filter(([, cfg]) => !!cfg.apiKey)
-    .map(([name, cfg]) => ({ name, api_key: cfg.apiKey, model: cfg.model }));
+    .filter(([, cfg]) => !!cfg.apiKey || cfg.enabled === true)
+    .map(([name, cfg]) => ({ name, model: cfg.model ?? "" }));
 
   // Find form root (current step content)
   const formRoot =

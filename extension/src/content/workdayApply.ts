@@ -288,11 +288,12 @@ async function runFill(btn: HTMLButtonElement): Promise<void> {
   }
 
   const apiBase = data.apiBaseUrl || "https://autoapply-ai-api.fly.dev/api/v1";
-  const providers: Array<{ name: string; api_key: string; model: string }> = Object.entries(
+  // P0 #198: only ship {name, model} — apiKey stays out of the payload.
+  const providers: Array<{ name: string; model: string }> = Object.entries(
     data.providerConfigs ?? {}
   )
-    .filter(([, cfg]) => cfg.enabled && cfg.apiKey)
-    .map(([name, cfg]) => ({ name, api_key: cfg.apiKey, model: cfg.model }));
+    .filter(([, cfg]) => !!cfg.apiKey || cfg.enabled === true)
+    .map(([name, cfg]) => ({ name, model: cfg.model ?? "" }));
 
   const root = getFormRoot();
   if (!root) {
