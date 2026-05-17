@@ -122,8 +122,13 @@ class Settings(BaseSettings):
     OLLAMA_BASE_URL: str = "http://localhost:11434"
 
     # ── CORS ──────────────────────────────────────────────
-    # In production set EXTENSION_ID to your published Chrome extension ID
-    # so only your extension can call the API.
+    # In production EXTENSION_ID is REQUIRED — Settings() will refuse to
+    # instantiate (and the process refuses to start) when
+    # ENVIRONMENT=production and this is empty (see
+    # ``require_extension_id_in_production`` below). This prevents the
+    # chrome-extension://* wildcard in ALLOWED_ORIGINS from allowing arbitrary
+    # extensions to call the API. In dev/staging the wildcard is allowed but a
+    # warning is logged (see ``warn_wildcard_in_dev``).
     EXTENSION_ID: str = ""
     ALLOWED_ORIGINS: list[str] = [
         "chrome-extension://*",
@@ -135,13 +140,23 @@ class Settings(BaseSettings):
     def cors_origins(self) -> list[str]:
         """
         Returns effective CORS origins.
-        In production EXTENSION_ID is required so CORS is restricted to a single
-        published extension; falling back to a chrome-extension://* wildcard
-        would let any extension call the API. Raises RuntimeError at startup
-        when the production deploy is missing the secret.
+
+        Production: EXTENSION_ID is required (enforced at Settings instantiation
+        by ``require_extension_id_in_production``) so CORS is pinned to a single
+        published extension. This property NEVER returns a chrome-extension://*
+        wildcard in production — even as a placeholder. If, somehow, the
+        validator was bypassed and EXTENSION_ID is still empty, the property
+        raises RuntimeError as a defence-in-depth check.
+
+        Dev/staging: returns ALLOWED_ORIGINS as-is (wildcard permitted).
+        ``warn_wildcard_in_dev`` already logged a warning at startup when the
+        wildcard is in effect.
         """
         if self.is_production:
             if not self.EXTENSION_ID:
+                # Defence in depth — the model_validator should have caught
+                # this at instantiation. Reaching here means someone mutated
+                # the settings object after construction.
                 raise RuntimeError(
                     "EXTENSION_ID must be set when ENVIRONMENT=production. "
                     "The chrome-extension://* wildcard in ALLOWED_ORIGINS would "
@@ -232,6 +247,59 @@ class Settings(BaseSettings):
                 "API URL, e.g. `fly secrets set "
                 "CLERK_FRONTEND_API_URL=https://your-app.clerk.accounts.dev`."
             )
+        return self
+
+    @model_validator(mode="after")
+    def require_extension_id_in_production(self) -> Self:
+        """
+        Fail-fast: refuse to start the process when ENVIRONMENT=production and
+        EXTENSION_ID is unset. Otherwise the chrome-extension://* wildcard in
+        ALLOWED_ORIGINS would allow any installed Chrome extension to call the
+        production API (issue #92).
+        """
+        if self.is_production and not self.EXTENSION_ID:
+            raise ValueError(
+                "EXTENSION_ID must be set when ENVIRONMENT=production. "
+                "The chrome-extension://* wildcard in ALLOWED_ORIGINS would "
+                "otherwise let any installed extension call the API. "
+                "Set it to your published Chrome Web Store extension id, e.g. "
+                "`fly secrets set EXTENSION_ID=<your-extension-id>`."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def warn_wildcard_in_dev(self) -> Self:
+        """
+        Dev/staging: emit a WARNING when the chrome-extension://* wildcard is
+        present in ALLOWED_ORIGINS. The wildcard is allowed here for local
+        development convenience, but operators should be aware that any locally
+        installed Chrome extension can hit the API.
+        """
+        if not self.is_production and any(
+            o.startswith("chrome-extension://*") for o in self.ALLOWED_ORIGINS
+        ):
+            import warnings
+
+            warnings.warn(
+                f"ALLOWED_ORIGINS contains a chrome-extension://* wildcard "
+                f"(ENVIRONMENT={self.ENVIRONMENT}). Any installed Chrome "
+                "extension can call the API. This is permitted in dev/staging "
+                "only; production requires EXTENSION_ID to be set.",
+                stacklevel=2,
+            )
+            try:
+                from loguru import logger
+
+                logger.warning(
+                    "CORS wildcard chrome-extension://* enabled in {env} — "
+                    "any installed extension can call the API. Set EXTENSION_ID "
+                    "to pin to a specific extension.",
+                    env=self.ENVIRONMENT,
+                )
+            except Exception:
+                # loguru is a runtime dep but be defensive — never let logging
+                # failures break config loading.
+                pass
         return self
 
     @property
