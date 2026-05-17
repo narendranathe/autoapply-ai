@@ -475,3 +475,23 @@ def test_parse_llm_response_drops_very_short_lines() -> None:
         "A proper bullet that should survive parsing.",
         "Another well-formed bullet sentence.",
     ]
+
+
+def test_parse_llm_response_preserves_asterisk_prefix() -> None:
+    """Asterisk prefixes (``*`` and ``**``) are NOT stripped by the cleanup regex.
+
+    The cleanup regex character class is ``[-•●]`` — it intentionally excludes
+    ``*``. This locks in that behavior so a refactor that adds ``*`` (e.g. to
+    handle Markdown-style bullets) is caught as a behavior change.
+    """
+    raw = (
+        "1. First bullet point text here.\n"
+        "* Asterisk-prefixed bullet must NOT have asterisk stripped.\n"
+        "**Bold marker** text preserved as-is."
+    )
+    result = _parse_llm_response(raw, expected_count=3)
+    assert result == [
+        "First bullet point text here.",
+        "* Asterisk-prefixed bullet must NOT have asterisk stripped.",
+        "**Bold marker** text preserved as-is.",
+    ]
