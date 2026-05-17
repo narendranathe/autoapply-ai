@@ -134,11 +134,19 @@ export function resolveDrainEndpoint(
  * The `endpoint` is REQUIRED — there is no module-level default, since a
  * hard-coded localhost URL would silently break production drains. Callers
  * MUST read the configured API base from storage and pass it explicitly.
+ *
+ * The `headers` arg is optional but in practice REQUIRED for the prod
+ * `/vault/sync-markdown` endpoint, which is guarded by `get_current_user`.
+ * Callers (worker.ts) build these from chrome.storage via
+ * `workerBuildAuthHeaders()` — same JWT/X-Clerk-User-Id priority as every
+ * other authenticated extension fetch. Without auth headers every drain
+ * would 401, increment failureCount, and eventually dead-letter every edit.
  */
 export async function processOfflineQueue(
   queue: OfflineEdit[],
   fetchFn: typeof fetch,
   endpoint: string,
+  headers: Record<string, string> = {},
 ): Promise<ProcessQueueResult> {
   if (!endpoint) {
     throw new Error("processOfflineQueue: endpoint is required");
@@ -172,7 +180,14 @@ export async function processOfflineQueue(
       fd.append("markdown_content", entry.markdownContent);
       fd.append("timestamp", String(entry.timestamp));
 
-      const resp = await fetchFn(endpoint, { method: "POST", body: fd });
+      // Do NOT set Content-Type — FormData needs to set its multipart
+      // boundary itself. Caller-supplied headers are merged after so an
+      // explicit Authorization / X-Clerk-User-Id wins.
+      const resp = await fetchFn(endpoint, {
+        method: "POST",
+        headers,
+        body: fd,
+      });
 
       if (resp.ok) {
         entry.synced = true;

@@ -445,12 +445,27 @@ async function drainOfflineQueue(): Promise<void> {
     );
   }
 
+  // Build auth headers ONCE per drain. /vault/sync-markdown is guarded by
+  // get_current_user on the backend, so an unauthenticated POST returns 401
+  // and the drain would dead-letter every edit (issue #91 round-2 P1).
+  // We use the same JWT/X-Clerk-User-Id helper every other authenticated
+  // worker fetch uses, so token refresh & dev-mode fallback behave identically.
+  const authHdrs = await workerBuildAuthHeaders();
+  if (Object.keys(authHdrs).length === 0) {
+    console.warn(
+      `[AutoApply] Skipping offline drain: no auth credentials available. ` +
+        `Preserving ${pending.length} pending edit(s) for retry once the user signs in.`,
+    );
+    return;
+  }
+
   console.log(`[AutoApply] Draining ${pending.length} offline edits...`);
 
   const { active, newlyDeadLettered, syncedCount } = await processOfflineQueue(
     queue,
     fetch,
     resolved.endpoint,
+    authHdrs,
   );
 
   if (syncedCount > 0) {
