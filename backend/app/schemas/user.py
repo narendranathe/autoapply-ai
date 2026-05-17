@@ -23,6 +23,37 @@ class UserCreate(BaseModel):
     email: str = Field(..., description="Used only for hashing, never stored raw")
 
 
+class RegisterRequest(BaseModel):
+    """
+    Body for POST /api/v1/auth/register.
+
+    SECURITY: ``clerk_id`` is intentionally NOT part of this schema. It is
+    derived server-side from the validated Clerk JWT (or the
+    ``X-Clerk-User-Id`` header in dev / extension mode) — never from the
+    request body. Accepting a body-supplied ``clerk_id`` would allow any
+    unauthenticated caller to create or overwrite any user.
+
+    ``model_config`` forbids unknown fields, so a stray ``clerk_id`` key
+    in the body is rejected with 422 rather than silently ignored.
+    """
+
+    # ``email_hash`` is a SHA-256 hex digest: exactly 64 lowercase hex chars.
+    # The DB column is ``String(64)`` — bounding both ends here prevents a
+    # 65-128 char value from passing Pydantic and then failing the DB write
+    # with a 500. The hex regex also rules out non-hex payloads (which would
+    # never collide with a real digest anyway).
+    email_hash: str = Field(
+        ...,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-fA-F]{64}$",
+        description="SHA-256 hex digest of the user's email (64 hex chars).",
+    )
+    github_username: str = Field(default="", max_length=255)
+
+    model_config = {"extra": "forbid"}
+
+
 class UserSetupGitHub(BaseModel):
     """Schema for connecting GitHub account."""
 

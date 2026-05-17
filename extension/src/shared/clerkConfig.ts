@@ -2,10 +2,25 @@
 export const CLERK_PUBLISHABLE_KEY =
   "pk_test_ZmVhc2libGUtbGlnZXItMzUuY2xlcmsuYWNjb3VudHMuZGV2JA==";
 
-/** Read whether Clerk JWT auth is enabled from storage (default: false). */
+/**
+ * Read whether Clerk JWT auth is enabled from storage.
+ *
+ * Default: **true** (issue #90). Production backend deployments ignore the
+ * legacy ``X-Clerk-User-Id`` header outright — they require a verified RS256
+ * JWT. If this returned ``false`` by default, every existing installed
+ * extension would start getting 401s the moment that backend ships, because
+ * ``initClerk()`` would no-op and ``_clerkToken`` would never populate (the
+ * ``api.ts`` request helper falls back to the header path only when no JWT
+ * is stored).
+ *
+ * Users / operators who explicitly opt out (e.g. because the dev backend
+ * has no Clerk tenant configured) can set ``enableClerkJWT=false`` from
+ * the options page; only the explicit ``false`` value disables JWT.
+ */
 export async function getEnableClerkJWT(): Promise<boolean> {
   const data = await chrome.storage.local.get("enableClerkJWT");
-  return Boolean(data.enableClerkJWT);
+  // Treat "key not present" as enabled. Only an explicit `false` disables.
+  return data.enableClerkJWT !== false;
 }
 
 /**

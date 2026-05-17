@@ -8,37 +8,52 @@ PATCH /api/v1/auth/me         → Update the authenticated user's profile
 
 import uuid
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
+from loguru import logger
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies import get_current_user, get_db
+from app.dependencies import get_authenticated_clerk_id, get_current_user, get_db
 from app.models.user import User
-from app.schemas.user import ProfileResponse, ProfileUpdate
+from app.schemas.user import ProfileResponse, ProfileUpdate, RegisterRequest
 
 router = APIRouter()
+
+# PostgreSQL SQLSTATE for unique_violation. We narrow the IntegrityError
+# race-recovery branch to this code so a NOT-NULL / CHECK / FK violation
+# (which indicates a real bug, not a concurrent insert) surfaces as a clean
+# 500 instead of being swallowed by the "re-SELECT the winning row" path.
+_PG_UNIQUE_VIOLATION = "23505"
 
 
 @router.post("/register", status_code=status.HTTP_201_CREATED)
 async def register_user(
-    clerk_id: str,
-    email_hash: str,
-    github_username: str = "",
+    body: RegisterRequest,
+    clerk_id: str = Depends(get_authenticated_clerk_id),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Create or upsert a user record from a Clerk user ID.
+    Create or upsert a user record for the authenticated caller.
 
-    Called by the Clerk webhook (user.created event) or manually on first login.
-    Idempotent — safe to call multiple times for the same clerk_id.
+    SECURITY: ``clerk_id`` is derived server-side from the validated Clerk
+    JWT (or ``X-Clerk-User-Id`` header in dev / extension mode) — never
+    from the request body. Unauthenticated callers are rejected with 401
+    by the ``get_authenticated_clerk_id`` dependency, which blocks the
+    account-takeover vector where any caller could create or overwrite
+    any user record by supplying an arbitrary ``clerk_id``.
+
+    Called by the Clerk webhook proxy (user.created event) or by the
+    client on first login. Idempotent — safe to call multiple times for
+    the same authenticated identity.
     """
     existing = await db.execute(select(User).where(User.clerk_id == clerk_id))
     user = existing.scalar_one_or_none()
 
     if user:
         # Update mutable fields
-        if github_username:
-            user.github_username = github_username
+        if body.github_username:
+            user.github_username = body.github_username
         await db.commit()
         await db.refresh(user)
         return {"user_id": str(user.id), "created": False}
@@ -46,15 +61,58 @@ async def register_user(
     user = User(
         id=uuid.uuid4(),
         clerk_id=clerk_id,
-        email_hash=email_hash,
-        github_username=github_username or None,
+        email_hash=body.email_hash,
+        github_username=body.github_username or None,
         resume_repo_name="resume-vault",
         is_active=True,
         total_resumes_generated=0,
         total_applications_tracked=0,
     )
     db.add(user)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        # Narrow recovery to PostgreSQL's unique_violation (SQLSTATE 23505).
+        # A broader ``except IntegrityError`` would also swallow NOT-NULL /
+        # FK / CHECK violations — those indicate a real bug (or schema
+        # drift), not a concurrent first-register race, and must surface as
+        # a 500 with the original cause logged so we can debug them.
+        await db.rollback()
+        pgcode = getattr(getattr(exc, "orig", None), "pgcode", None)
+        if pgcode != _PG_UNIQUE_VIOLATION:
+            logger.exception(
+                "Unexpected IntegrityError in /auth/register: pgcode={} " "clerk_id_prefix={}",
+                pgcode,
+                clerk_id[:8] if clerk_id else None,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Registration failed due to database constraint.",
+            ) from exc
+
+        # Race condition: a concurrent first-register call for the same
+        # ``clerk_id`` won the unique-index race. Re-SELECT the row the
+        # winning request created and respond idempotently with
+        # ``created=False`` instead of leaking a 500 to the second caller.
+        existing = await db.execute(select(User).where(User.clerk_id == clerk_id))
+        user = existing.scalar_one_or_none()
+        if user is None:
+            # Should be unreachable: the unique-key collision means a row
+            # for this clerk_id exists. If we genuinely cannot find it,
+            # surface a clean error rather than masking it as a 201.
+            logger.error(
+                "IntegrityError 23505 on /auth/register but no row found for " "clerk_id_prefix={}",
+                clerk_id[:8] if clerk_id else None,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Registration conflict could not be resolved.",
+            ) from exc
+        logger.warning(
+            "Concurrent /auth/register race resolved idempotently for " "clerk_id_prefix={}",
+            clerk_id[:8] if clerk_id else None,
+        )
+        return {"user_id": str(user.id), "created": False}
     await db.refresh(user)
     return {"user_id": str(user.id), "created": True}
 

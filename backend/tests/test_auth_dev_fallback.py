@@ -44,8 +44,17 @@ def test_settings_allows_dev_test_user_id_in_development():
 
 
 def test_settings_allows_empty_dev_test_user_id_in_production():
-    """ENVIRONMENT=production with empty DEV_TEST_USER_ID must validate cleanly."""
-    s = Settings(ENVIRONMENT="production", DEV_TEST_USER_ID="")
+    """ENVIRONMENT=production with empty DEV_TEST_USER_ID must validate cleanly.
+
+    Issue #90 added an unrelated production guard that requires
+    CLERK_FRONTEND_API_URL — supply a dummy value so this test isolates the
+    DEV_TEST_USER_ID code path.
+    """
+    s = Settings(
+        ENVIRONMENT="production",
+        DEV_TEST_USER_ID="",
+        CLERK_FRONTEND_API_URL="https://clerk.example.com",
+    )
     assert s.DEV_TEST_USER_ID == ""
     assert s.is_production is True
 
