@@ -12,33 +12,40 @@ from fastapi import APIRouter, Depends, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies import get_current_user, get_db
+from app.dependencies import get_authenticated_clerk_id, get_current_user, get_db
 from app.models.user import User
-from app.schemas.user import ProfileResponse, ProfileUpdate
+from app.schemas.user import ProfileResponse, ProfileUpdate, RegisterRequest
 
 router = APIRouter()
 
 
 @router.post("/register", status_code=status.HTTP_201_CREATED)
 async def register_user(
-    clerk_id: str,
-    email_hash: str,
-    github_username: str = "",
+    body: RegisterRequest,
+    clerk_id: str = Depends(get_authenticated_clerk_id),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Create or upsert a user record from a Clerk user ID.
+    Create or upsert a user record for the authenticated caller.
 
-    Called by the Clerk webhook (user.created event) or manually on first login.
-    Idempotent — safe to call multiple times for the same clerk_id.
+    SECURITY: ``clerk_id`` is derived server-side from the validated Clerk
+    JWT (or ``X-Clerk-User-Id`` header in dev / extension mode) — never
+    from the request body. Unauthenticated callers are rejected with 401
+    by the ``get_authenticated_clerk_id`` dependency, which blocks the
+    account-takeover vector where any caller could create or overwrite
+    any user record by supplying an arbitrary ``clerk_id``.
+
+    Called by the Clerk webhook proxy (user.created event) or by the
+    client on first login. Idempotent — safe to call multiple times for
+    the same authenticated identity.
     """
     existing = await db.execute(select(User).where(User.clerk_id == clerk_id))
     user = existing.scalar_one_or_none()
 
     if user:
         # Update mutable fields
-        if github_username:
-            user.github_username = github_username
+        if body.github_username:
+            user.github_username = body.github_username
         await db.commit()
         await db.refresh(user)
         return {"user_id": str(user.id), "created": False}
@@ -46,8 +53,8 @@ async def register_user(
     user = User(
         id=uuid.uuid4(),
         clerk_id=clerk_id,
-        email_hash=email_hash,
-        github_username=github_username or None,
+        email_hash=body.email_hash,
+        github_username=body.github_username or None,
         resume_repo_name="resume-vault",
         is_active=True,
         total_resumes_generated=0,

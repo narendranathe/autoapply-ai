@@ -23,6 +23,26 @@ class UserCreate(BaseModel):
     email: str = Field(..., description="Used only for hashing, never stored raw")
 
 
+class RegisterRequest(BaseModel):
+    """
+    Body for POST /api/v1/auth/register.
+
+    SECURITY: ``clerk_id`` is intentionally NOT part of this schema. It is
+    derived server-side from the validated Clerk JWT (or the
+    ``X-Clerk-User-Id`` header in dev / extension mode) — never from the
+    request body. Accepting a body-supplied ``clerk_id`` would allow any
+    unauthenticated caller to create or overwrite any user.
+
+    ``model_config`` forbids unknown fields, so a stray ``clerk_id`` key
+    in the body is rejected with 422 rather than silently ignored.
+    """
+
+    email_hash: str = Field(..., min_length=1, max_length=128)
+    github_username: str = Field(default="", max_length=255)
+
+    model_config = {"extra": "forbid"}
+
+
 class UserSetupGitHub(BaseModel):
     """Schema for connecting GitHub account."""
 
