@@ -243,6 +243,26 @@ async def test_resolve_user_providers_ignores_blank_name_entries():
 
 
 # ---------------------------------------------------------------------------
+# Issue #197 P1-D — DecryptedKey must reject subclassing. A subclass
+# could override ``__repr__`` / ``__str__`` / ``__format__`` to re-leak
+# the plaintext, which would silently defeat the redaction contract.
+# ---------------------------------------------------------------------------
+
+
+def test_decrypted_key_rejects_subclassing():
+    """Defining a subclass of ``DecryptedKey`` must raise TypeError at
+    class-creation time (before any instance leaks)."""
+    with pytest.raises(TypeError) as exc_info:
+
+        class _LeakySub(DecryptedKey):  # noqa: D401 - test only
+            def __repr__(self) -> str:  # pragma: no cover - unreachable
+                return self._value  # would re-leak if class creation succeeded
+
+    # Message names the contract so future readers understand why.
+    assert "final" in str(exc_info.value).lower() or "subclass" in str(exc_info.value).lower()
+
+
+# ---------------------------------------------------------------------------
 # Issue #197 P1-C — SQL predicate must include BOTH user_id and
 # provider_name. A mutation that drops the user_id binding would let
 # Alice's request resolve Bob's stored key — the row-level cross-user

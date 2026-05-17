@@ -56,9 +56,27 @@ class DecryptedKey:
     ``logger.info(f"key={key}")`` cannot leak the secret. Use
     :py:meth:`expose` exactly at the boundary that hands the key to the
     LLM provider HTTP call.
+
+    Subclassing is forbidden — a child class could override ``__repr__``
+    (or any redaction method) to leak the plaintext, defeating the
+    contract that every interpolation site is safe. See
+    :py:meth:`__init_subclass__`.
     """
 
     _value: str
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        # Defence in depth. ``@dataclass(frozen=True)`` only blocks
+        # attribute *mutation*; Python still permits a subclass to
+        # override ``__repr__``, ``__str__``, ``__format__`` and
+        # re-introduce a leak. Refuse to construct the subclass at
+        # class-creation time so any such attempt fails loudly during
+        # import rather than at the leak site.
+        raise TypeError(
+            "DecryptedKey is final and may not be subclassed. "
+            "Use composition (wrap a DecryptedKey instance) instead so "
+            "the redaction contract is preserved."
+        )
 
     def __post_init__(self) -> None:
         if not isinstance(self._value, str):  # pragma: no cover - defensive
