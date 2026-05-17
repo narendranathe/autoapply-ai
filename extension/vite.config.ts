@@ -9,9 +9,44 @@ function isLocalhostPattern(pattern: string): boolean {
   return LOCALHOST_NEEDLES.some((needle) => pattern.includes(needle));
 }
 
-// Strip localhost host_permissions for production builds so the published
-// extension never asks Chrome users for permission to query the developer's
-// loopback API server.
+/**
+ * Strip every CSP directive value that points at loopback so the
+ * production CSP never whitelists ``http://localhost:8000``.
+ *
+ * P1-E (#198 round 2): connect-src now exists; we apply the same prod
+ * scrubbing it already applies to host_permissions.
+ */
+function stripLocalhostFromCspDirective(directiveValue: string): string {
+  // ``directiveValue`` is the space-separated token list following the
+  // directive name. Filter loopback origins; preserve order.
+  return directiveValue
+    .split(/\s+/)
+    .filter((token) => token.length > 0 && !isLocalhostPattern(token))
+    .join(" ");
+}
+
+function stripLocalhostFromCsp(csp: string): string {
+  // CSP entries are semicolon-separated directives. Each directive is
+  // "name token token...". Apply the strip to every token list.
+  return csp
+    .split(";")
+    .map((directive) => {
+      const trimmed = directive.trim();
+      if (!trimmed) return "";
+      const firstSpace = trimmed.indexOf(" ");
+      if (firstSpace < 0) return trimmed; // bare directive (no tokens)
+      const name = trimmed.slice(0, firstSpace);
+      const rest = trimmed.slice(firstSpace + 1);
+      const cleaned = stripLocalhostFromCspDirective(rest);
+      return cleaned ? `${name} ${cleaned}` : name;
+    })
+    .filter((s) => s.length > 0)
+    .join("; ");
+}
+
+// Strip localhost host_permissions AND CSP entries for production builds
+// so the published extension never asks Chrome users for permission to
+// query the developer's loopback API server.
 function copyExtensionStaticFiles(mode: string) {
   return {
     name: "copy-extension-static",
@@ -24,6 +59,15 @@ function copyExtensionStaticFiles(mode: string) {
         sourceManifest.host_permissions = sourceManifest.host_permissions.filter(
           (entry: string) => !isLocalhostPattern(entry)
         );
+      }
+
+      // P1-E: prod-strip loopback origins from extension_pages CSP too.
+      if (
+        mode === "production" &&
+        sourceManifest.content_security_policy?.extension_pages
+      ) {
+        sourceManifest.content_security_policy.extension_pages =
+          stripLocalhostFromCsp(sourceManifest.content_security_policy.extension_pages);
       }
 
       fs.writeFileSync(

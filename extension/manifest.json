@@ -77,6 +77,6 @@
     "128": "icons/icon128.png"
   },
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'; frame-src https://clerk.feasible-liger-35.clerk.accounts.dev https://challenges.cloudflare.com;"
+    "extension_pages": "script-src 'self'; object-src 'self'; frame-src https://clerk.feasible-liger-35.clerk.accounts.dev https://challenges.cloudflare.com; connect-src 'self' https://autoapply-ai-api.fly.dev https://clerk.feasible-liger-35.clerk.accounts.dev https://challenges.cloudflare.com http://localhost:8000 http://127.0.0.1:8000;"
   }
 }
