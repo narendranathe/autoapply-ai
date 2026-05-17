@@ -91,6 +91,14 @@ class Settings(BaseSettings):
     GITHUB_APP_CLIENT_ID: str = ""
     GITHUB_APP_CLIENT_SECRET: str = ""
 
+    # ── GitHub Vault (server-side fallback / admin token) ─
+    # Used when a user has not connected their own GitHub account.
+    # All three must be set together; leaving them empty disables the
+    # server-side vault path (per-user encrypted tokens still work).
+    GITHUB_TOKEN: str = ""
+    GITHUB_VAULT_OWNER: str = ""
+    GITHUB_VAULT_REPO: str = ""
+
     # ── Vector Backend ────────────────────────────────────
     VECTOR_BACKEND: str = "pgvector"  # "pgvector" | "pinecone"
     PINECONE_API_KEY: str | None = None
