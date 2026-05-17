@@ -9,6 +9,7 @@ import {
   resetThresholds,
 } from "../shared/detection-thresholds";
 import type { DetectionThresholds } from "../shared/types";
+import { validateApiBaseUrl } from "../background/offlineQueue";
 
 const API_DEFAULT = "https://autoapply-ai-api.fly.dev/api/v1";
 
@@ -248,6 +249,23 @@ async function testApi() {
 
 async function saveApi() {
   const url = getInput("api-base").value.trim();
+  // Empty input clears the configured URL — that's an explicit user action
+  // and is allowed. The drain will then fall back per resolveDrainEndpoint().
+  if (url) {
+    // Vite replaces import.meta.env.DEV at build time. Same gate the worker uses
+    // for resolveDrainEndpoint so the UI rejects the exact set of URLs the drain
+    // would refuse — no silently-saved bad URLs (#91).
+    const isDev = Boolean((import.meta as { env?: { DEV?: boolean } }).env?.DEV);
+    const validation = validateApiBaseUrl(url, isDev);
+    if (!validation.ok) {
+      showStatus(
+        "api-status",
+        `Rejected: ${validation.reason}. Use https:// (or http://localhost in dev).`,
+        "err",
+      );
+      return;
+    }
+  }
   await chrome.storage.local.set({ apiBaseUrl: url || "" });
   showStatus("api-status", "Saved.", "ok");
   loadSettings();
