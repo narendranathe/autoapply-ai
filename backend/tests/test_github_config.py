@@ -1,8 +1,12 @@
 """
 Unit tests for GitHub vault settings (issue #123).
 
-Verifies the three GitHub vault fields are read from the environment,
-and that the empty-config warning is emitted outside the test environment.
+Verifies the three reserved GitHub vault fields are declared on Settings,
+default to empty strings, and are populated from environment variables.
+
+The fields are currently unconsumed (reserved for a future server-side
+fallback in the vault router); they intentionally produce no warning when
+left empty.
 """
 
 import warnings
@@ -59,20 +63,24 @@ def test_github_vault_reads_from_environment(monkeypatch: pytest.MonkeyPatch) ->
     assert s.GITHUB_VAULT_REPO == "resume-vault"
 
 
-def test_warning_emitted_when_any_field_empty_in_dev(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """In a non-test environment, missing vault fields emit a UserWarning."""
-    monkeypatch.setenv("ENVIRONMENT", "development")
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        Settings(_env_file=None)  # type: ignore[call-arg]
-    messages = [str(w.message) for w in caught]
-    vault_warnings = [m for m in messages if "GitHub vault not fully configured" in m]
-    assert vault_warnings, f"Expected vault warning, got: {messages}"
-    assert "GITHUB_TOKEN" in vault_warnings[0]
-    assert "GITHUB_VAULT_OWNER" in vault_warnings[0]
-    assert "GITHUB_VAULT_REPO" in vault_warnings[0]
+def test_no_vault_warning_in_any_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    The fields are reserved and unconsumed; instantiating Settings must
+    never emit a 'GitHub vault not fully configured' warning, regardless
+    of environment or which fields are set.
+    """
+    for env in ("development", "staging", "production", "test"):
+        monkeypatch.setenv("ENVIRONMENT", env)
+        for key in ("GITHUB_TOKEN", "GITHUB_VAULT_OWNER", "GITHUB_VAULT_REPO"):
+            monkeypatch.delenv(key, raising=False)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            Settings(_env_file=None)  # type: ignore[call-arg]
+        vault_warnings = [w for w in caught if "GitHub vault" in str(w.message)]
+        assert vault_warnings == [], (
+            f"Unexpected vault warning in ENVIRONMENT={env}: "
+            f"{[str(w.message) for w in vault_warnings]}"
+        )
 
 
 def test_no_warning_when_all_fields_set(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -84,34 +92,5 @@ def test_no_warning_when_all_fields_set(monkeypatch: pytest.MonkeyPatch) -> None
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         Settings(_env_file=None)  # type: ignore[call-arg]
-    vault_warnings = [w for w in caught if "GitHub vault not fully configured" in str(w.message)]
+    vault_warnings = [w for w in caught if "GitHub vault" in str(w.message)]
     assert vault_warnings == []
-
-
-def test_no_warning_in_test_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    """ENVIRONMENT=test suppresses the vault warning even when empty."""
-    monkeypatch.setenv("ENVIRONMENT", "test")
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        Settings(_env_file=None)  # type: ignore[call-arg]
-    vault_warnings = [w for w in caught if "GitHub vault not fully configured" in str(w.message)]
-    assert vault_warnings == []
-
-
-def test_partial_config_lists_only_missing_fields(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The warning enumerates only the empty fields."""
-    monkeypatch.setenv("ENVIRONMENT", "development")
-    monkeypatch.setenv("GITHUB_TOKEN", "ghp_x")
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        Settings(_env_file=None)  # type: ignore[call-arg]
-    vault_warnings = [
-        str(w.message) for w in caught if "GitHub vault not fully configured" in str(w.message)
-    ]
-    assert vault_warnings
-    msg = vault_warnings[0]
-    assert "GITHUB_TOKEN" not in msg
-    assert "GITHUB_VAULT_OWNER" in msg
-    assert "GITHUB_VAULT_REPO" in msg

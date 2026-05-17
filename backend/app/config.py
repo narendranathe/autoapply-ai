@@ -91,10 +91,15 @@ class Settings(BaseSettings):
     GITHUB_APP_CLIENT_ID: str = ""
     GITHUB_APP_CLIENT_SECRET: str = ""
 
-    # ── GitHub Vault (server-side fallback / admin token) ─
-    # Used when a user has not connected their own GitHub account.
-    # All three must be set together; leaving them empty disables the
-    # server-side vault path (per-user encrypted tokens still work).
+    # ── GitHub Vault (reserved for future server-side fallback) ───────────
+    # These typed fields are declared so operators can set them today, but
+    # they are NOT yet consumed anywhere in the codebase. Vault operations
+    # currently use the per-user `encrypted_github_token` stored on the
+    # `User` model (see `app/routers/vault/github.py` and `_shared.py`).
+    #
+    # Follow-up: wire a server-side fallback in the vault router that uses
+    # these values when the per-user token is absent. Until then, leaving
+    # them empty is the expected default and produces no warning.
     GITHUB_TOKEN: str = ""
     GITHUB_VAULT_OWNER: str = ""
     GITHUB_VAULT_REPO: str = ""
