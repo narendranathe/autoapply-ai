@@ -394,3 +394,93 @@ async def test_register_user_ignores_clerk_id_attempted_via_body_overload():
     new_user = captured_user["obj"]
     assert new_user.clerk_id == "clerk_authenticated"
     assert new_user.clerk_id != "clerk_smuggled"
+
+
+# ---------------------------------------------------------------------------
+# Unit: register_user is race-safe against concurrent first-register calls
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_register_user_handles_concurrent_insert_race():
+    """When two concurrent first-register calls for the same ``clerk_id``
+    both see NULL on the initial SELECT, the loser's INSERT raises
+    ``IntegrityError`` on the unique constraint. The route must catch
+    it, re-SELECT, and return an idempotent ``created=False`` response —
+    not bubble a 500.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    winner = User(
+        id=uuid.uuid4(),
+        clerk_id="clerk_race",
+        email_hash="a" * 64,
+        github_username=None,
+        resume_repo_name="resume-vault",
+        is_active=True,
+        total_resumes_generated=0,
+        total_applications_tracked=0,
+    )
+
+    # First SELECT (pre-insert) → NULL (we don't see the winner yet).
+    # commit() raises IntegrityError (winner already committed).
+    # Second SELECT (post-rollback) → winner row.
+    execute_calls = {"n": 0}
+
+    async def _execute(_stmt):
+        execute_calls["n"] += 1
+        if execute_calls["n"] == 1:
+            return _FakeResult(None)
+        return _FakeResult(winner)
+
+    db = AsyncMock()
+    db.execute = AsyncMock(side_effect=_execute)
+    db.add = MagicMock()
+    db.commit = AsyncMock(
+        side_effect=IntegrityError("INSERT", params=None, orig=Exception("duplicate key"))
+    )
+    db.rollback = AsyncMock()
+    db.refresh = AsyncMock()
+
+    body = RegisterRequest(email_hash="a" * 64)
+    result = await register_user(
+        body=body,
+        clerk_id="clerk_race",
+        db=db,
+    )
+
+    # Idempotent response: the loser saw the winner's row.
+    assert result["created"] is False
+    assert result["user_id"] == str(winner.id)
+    # We rolled back the failed insert before re-SELECTing.
+    db.rollback.assert_awaited_once()
+    # Two SELECTs total: one before insert, one after rollback.
+    assert execute_calls["n"] == 2
+
+
+@pytest.mark.asyncio
+async def test_register_user_500s_if_integrity_error_without_recoverable_row():
+    """Defensive: if commit raises IntegrityError but the post-rollback
+    SELECT still returns NULL (should be unreachable), the route returns
+    500 rather than silently fabricating a fake idempotent response."""
+    from sqlalchemy.exc import IntegrityError
+
+    from fastapi import HTTPException
+
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=_FakeResult(None))  # always NULL
+    db.add = MagicMock()
+    db.commit = AsyncMock(
+        side_effect=IntegrityError("INSERT", params=None, orig=Exception("dup"))
+    )
+    db.rollback = AsyncMock()
+    db.refresh = AsyncMock()
+
+    body = RegisterRequest(email_hash="a" * 64)
+    with pytest.raises(HTTPException) as exc_info:
+        await register_user(
+            body=body,
+            clerk_id="clerk_phantom",
+            db=db,
+        )
+    assert exc_info.value.status_code == 500

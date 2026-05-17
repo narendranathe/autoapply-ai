@@ -8,8 +8,9 @@ PATCH /api/v1/auth/me         → Update the authenticated user's profile
 
 import uuid
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_authenticated_clerk_id, get_current_user, get_db
@@ -61,7 +62,26 @@ async def register_user(
         total_applications_tracked=0,
     )
     db.add(user)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Race condition: a concurrent first-register call for the same
+        # ``clerk_id`` won the unique-index race. Roll back our failed
+        # insert, re-SELECT the row the winning request created, and
+        # respond idempotently with ``created=False`` instead of leaking
+        # a 500 to the second caller.
+        await db.rollback()
+        existing = await db.execute(select(User).where(User.clerk_id == clerk_id))
+        user = existing.scalar_one_or_none()
+        if user is None:
+            # Should be unreachable: the unique-key collision means a row
+            # for this clerk_id exists. If we genuinely cannot find it,
+            # surface a clean error rather than masking it as a 201.
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Registration conflict could not be resolved.",
+            )
+        return {"user_id": str(user.id), "created": False}
     await db.refresh(user)
     return {"user_id": str(user.id), "created": True}
 
