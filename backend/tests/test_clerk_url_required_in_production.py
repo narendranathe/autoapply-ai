@@ -288,3 +288,178 @@ async def test_development_still_honours_x_clerk_user_id_header(
 
     assert user is expected_user
     mock_db.execute.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# 4. Production JWT happy-path + header-ignored-when-JWT-present
+# ---------------------------------------------------------------------------
+
+_MOCK_CLERK_URL = "https://test-tenant.clerk.accounts.dev"
+_MOCK_KID = "kid-test"
+
+
+def _rsa_keypair() -> rsa.RSAPrivateKey:
+    return rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+
+def _jwk_from_private(key: rsa.RSAPrivateKey, kid: str) -> dict[str, str]:
+    nums = key.public_key().public_numbers()
+    return {
+        "kty": "RSA",
+        "kid": kid,
+        "use": "sig",
+        "alg": "RS256",
+        "n": long_to_base64(nums.n).decode("ascii"),
+        "e": long_to_base64(nums.e).decode("ascii"),
+    }
+
+
+def _sign_clerk_token(
+    key: rsa.RSAPrivateKey,
+    *,
+    sub: str,
+    iss: str = _MOCK_CLERK_URL,
+    kid: str = _MOCK_KID,
+) -> str:
+    """Forge a Clerk-shaped RS256 token. ``iss`` defaults to the mock tenant
+    URL so the issuer check in ``jwt.decode`` accepts the token."""
+    payload = {
+        "sub": sub,
+        "iss": iss,
+        "iat": int(time.time()),
+        "exp": int(time.time()) + 300,
+    }
+    return jwt.encode(payload, key, algorithm="RS256", headers={"kid": kid})
+
+
+def _request_with_bearer(token: str, *, x_header: str | None = None) -> Request:
+    headers: list[tuple[bytes, bytes]] = [
+        (b"authorization", f"Bearer {token}".encode())
+    ]
+    if x_header is not None:
+        headers.append((b"x-clerk-user-id", x_header.encode()))
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/protected",
+        "headers": headers,
+        "query_string": b"",
+    }
+    return Request(scope)
+
+
+@pytest.mark.asyncio
+async def test_production_accepts_valid_bearer_jwt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end happy path on the JWT verification branch in production.
+
+    Round 1 had no test that actually exercised this path — the existing
+    suite only verified rejection cases. Without a positive assertion, a
+    refactor that broke ``jwt.decode``'s integration (e.g. wrong kwargs,
+    wrong algorithm allowlist) could ship green.
+
+    The test:
+      - sets ``CLERK_FRONTEND_API_URL`` to a mock tenant URL,
+      - patches ``_resolve_jwk_for_kid`` to return a valid JWK,
+      - signs a token whose ``sub`` matches the DB user's ``clerk_id``,
+      - sends it as ``Authorization: Bearer ...``,
+      - asserts the dependency returns that user (no HTTPException).
+    """
+    from app import dependencies as deps_module
+
+    monkeypatch.setattr(deps_module.settings, "ENVIRONMENT", "production")
+    monkeypatch.setattr(deps_module.settings, "CLERK_FRONTEND_API_URL", _MOCK_CLERK_URL)
+    monkeypatch.setattr(deps_module.settings, "CLERK_JWT_AUDIENCE", "")
+
+    key = _rsa_keypair()
+    jwk = _jwk_from_private(key, _MOCK_KID)
+    token = _sign_clerk_token(key, sub="test_clerk_id")
+
+    expected_user = MagicMock(clerk_id="test_clerk_id", is_active=True)
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = expected_user
+
+    mock_db = AsyncMock()
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    with patch.object(
+        deps_module, "_resolve_jwk_for_kid", AsyncMock(return_value=jwk)
+    ) as resolve_mock:
+        user = await get_current_user(
+            request=_request_with_bearer(token),
+            db=mock_db,
+            x_clerk_user_id=None,
+        )
+
+    assert user is expected_user
+    resolve_mock.assert_awaited_once_with(_MOCK_KID)
+    mock_db.execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_production_jwt_takes_precedence_over_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When both ``Authorization: Bearer <jwt>`` and ``X-Clerk-User-Id``
+    are present in production, the resolved clerk_id MUST come from the
+    JWT's ``sub`` claim — the header is silently ignored.
+
+    A bug where the code preferred the header (or fell back to it on a
+    mismatch) would let an attacker who steals a valid JWT for "victim"
+    swap it out for their own ``X-Clerk-User-Id`` and impersonate an
+    arbitrary user. This test pins that the JWT subject wins.
+
+    Tracks Critic 5's request for "both Bearer JWT and X-Clerk-User-Id
+    present in prod — only the JWT's sub is used".
+    """
+    from app import dependencies as deps_module
+
+    monkeypatch.setattr(deps_module.settings, "ENVIRONMENT", "production")
+    monkeypatch.setattr(deps_module.settings, "CLERK_FRONTEND_API_URL", _MOCK_CLERK_URL)
+    monkeypatch.setattr(deps_module.settings, "CLERK_JWT_AUDIENCE", "")
+
+    key = _rsa_keypair()
+    jwk = _jwk_from_private(key, _MOCK_KID)
+    jwt_sub = "user_from_jwt"
+    header_sub = "user_attacker_supplied"
+    token = _sign_clerk_token(key, sub=jwt_sub)
+
+    captured_clerk_ids: list[str] = []
+
+    def _capture_execute(stmt: Any) -> Any:
+        # Pull the clerk_id literal out of the where clause so the test
+        # can assert against the *resolved* identity, not just the user
+        # object the mock returns.
+        try:
+            for clause in stmt.whereclause.clauses:
+                if "clerk_id" in str(clause):
+                    captured_clerk_ids.append(clause.right.value)
+        except Exception:
+            pass
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = MagicMock(
+            clerk_id=jwt_sub, is_active=True
+        )
+        return result
+
+    mock_db = AsyncMock()
+    mock_db.execute = AsyncMock(side_effect=_capture_execute)
+
+    with patch.object(
+        deps_module, "_resolve_jwk_for_kid", AsyncMock(return_value=jwk)
+    ):
+        user = await get_current_user(
+            request=_request_with_bearer(token, x_header=header_sub),
+            db=mock_db,
+            x_clerk_user_id=header_sub,
+        )
+
+    # The DB lookup must use the JWT's subject, never the header.
+    assert captured_clerk_ids == [jwt_sub], (
+        f"Expected DB lookup to use JWT sub {jwt_sub!r}; "
+        f"actual lookups: {captured_clerk_ids!r}. If header_sub appears, "
+        f"the header bypass is live in production — Issue #90 regression."
+    )
+    assert header_sub not in captured_clerk_ids
+    assert user.clerk_id == jwt_sub
