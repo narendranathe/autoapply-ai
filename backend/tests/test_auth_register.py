@@ -493,9 +493,8 @@ async def test_register_user_500s_if_integrity_error_without_recoverable_row():
     """Defensive: if commit raises IntegrityError but the post-rollback
     SELECT still returns NULL (should be unreachable), the route returns
     500 rather than silently fabricating a fake idempotent response."""
-    from sqlalchemy.exc import IntegrityError
-
     from fastapi import HTTPException
+    from sqlalchemy.exc import IntegrityError
 
     db = AsyncMock()
     db.execute = AsyncMock(return_value=_FakeResult(None))  # always NULL

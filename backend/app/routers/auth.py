@@ -64,7 +64,7 @@ async def register_user(
     db.add(user)
     try:
         await db.commit()
-    except IntegrityError:
+    except IntegrityError as exc:
         # Race condition: a concurrent first-register call for the same
         # ``clerk_id`` won the unique-index race. Roll back our failed
         # insert, re-SELECT the row the winning request created, and
@@ -80,7 +80,7 @@ async def register_user(
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Registration conflict could not be resolved.",
-            )
+            ) from exc
         return {"user_id": str(user.id), "created": False}
     await db.refresh(user)
     return {"user_id": str(user.id), "created": True}
