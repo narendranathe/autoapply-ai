@@ -45,21 +45,59 @@ from app.utils.encryption import decrypt_value
 # Use ``prometheus_client`` if available — it ships as a transitive dep of
 # ``prometheus-fastapi-instrumentator``. We fall back to structured loguru
 # logs when the import fails so the gateway works in minimal environments.
+#
+# Issue #185: collectors must survive ``importlib.reload(llm_gateway)`` and
+# uvicorn ``--reload``. The previous bare ``except Exception`` caught
+# ``Duplicated timeseries`` and silently disabled metrics for the rest of
+# the process. We now scope the exception to ``ValueError`` (the only one
+# Prometheus raises on duplicate registration) and recover the existing
+# collector from the default ``REGISTRY``.
 try:  # pragma: no cover - import guard
-    from prometheus_client import Counter, Histogram
+    from prometheus_client import REGISTRY, Counter, Histogram
 
-    _llm_request_duration_seconds = Histogram(
+    # Buckets covering LLM latency: sub-second snappy responses through
+    # the 180s Ollama timeout. ``+Inf`` is appended automatically by
+    # prometheus_client but we include it explicitly for clarity.
+    _LLM_LATENCY_BUCKETS = (0.5, 1, 2, 5, 10, 20, 30, 60, 120, 180, float("inf"))
+
+    def _get_or_create_histogram(
+        name: str, doc: str, labelnames: tuple[str, ...], buckets: tuple[float, ...]
+    ) -> Histogram:
+        try:
+            return Histogram(name, doc, labelnames=labelnames, buckets=buckets)
+        except ValueError:
+            existing = REGISTRY._names_to_collectors.get(name)  # type: ignore[attr-defined]
+            if existing is None:  # pragma: no cover - defensive
+                raise
+            return existing  # type: ignore[return-value]
+
+    def _get_or_create_counter(
+        name: str, doc: str, labelnames: tuple[str, ...]
+    ) -> Counter:
+        try:
+            return Counter(name, doc, labelnames=labelnames)
+        except ValueError:
+            existing = REGISTRY._names_to_collectors.get(name)  # type: ignore[attr-defined]
+            if existing is None:  # pragma: no cover - defensive
+                # prometheus_client stores Counters under "<name>_total".
+                existing = REGISTRY._names_to_collectors.get(f"{name}_total")  # type: ignore[attr-defined]
+            if existing is None:  # pragma: no cover - defensive
+                raise
+            return existing  # type: ignore[return-value]
+
+    _llm_request_duration_seconds = _get_or_create_histogram(
         "llm_request_duration_seconds",
         "Duration of LLM provider requests in seconds.",
-        labelnames=("provider",),
+        ("provider",),
+        _LLM_LATENCY_BUCKETS,
     )
-    _llm_request_total = Counter(
+    _llm_request_total = _get_or_create_counter(
         "llm_request_total",
         "Total LLM provider requests.",
-        labelnames=("provider", "status"),
+        ("provider", "status"),
     )
     _HAS_PROMETHEUS = True
-except Exception:  # pragma: no cover - prometheus_client missing
+except ImportError:  # pragma: no cover - prometheus_client missing
     _llm_request_duration_seconds = None  # type: ignore[assignment]
     _llm_request_total = None  # type: ignore[assignment]
     _HAS_PROMETHEUS = False
