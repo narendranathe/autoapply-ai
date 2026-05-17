@@ -132,12 +132,19 @@ Then rebuild: `npm run build`
 ### 4d. Package for Chrome Web Store
 ```bash
 cd extension
-# Build production bundle
+# Build production bundle (runs scripts/verify-manifest.mjs — fails if any
+# localhost / 127.0.0.1 entry remains in dist/manifest.json host_permissions).
 npm run build
 
 # Zip the dist folder (not the dist folder itself — zip its contents)
 cd dist && zip -r ../autoapply-ai.zip . && cd ..
 ```
+
+> `npm run build` runs in production mode and the Vite plugin in
+> `extension/vite.config.ts` strips every loopback entry from `host_permissions`
+> before writing `dist/manifest.json`. Use `npm run build:dev` when loading the
+> extension locally against `http://localhost:8000` — that build keeps the
+> loopback permission so the dev server is reachable.
 
 ### 4e. Submit to Chrome Web Store
 1. Go to [Chrome Web Store Developer Dashboard](https://chrome.google.com/webstore/devconsole)
@@ -151,11 +158,12 @@ cd dist && zip -r ../autoapply-ai.zip . && cd ..
 ### 4f. Set Extension ID in backend
 After your extension is published:
 1. Find your **Extension ID** in the Chrome Web Store URL: `...detail/YOUR_EXTENSION_ID`
-2. In Render dashboard → autoapply-ai-api → Environment:
-   ```
-   EXTENSION_ID=YOUR_EXTENSION_ID
-   ```
-3. This enables CORS to only allow requests from your extension
+2. Set it on the backend (required when `ENVIRONMENT=production`):
+   - Render: dashboard → autoapply-ai-api → Environment → `EXTENSION_ID=YOUR_EXTENSION_ID`
+   - Fly.io: `fly secrets set EXTENSION_ID=YOUR_EXTENSION_ID`
+3. This restricts CORS to that one extension. The backend refuses to start in
+   production without it — the `chrome-extension://*` wildcard in
+   `ALLOWED_ORIGINS` would otherwise let any installed extension call the API.
 
 ---
 
@@ -191,9 +199,11 @@ poetry run uvicorn app.main:create_app --factory --reload --port 8000
 ```bash
 cd extension
 npm ci
-npm run dev      # Vite dev build with watch mode
+npm run dev        # Vite dev build with watch mode (keeps localhost host_permission)
 # or
-npm run build    # Production build
+npm run build:dev  # One-shot dev build (keeps localhost host_permission)
+# or
+npm run build      # Production build (strips localhost host_permission)
 ```
 
 Load `extension/dist/` as unpacked extension in Chrome.
@@ -223,7 +233,7 @@ See `backend/.env.example` for the full list with descriptions.
 | `GITHUB_REPO_NAME` | ✅ | Private resume vault repo name |
 | `ENVIRONMENT` | — | `development` / `production` / `testing` |
 | `OLLAMA_BASE_URL` | — | Default: `http://localhost:11434` |
-| `EXTENSION_ID` | — | Set after Chrome Web Store publish |
+| `EXTENSION_ID` | ✅ (prod) | Required when `ENVIRONMENT=production`; set after Chrome Web Store publish |
 | `SENTRY_DSN` | — | Sentry error tracking (optional) |
 
 ---
@@ -233,9 +243,18 @@ See `backend/.env.example` for the full list with descriptions.
 GitHub Actions runs on every push:
 - **Backend**: ruff lint → black format → mypy typecheck → pytest
 - **Extension**: tsc typecheck → vite build
+- **Dashboard**: tsc typecheck → eslint → vite build
 - **Docker**: builds backend image (no push, validates Dockerfile)
 
 See `.github/workflows/ci.yml`.
+
+### Required GitHub Actions secrets
+
+| Secret | Used by | Purpose |
+|--------|---------|---------|
+| `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` | `docker` job | Authenticated Docker Hub pulls (avoid rate limits) |
+| `FLY_API_TOKEN` | `deploy` job | Fly.io deploy on `main` |
+| `VITE_CLERK_PUBLISHABLE_KEY_TEST` | `dashboard` job | Clerk publishable key (test instance) injected into the dashboard Vite build. Must be a Clerk **test** publishable key — `pk_test_...` — taken from Clerk Dashboard → API Keys → Development instance. Never use the production key here. |
 
 ---
 
@@ -265,8 +284,10 @@ For production use beyond hobby tier, upgrade to Render's **Starter plan** ($7/m
 - Verify `API_BASE` in `api.ts` points to your deployed Render URL
 
 **CORS errors in extension**
-- Set `EXTENSION_ID` env var in Render to your published extension's ID
+- Set `EXTENSION_ID` to your published extension's ID
+  (Render dashboard or `fly secrets set EXTENSION_ID=<id>`)
 - In dev: `EXTENSION_ID` can be left empty (allows all origins)
+- In production: the backend raises `RuntimeError` at startup if `EXTENSION_ID` is unset
 
 **Clerk auth 401**
 - Verify `CLERK_FRONTEND_API_URL` matches your Clerk instance (no trailing slash)

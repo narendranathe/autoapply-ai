@@ -16,7 +16,7 @@ function getSelect(id: string): HTMLSelectElement {
   return document.getElementById(id) as HTMLSelectElement;
 }
 
-function showStatus(elId: string, msg: string, type: "ok" | "err" | "info") {
+function showStatus(elId: string, msg: string, type: "ok" | "err" | "info" | "warn") {
   const el = get(elId);
   if (!el) return;
   el.textContent = msg;
@@ -1018,6 +1018,32 @@ function wireResumeSyncPanel() {
   });
 }
 
+// ── Offline Queue Status ─────────────────────────────────────────────────────
+
+const OFFLINE_QUEUE_KEY = "offline_queue";
+const OFFLINE_QUEUE_FAILED_KEY = "offline_queue_failed";
+
+async function loadOfflineQueueStatus() {
+  const data = await chrome.storage.local.get([OFFLINE_QUEUE_KEY, OFFLINE_QUEUE_FAILED_KEY]);
+  const pendingAll = (data[OFFLINE_QUEUE_KEY] as Array<{ synced?: boolean }> | undefined) ?? [];
+  const failed = (data[OFFLINE_QUEUE_FAILED_KEY] as unknown[] | undefined) ?? [];
+  const pending = pendingAll.filter((e) => !e?.synced).length;
+  const failedCount = failed.length;
+  showStatus(
+    "offline-queue-status",
+    `${pending} pending · ${failedCount} dead-lettered`,
+    failedCount > 0 ? "warn" : "info",
+  );
+  const clearBtn = document.getElementById("offline-queue-clear-btn") as HTMLButtonElement | null;
+  if (clearBtn) clearBtn.disabled = failedCount === 0;
+}
+
+async function clearFailedOfflineQueue() {
+  await chrome.storage.local.set({ [OFFLINE_QUEUE_FAILED_KEY]: [] });
+  await loadOfflineQueueStatus();
+  showStatus("offline-queue-status", "Failed queue cleared.", "ok");
+}
+
 // Auto-update filename when doc type changes
 (document.getElementById("rag-doc-type") as HTMLSelectElement).addEventListener("change", (e) => {
   const type = (e.target as HTMLSelectElement).value;
@@ -1051,3 +1077,6 @@ get("save-model-routes").addEventListener("click", saveModelRoutes);
 get("rag-upload-btn").addEventListener("click", uploadRagDocument);
 get("github-save-btn").addEventListener("click", saveGitHubConfig);
 get("github-remove-btn").addEventListener("click", removeGitHubToken);
+loadOfflineQueueStatus();
+get("offline-queue-refresh-btn").addEventListener("click", loadOfflineQueueStatus);
+get("offline-queue-clear-btn").addEventListener("click", clearFailedOfflineQueue);

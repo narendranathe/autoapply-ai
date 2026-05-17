@@ -10,8 +10,9 @@ Usage:
 """
 
 from functools import lru_cache
+from typing import Self
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -77,12 +78,31 @@ class Settings(BaseSettings):
     # JWT audience — set to your backend API domain in production
     CLERK_JWT_AUDIENCE: str = ""
 
+    # ── Dev auth bypass ───────────────────────────────────
+    # Clerk user id used by get_current_user when ENVIRONMENT=development and
+    # no JWT / X-Clerk-User-Id header is present. Must be explicitly set —
+    # there is no implicit "first DB user" fallback. Never set in production.
+    DEV_TEST_USER_ID: str = ""
+
     # ── Encryption (for storing user API keys) ────────────
     FERNET_KEY: str = ""
 
     # ── GitHub OAuth ──────────────────────────────────────
     GITHUB_APP_CLIENT_ID: str = ""
     GITHUB_APP_CLIENT_SECRET: str = ""
+
+    # ── GitHub Vault (reserved for future server-side fallback) ───────────
+    # These typed fields are declared so operators can set them today, but
+    # they are NOT yet consumed anywhere in the codebase. Vault operations
+    # currently use the per-user `encrypted_github_token` stored on the
+    # `User` model (see `app/routers/vault/github.py` and `_shared.py`).
+    #
+    # Follow-up: wire a server-side fallback in the vault router that uses
+    # these values when the per-user token is absent. Until then, leaving
+    # them empty is the expected default and produces no warning.
+    GITHUB_TOKEN: str = ""
+    GITHUB_VAULT_OWNER: str = ""
+    GITHUB_VAULT_REPO: str = ""
 
     # ── Vector Backend ────────────────────────────────────
     VECTOR_BACKEND: str = "pgvector"  # "pgvector" | "pinecone"
@@ -115,9 +135,20 @@ class Settings(BaseSettings):
     def cors_origins(self) -> list[str]:
         """
         Returns effective CORS origins.
-        In production with a known extension ID, restricts to that extension only.
+        In production EXTENSION_ID is required so CORS is restricted to a single
+        published extension; falling back to a chrome-extension://* wildcard
+        would let any extension call the API. Raises RuntimeError at startup
+        when the production deploy is missing the secret.
         """
-        if self.is_production and self.EXTENSION_ID:
+        if self.is_production:
+            if not self.EXTENSION_ID:
+                raise RuntimeError(
+                    "EXTENSION_ID must be set when ENVIRONMENT=production. "
+                    "The chrome-extension://* wildcard in ALLOWED_ORIGINS would "
+                    "otherwise let any installed extension call the API. "
+                    "Set it to your published Chrome Web Store extension id, e.g. "
+                    "`fly secrets set EXTENSION_ID=<your-extension-id>`."
+                )
             return [
                 f"chrome-extension://{self.EXTENSION_ID}",
                 *[o for o in self.ALLOWED_ORIGINS if not o.startswith("chrome-extension://")],
@@ -144,6 +175,39 @@ class Settings(BaseSettings):
                 stacklevel=2,
             )
         return v
+
+    @field_validator("FERNET_KEY", mode="after")
+    @classmethod
+    def validate_fernet_key(cls, v: str) -> str:
+        if not v:
+            import warnings
+
+            warnings.warn(
+                "FERNET_KEY is unset — API key and GitHub token encryption will fail "
+                "at runtime. Generate one: "
+                'python -c "from cryptography.fernet import Fernet; '
+                'print(Fernet.generate_key().decode())"',
+                stacklevel=2,
+            )
+            return v
+        try:
+            from cryptography.fernet import Fernet
+
+            Fernet(v.encode())
+        except Exception as e:
+            raise ValueError(
+                f"FERNET_KEY is invalid: {e}. Generate one with Fernet.generate_key().decode()"
+            ) from e
+        return v
+
+    @model_validator(mode="after")
+    def forbid_dev_test_user_in_production(self) -> Self:
+        if self.is_production and self.DEV_TEST_USER_ID:
+            raise ValueError(
+                "DEV_TEST_USER_ID must not be set when ENVIRONMENT=production "
+                "(dev auth bypass is unsafe in production)."
+            )
+        return self
 
     @property
     def is_production(self) -> bool:

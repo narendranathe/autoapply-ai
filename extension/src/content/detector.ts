@@ -12,6 +12,8 @@
 
 import type { DetectedField, DetectedQuestion, FieldType, JobCard, Message, PageContext, QuestionCategory } from "../shared/types";
 import { FIELD_PATTERNS, QUESTION_CATEGORY_PATTERNS } from "../shared/detection-patterns";
+import { isAllowedAtsOrigin } from "../shared/ats-origins";
+import { isEssayQuestion } from "./essay-detection";
 
 // ── Label hashing ──────────────────────────────────────────────────────────
 
@@ -114,13 +116,6 @@ function detectFields(): DetectedField[] {
     });
   }
   return fields;
-}
-
-function isEssayQuestion(label: string): boolean {
-  // Any textarea with a non-trivial label is a Q&A question.
-  // detectFields() only covers <input> and <select>, never <textarea>,
-  // so every textarea is by definition not in the Fields list.
-  return label.trim().length >= 3;
 }
 
 function detectQuestions(): DetectedQuestion[] {
@@ -703,13 +698,15 @@ window.addEventListener("popstate", () => setTimeout(buildAndSendContext, 800));
 
 // IframeFieldBridge: respond to scan requests from parent frame
 window.addEventListener("message", (e: MessageEvent) => {
+  if (!isAllowedAtsOrigin(e.origin)) return;
   if (e.data?.type !== "AAP_SCAN_FIELDS") return;
   const fields = detectFields();
-  (e.source as Window)?.postMessage({ type: "AAP_FIELDS_RESULT", fields }, "*");
+  (e.source as Window | null)?.postMessage({ type: "AAP_FIELDS_RESULT", fields }, e.origin);
 });
 
 // IframeFieldBridge: handle fill requests from parent frame
 window.addEventListener("message", (e: MessageEvent) => {
+  if (!isAllowedAtsOrigin(e.origin)) return;
   if (e.data?.type !== "AAP_FILL_FIELD") return;
   const { fieldId, value } = e.data as { fieldId: string; value: string };
   if (fieldId && value !== undefined) {

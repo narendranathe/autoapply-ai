@@ -66,6 +66,7 @@
       }
       .status.ok { background: #064e3b; color: #6ee7b7; display: block; }
       .status.err { background: #450a0a; color: #fca5a5; display: block; }
+      .status.warn { background: #422006; color: #fcd34d; display: block; }
       .status.info { background: #1e1e3a; color: #a78bfa; display: block; }
       .row { display: flex; gap: 10px; margin-top: 8px; }
       .tag { background: #1e1e3a; color: #a78bfa; border-radius: 99px; padding: 2px 10px; font-size: 11px; }
@@ -570,6 +571,17 @@
       </div>
 
       <!-- Status -->
+      <!-- Offline Queue Status -->
+      <div class="card">
+        <h2>Offline Queue Status</h2>
+        <p class="hint" style="margin-bottom:14px">Markdown edits made while offline are queued and retried when connectivity returns. After 3 failed attempts an edit is moved to the dead-letter list.</p>
+        <div id="offline-queue-status" class="status info">Loading…</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
+          <button class="btn btn-secondary" id="offline-queue-refresh-btn">Refresh</button>
+          <button id="offline-queue-clear-btn" class="btn" style="background:#1a0808;color:#f87171;border:1px solid #7f1d1d;" disabled>Clear Failed Queue</button>
+        </div>
+      </div>
+
       <div class="card">
         <h2>Status</h2>
         <div id="status-info" class="status info">Loading...</div>

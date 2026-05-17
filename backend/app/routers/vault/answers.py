@@ -6,10 +6,12 @@ import contextlib
 import hashlib
 import json as _json
 import sys
+import unicodedata
 import uuid
 
 from fastapi import APIRouter, Depends, Form, HTTPException, status
 from loguru import logger
+from rapidfuzz.distance import Levenshtein as _RFLevenshtein
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -407,19 +409,47 @@ def _levenshtein(a: str, b: str) -> int:
     return prev[-1]
 
 
-def _compute_reward(feedback: str, edit_distance: int = 0, answer_len: int = 1) -> float:
+def _levenshtein_ratio(original: str, submitted: str) -> float:
+    """Levenshtein similarity ratio in [0.0, 1.0]; higher = less changed.
+
+    Inputs are NFC-normalized so visually-identical Unicode (e.g. precomposed
+    vs. decomposed accents) compare as equal. Inputs are truncated to the
+    first 1000 characters to match `_levenshtein` and bound CPU cost.
+    """
+    original = unicodedata.normalize("NFC", original)[:1000]
+    submitted = unicodedata.normalize("NFC", submitted)[:1000]
+    if original == submitted:
+        return 1.0
+    return float(_RFLevenshtein.normalized_similarity(original, submitted))
+
+
+def _compute_reward(
+    feedback: str,
+    edit_distance: int = 0,
+    answer_len: int = 1,
+    ratio: float | None = None,
+) -> float:
     """
     Reward function for the contextual bandit.
       used_as_is  → 1.0
-      edited      → 0.8 penalised by normalised edit distance (min 0.4)
+      edited      → 0.4 + (ratio * 0.4) when ratio supplied (range 0.4–0.8)
+                  → fallback 0.8 when ratio is None (backward compat)
       regenerated → 0.2
       skipped     → 0.0
+
+    The legacy `edit_distance`/`answer_len` arguments are retained for
+    backward compatibility but only consulted when no `ratio` is provided.
     """
     if feedback == "used_as_is":
         return 1.0
     if feedback == "edited":
-        penalty = min(edit_distance / max(answer_len, 1), 0.4)
-        return max(0.4, 0.8 - penalty)
+        if ratio is not None:
+            clamped = max(0.0, min(1.0, ratio))
+            return 0.4 + clamped * 0.4
+        if edit_distance > 0:
+            penalty = min(edit_distance / max(answer_len, 1), 0.4)
+            return max(0.4, 0.8 - penalty)
+        return 0.8
     if feedback == "regenerated":
         return 0.2
     if feedback == "skipped":
@@ -431,13 +461,24 @@ def _compute_reward(feedback: str, edit_distance: int = 0, answer_len: int = 1) 
 async def record_answer_feedback(
     answer_id: str,
     feedback: str = Form(...),  # used_as_is | edited | regenerated | skipped
-    edited_answer: str | None = Form(None),  # final text if user edited before using
+    edited_answer: str | None = Form(None, max_length=20000),  # final text if user edited
+    submitted_text: str | None = Form(None, max_length=20000),  # final text for ratio reward
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     """
     Record the outcome of a generated answer draft (RL reward signal).
     Called by the extension after the user decides what to do with a draft.
+
+    When `feedback=edited` and either `submitted_text` or `edited_answer` is
+    supplied (and non-blank), the reward is computed from the Levenshtein
+    similarity ratio between the original draft and the supplied text.
+    If neither is supplied (or both are blank/whitespace-only), the reward
+    falls back to the legacy flat 0.8 and the stored answer text is left
+    unchanged for backward compatibility.
+
+    `submitted_text` takes precedence over `edited_answer` when both are
+    provided. Both fields are capped at 20 000 characters to bound CPU cost.
     """
     stmt = select(ApplicationAnswer).where(
         ApplicationAnswer.id == uuid.UUID(answer_id),
@@ -452,21 +493,33 @@ async def record_answer_feedback(
     if feedback not in valid_feedback:
         raise HTTPException(status_code=422, detail=f"feedback must be one of {valid_feedback}")
 
+    # Prefer submitted_text, then edited_answer. Treat blank/whitespace-only
+    # as "not provided" so an empty string never wipes the stored answer.
+    final_text: str | None = None
+    if submitted_text is not None and submitted_text.strip():
+        final_text = submitted_text
+    elif edited_answer is not None and edited_answer.strip():
+        final_text = edited_answer
+
     edit_dist = 0
-    if feedback == "edited" and edited_answer:
-        # Update the stored answer to the final version the user used
-        edit_dist = _levenshtein(ans.answer_text, edited_answer)
-        ans.answer_text = edited_answer
-        ans.word_count = len(edited_answer.split())
+    similarity_ratio: float | None = None
+    if feedback == "edited" and final_text is not None:
+        original_text = ans.answer_text
+        edit_dist = _levenshtein(original_text, final_text)
+        similarity_ratio = _levenshtein_ratio(original_text, final_text)
+        ans.answer_text = final_text
+        ans.word_count = len(final_text.split())
 
     ans.feedback = feedback
     ans.edit_distance = edit_dist
-    ans.reward_score = _compute_reward(feedback, edit_dist, len(ans.answer_text))
+    ans.reward_score = _compute_reward(
+        feedback, edit_dist, len(ans.answer_text), ratio=similarity_ratio
+    )
 
     await db.commit()
     logger.info(
         f"Answer feedback: {feedback} reward={ans.reward_score:.2f} "
-        f"edit_dist={edit_dist} answer_id={answer_id}"
+        f"edit_dist={edit_dist} similarity_ratio={similarity_ratio} answer_id={answer_id}"
     )
 
     return {
@@ -474,6 +527,7 @@ async def record_answer_feedback(
         "feedback": feedback,
         "reward_score": ans.reward_score,
         "edit_distance": edit_dist,
+        "similarity_ratio": similarity_ratio,
     }
 
 

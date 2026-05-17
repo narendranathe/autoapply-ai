@@ -108,4 +108,6 @@ export interface OfflineEdit {
   markdownContent: string;
   timestamp: number;
   synced: boolean;
+  failureCount?: number;
+  lastError?: string;
 }
