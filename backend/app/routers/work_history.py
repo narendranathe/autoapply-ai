@@ -9,6 +9,8 @@ Endpoints:
   GET    /api/v1/work-history/text               Formatted text block for LLM injection
   POST   /api/v1/work-history/seed               Bulk-create entries (idempotent on company+role)
   POST   /api/v1/work-history/import-from-resume Parse resume PDF/DOCX → auto-create entries
+  POST   /api/v1/work-history/import/github      Import public repos from GitHub
+  POST   /api/v1/work-history/import/linkedin    Import positions from LinkedIn Profile.json
 """
 
 import json
@@ -32,6 +34,14 @@ from app.services.resume_generator import (
     _call_openai,
 )
 from app.services.resume_parser import ResumeParser
+from app.services.work_history_import import (
+    WorkHistoryImportError,
+    dedupe_github,
+    dedupe_linkedin,
+    fetch_github_repos,
+    parse_linkedin_positions,
+    repo_to_entry_kwargs,
+)
 
 _resume_parser = ResumeParser()
 
@@ -480,3 +490,116 @@ async def import_work_history_from_resume(
         "provider_used": used_provider,
         "detected_profile": contact_info,  # extension can pre-fill profile fields
     }
+
+
+# ── Import from GitHub ─────────────────────────────────────────────────────
+
+
+@router.post("/import/github", status_code=status.HTTP_201_CREATED)
+async def import_work_history_from_github(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Import the authenticated user's public repositories from GitHub.
+
+    Each repo becomes a ``WorkHistoryEntry(source='github')`` with the repo
+    name as the title and the description + primary language as bullets.
+    Deduplication key is the repo ``html_url`` stored in ``source_url`` —
+    re-running the endpoint is a no-op once a repo is imported.
+    """
+    if not user.encrypted_github_token:
+        raise HTTPException(
+            status_code=400,
+            detail="No GitHub token configured. Add your token via /api/v1/users/github-token.",
+        )
+
+    try:
+        repos = await fetch_github_repos(user.encrypted_github_token)
+    except WorkHistoryImportError as exc:
+        logger.warning(f"[import/github] user={user.id} fetch failed: {exc}")
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    # Existing dedupe set: any github-sourced row this user already has
+    stmt = select(WorkHistoryEntry.source_url).where(
+        WorkHistoryEntry.user_id == user.id,
+        WorkHistoryEntry.source == "github",
+        WorkHistoryEntry.source_url.is_not(None),
+    )
+    result = await db.execute(stmt)
+    existing_urls = {row[0] for row in result.all() if row[0]}
+
+    candidates = [repo_to_entry_kwargs(r) for r in repos]
+    new_entries, skipped = dedupe_github(candidates, existing_urls)
+
+    for kwargs in new_entries:
+        db.add(WorkHistoryEntry(user_id=user.id, **kwargs))
+
+    await db.commit()
+    logger.info(
+        f"[import/github] user={user.id} created={len(new_entries)} skipped={skipped} "
+        f"total_repos={len(repos)}"
+    )
+    return {"created": len(new_entries), "skipped": skipped}
+
+
+# ── Import from LinkedIn ───────────────────────────────────────────────────
+
+
+@router.post("/import/linkedin", status_code=status.HTTP_201_CREATED)
+async def import_work_history_from_linkedin(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Import positions from a LinkedIn ``Profile.json`` export.
+
+    Each entry in ``positions[]`` becomes a ``WorkHistoryEntry(source='linkedin')``.
+    Dedupe key: (company_name, role_title, start_date) — case-insensitive.
+    """
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Empty file upload.")
+    try:
+        profile = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not parse Profile.json: {exc}",
+        ) from exc
+
+    if not isinstance(profile, dict):
+        raise HTTPException(status_code=400, detail="Profile.json must be a JSON object.")
+
+    candidates = parse_linkedin_positions(profile)
+    if not candidates:
+        return {"created": 0, "skipped": 0}
+
+    # Existing dedupe set: every (company, title, start) the user has, lower-cased
+    stmt = select(
+        WorkHistoryEntry.company_name,
+        WorkHistoryEntry.role_title,
+        WorkHistoryEntry.start_date,
+    ).where(WorkHistoryEntry.user_id == user.id)
+    result = await db.execute(stmt)
+    existing_keys = {
+        (
+            (row.company_name or "").strip().lower(),
+            (row.role_title or "").strip().lower(),
+            (row.start_date or "").strip().lower(),
+        )
+        for row in result.all()
+    }
+
+    new_entries, skipped = dedupe_linkedin(candidates, existing_keys)
+
+    for kwargs in new_entries:
+        db.add(WorkHistoryEntry(user_id=user.id, **kwargs))
+
+    await db.commit()
+    logger.info(
+        f"[import/linkedin] user={user.id} created={len(new_entries)} skipped={skipped} "
+        f"total_positions={len(candidates)}"
+    )
+    return {"created": len(new_entries), "skipped": skipped}

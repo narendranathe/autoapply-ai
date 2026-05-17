@@ -43,6 +43,15 @@ class WorkHistoryEntry(Base, TimestampMixin):
     # --- Display order (0 = most recent, ascending) ---
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
+    # --- Provenance (where this entry came from) ---
+    # "manual"   — user typed it in via the dashboard
+    # "github"   — imported from a public GitHub repository
+    # "linkedin" — imported from a LinkedIn Profile.json export
+    source: Mapped[str] = mapped_column(String(20), nullable=False, default="manual")
+    # External identifier used for idempotent re-import. For GitHub this is the
+    # repo html_url; for LinkedIn we leave it null (we dedupe on company+role+date).
+    source_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
     def __repr__(self) -> str:
         end = "present" if self.is_current else (self.end_date or "?")
         return f"<WorkHistoryEntry {self.role_title} @ {self.company_name} {self.start_date}–{end}>"
