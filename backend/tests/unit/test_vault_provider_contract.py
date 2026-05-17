@@ -624,3 +624,74 @@ async def test_resolve_providers_never_logs_plaintext():
     # The plaintext must NOT appear in any rendered log line.
     assert "sk-PLAINTEXT-LEAK-CHECK" not in log_output
     assert "[REDACTED]" in log_output
+
+
+# ---------------------------------------------------------------------------
+# Issue #197 P1-F + P0-G — legacy rejection logs WARN with user/UA, and
+# the ACCEPT_LEGACY_PROVIDERS_JSON transition flag has both modes covered.
+# ---------------------------------------------------------------------------
+
+
+def _install_fresh_loguru_sink():
+    """Return ``(sink, restore)`` — a StringIO sink wired into a fresh
+    loguru logger. Some sibling tests permanently stub ``loguru.logger``
+    with a ``SimpleNamespace`` of no-ops, so we install our own logger
+    for the duration of these tests.
+    """
+    import loguru as _loguru_mod
+    from loguru._logger import Core as _Core
+    from loguru._logger import Logger as _Logger
+
+    saved = _loguru_mod.logger
+    fresh = _Logger(_Core(), None, 0, False, False, False, False, True, [], {})
+    _loguru_mod.logger = fresh
+
+    # Re-bind the loguru import inside _shared so its module-level
+    # ``logger`` points at our fresh instance for the duration of the
+    # test. (Loguru is process-singleton-by-convention but each module
+    # captures a reference at import time.)
+    import app.routers.vault._shared as _shared_mod
+
+    saved_shared_logger = _shared_mod.logger
+    _shared_mod.logger = fresh
+
+    sink = io.StringIO()
+    handler_id = fresh.add(sink, format="{level}|{message}", level="DEBUG")
+
+    def restore() -> None:
+        fresh.remove(handler_id)
+        _loguru_mod.logger = saved
+        _shared_mod.logger = saved_shared_logger
+
+    return sink, restore
+
+
+def test_reject_providers_json_logs_warning_with_user_and_user_agent():
+    """P1-F — every legacy-field rejection must log a WARN line carrying
+    the user id and the request User-Agent so operators can identify
+    which extension installs are still on the old contract.
+    """
+    sink, restore = _install_fresh_loguru_sink()
+    try:
+        user_id = uuid.uuid4()
+        request = MagicMock()
+        request.headers = {"user-agent": "AutoApply-Chrome-Ext/1.2.3"}
+
+        with pytest.raises(HTTPException) as exc_info:
+            _reject_providers_json(
+                '[{"name":"groq","api_key":"gsk_x"}]',
+                user_id=user_id,
+                request=request,
+            )
+        assert exc_info.value.status_code == 422
+
+        log_output = sink.getvalue()
+    finally:
+        restore()
+
+    assert "WARNING" in log_output
+    assert "legacy_providers_json_rejected" in log_output
+    assert str(user_id) in log_output
+    assert "AutoApply-Chrome-Ext/1.2.3" in log_output
+
+

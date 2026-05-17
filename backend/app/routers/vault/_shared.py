@@ -3,8 +3,9 @@ Shared helpers and singletons used across vault sub-modules.
 """
 
 import json as _json
+import uuid as _uuid
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException, Request, status
 from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,19 +39,45 @@ _PROVIDERS_JSON_REJECT_MSG = (
 )
 
 
-def _reject_providers_json(value: str, *, field_name: str = "providers_json") -> None:
-    """Raise 422 if the deprecated ``providers_json`` field is present.
+def _reject_providers_json(
+    value: str,
+    *,
+    field_name: str = "providers_json",
+    user_id: _uuid.UUID | None = None,
+    request: Request | None = None,
+) -> None:
+    """Reject the deprecated ``providers_json`` field with HTTP 422.
 
     Issue #197 removed the contract where the client transmits decrypted
-    API keys on every request. We refuse the old field outright (no
-    silent fallback) so misconfigured clients fail loudly instead of
-    silently leaking keys over the wire.
+    API keys on every request. We refuse the old field outright so
+    misconfigured clients fail loudly instead of silently leaking keys
+    over the wire.
+
+    Observability (P1-F): every rejection logs a structured WARNING with
+    the user id and ``User-Agent`` header BEFORE raising
+    ``HTTPException`` so operators can identify which extension installs
+    are still on the legacy contract during the Chrome Web Store
+    rollout. The previous round-1 implementation raised silently — once
+    the exception propagated out, the request was 422'd with no log
+    line and operators had no signal at all about which client versions
+    were still calling.
     """
-    if value and value.strip():
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"error": "providers_json_removed", "message": _PROVIDERS_JSON_REJECT_MSG},
-        )
+    if not value or not value.strip():
+        return
+
+    ua = request.headers.get("user-agent", "<unknown>") if request is not None else "<unknown>"
+    # Log first so operators see WHICH clients are being rejected
+    # (HTTPException doesn't carry request context into the logs by
+    # default).
+    logger.warning(
+        "legacy_providers_json_rejected user={} ua={}",
+        user_id,
+        ua,
+    )
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail={"error": "providers_json_removed", "message": _PROVIDERS_JSON_REJECT_MSG},
+    )
 
 
 def _parse_providers(providers: str) -> list[dict]:
@@ -95,6 +122,7 @@ async def _resolve_providers(
     user: "User",
     *,
     providers_json: str | None = None,
+    request: Request | None = None,
 ) -> list[dict]:
     """Resolve the provider list for a generation endpoint.
 
@@ -121,7 +149,7 @@ async def _resolve_providers(
     a corrupt row is skipped rather than crashing the request.
     """
     if providers_json is not None:
-        _reject_providers_json(providers_json)
+        _reject_providers_json(providers_json, user_id=user.id, request=request)
 
     requested = _parse_providers(providers)
     if requested:
