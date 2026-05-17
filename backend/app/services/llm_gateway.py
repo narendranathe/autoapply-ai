@@ -1,15 +1,21 @@
 """
 LLMGateway — single source of truth for LLM provider dispatch.
 
-This module merges the legacy ``llm_service`` symbols (Provider ABC, provider
-classes, exceptions, keyword fallback, prompt templates, ``tailor_resume``)
-into the same module as the high-level ``LLMGateway`` cascade so every code
-path (resume, Q&A, cover letter, summary, bullets) shares one dispatch table.
+This module is the **authoritative** home for every LLM symbol used across
+the backend: the ``LLMProvider`` ABC and concrete provider classes, the
+custom exceptions, the ``KeywordFallback``, the ``RewriteStrategy`` enum,
+the prompt templates, the ``PROVIDERS`` registry, the ``tailor_resume``
+entry point, and the high-level ``LLMGateway`` cascade.
 
-Issue #146 — Phase 2 merge.  Issue #149 will deduplicate against
-``llm_service.py``; until then ``llm_service.py`` re-exports remain valid
-imports for existing callers (``email_classifier_service``,
-``tailoring_pipeline``, etc.).
+Issue #146 — Phase 2 merge.  All implementation lives here as a single set
+of singletons (one ``PROVIDERS`` instance, one ``RewriteStrategy`` class,
+one set of provider classes).  ``app/services/llm_service.py`` is now a
+thin re-export shim that imports from this module so legacy callers
+(``email_classifier_service``, ``tailoring_pipeline``, etc.) continue to
+resolve to the same objects via identity (``is``) — not parallel copies.
+
+Follow-ups #147 and #148 migrate the remaining import sites to point at
+``llm_gateway`` directly; #149 then deletes the shim.
 
 Supported providers
 -------------------
