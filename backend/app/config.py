@@ -178,7 +178,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def forbid_dev_test_user_in_production(self) -> Self:
-        if self.ENVIRONMENT == "production" and self.DEV_TEST_USER_ID:
+        if self.is_production and self.DEV_TEST_USER_ID:
             raise ValueError(
                 "DEV_TEST_USER_ID must not be set when ENVIRONMENT=production "
                 "(dev auth bypass is unsafe in production)."

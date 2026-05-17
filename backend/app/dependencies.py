@@ -104,7 +104,8 @@ async def get_current_user(
        ``Authorization: Bearer <token>`` JWT against Clerk's JWKS.
     2. Otherwise fall back to ``X-Clerk-User-Id`` header (dev / extension flow).
     3. In development with no header: resolve the user whose ``clerk_id`` matches
-       ``settings.DEV_TEST_USER_ID``. If that setting is empty, return 403.
+       ``settings.DEV_TEST_USER_ID``. If that setting is empty, return 401
+       (no credentials → unauthenticated).
     """
     from app.models.user import User  # late import to avoid circular deps
 
@@ -155,7 +156,7 @@ async def get_current_user(
     if settings.is_development:
         if not settings.DEV_TEST_USER_ID:
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
+                status_code=status.HTTP_401_UNAUTHORIZED,
                 detail=(
                     "Dev auth bypass requires DEV_TEST_USER_ID to be set to a "
                     "valid clerk_id in your .env. Set it or send a Clerk JWT / "
