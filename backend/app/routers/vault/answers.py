@@ -19,7 +19,6 @@ from app.dependencies import get_current_user, get_db
 from app.models.resume import ApplicationAnswer
 from app.models.user import User
 from app.models.work_history import WorkHistoryEntry
-from app.services.rag_service import get_rag_context_for_query
 from app.services.llm_gateway import (
     _call_anthropic,
     _call_gemini,
@@ -27,6 +26,7 @@ from app.services.llm_gateway import (
     _call_kimi,
     _call_openai,
 )
+from app.services.rag_service import get_rag_context_for_query
 from app.services.resume_generator import (
     _PROVIDER_RANK,
     generate_answer_drafts,

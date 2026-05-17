@@ -1,5 +1,5 @@
 """
-Characterization tests for ``tailor_resume`` in ``app/services/llm_service.py``.
+Characterization tests for ``tailor_resume`` in ``app/services/llm_gateway.py``.
 
 These tests lock in the *current* contract of ``tailor_resume`` so that
 regressions during the upcoming refactor surface immediately. They mock at

@@ -159,23 +159,3 @@ async def test_gateway_supports_ollama_provider_directly():
 
     assert provider_used == "ollama"
     assert content == ollama_text
-
-
-def test_llm_service_is_shim_to_llm_gateway():
-    """llm_service is a thin re-export shim — every symbol shares identity with llm_gateway.
-
-    This guards against the regression where the two modules carried parallel
-    duplicate definitions (two ``PROVIDERS`` dicts, two ``RewriteStrategy``
-    classes with different MROs).  The shim must hand back the same objects.
-    """
-    from app.services import llm_gateway, llm_service
-
-    assert llm_service.RewriteStrategy is llm_gateway.RewriteStrategy
-    assert llm_service.PROVIDERS is llm_gateway.PROVIDERS
-    assert llm_service.tailor_resume is llm_gateway.tailor_resume
-
-    # Every exported symbol must share identity with its llm_gateway origin.
-    for name in llm_service.__all__:
-        assert getattr(llm_service, name) is getattr(
-            llm_gateway, name
-        ), f"llm_service.{name} is not the same object as llm_gateway.{name}"

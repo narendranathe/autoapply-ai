@@ -7,15 +7,10 @@ custom exceptions, the ``KeywordFallback``, the ``RewriteStrategy`` enum,
 the prompt templates, the ``PROVIDERS`` registry, the ``tailor_resume``
 entry point, and the high-level ``LLMGateway`` cascade.
 
-Issue #146 — Phase 2 merge.  All implementation lives here as a single set
-of singletons (one ``PROVIDERS`` instance, one ``RewriteStrategy`` class,
-one set of provider classes).  ``app/services/llm_service.py`` is now a
-thin re-export shim that imports from this module so legacy callers
-(``email_classifier_service``, ``tailoring_pipeline``, etc.) continue to
-resolve to the same objects via identity (``is``) — not parallel copies.
-
-Follow-ups #147 and #148 migrate the remaining import sites to point at
-``llm_gateway`` directly; #149 then deletes the shim.
+Issue #146 / #147 / #148 / #149 — all implementation lives here as a single
+set of singletons (one ``PROVIDERS`` instance, one ``RewriteStrategy`` class,
+one set of provider classes).  The legacy ``app/services/llm_service.py``
+shim has been deleted (#149).
 
 Supported providers
 -------------------
