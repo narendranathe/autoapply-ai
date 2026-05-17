@@ -313,12 +313,22 @@ async def get_current_user(
                         status_code=status.HTTP_401_UNAUTHORIZED,
                         detail="Invalid or expired authentication token.",
                     )
-                options = {"verify_aud": bool(settings.CLERK_JWT_AUDIENCE)}
+                # Pin the issuer to OUR Clerk tenant. Without ``verify_iss``,
+                # a token signed by a different Clerk tenant whose JWKS just
+                # happens to be served at the configured URL would pass — the
+                # ``kid`` and signature would check out and we'd resolve the
+                # foreign tenant's ``sub`` to a local user. Pinning the issuer
+                # closes that tenant-confusion vector.
+                options = {
+                    "verify_aud": bool(settings.CLERK_JWT_AUDIENCE),
+                    "verify_iss": True,
+                }
                 payload = jwt.decode(
                     token,
                     jwk,
                     algorithms=_CLERK_JWT_ALGORITHMS,
                     audience=settings.CLERK_JWT_AUDIENCE or None,
+                    issuer=settings.CLERK_FRONTEND_API_URL,
                     options=options,
                 )
                 clerk_id = payload.get("sub")
