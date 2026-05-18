@@ -1,4 +1,9 @@
 import { useEffect, useState } from "react";
+import {
+  buildProviderList as buildProviderListPure,
+  type ProviderRef,
+  type ProvidersMap,
+} from "../../shared/providerMigration";
 
 export interface UserProfile {
   firstName?: string;
@@ -18,34 +23,36 @@ export interface UserProfile {
   salary?: string;
 }
 
-export type ProviderConfig = { name: string; apiKey: string; model?: string };
+/**
+ * Sanitised provider descriptor — name + model. No apiKey field.
+ *
+ * The backend resolves the encrypted key from ``user_provider_configs``
+ * keyed by the authenticated user (P0 issue #198, implementation B).
+ */
+export type ProviderConfig = ProviderRef;
 
-const PROVIDER_RANK: Record<string, number> = {
-  anthropic: 1, openai: 2, gemini: 3, groq: 4, perplexity: 5, kimi: 6,
-};
-const PROVIDER_MODELS: Record<string, string> = {
-  anthropic: "claude-sonnet-4-6", openai: "gpt-4o", gemini: "gemini-1.5-flash",
-  groq: "llama-3.3-70b-versatile", perplexity: "sonar", kimi: "moonshot-v1-32k",
-};
+/**
+ * Re-export the pure helper so call sites that already import from this
+ * module keep working without touching every import path.
+ */
+export const buildProviderList = buildProviderListPure;
 
-export function buildProviderList(
-  configs: Record<string, { enabled?: boolean; apiKey: string; model?: string }>
-): ProviderConfig[] {
-  return Object.entries(configs)
-    .filter(([, cfg]) => !!cfg.apiKey)
-    .map(([name, cfg]) => ({ name, apiKey: cfg.apiKey, model: cfg.model || PROVIDER_MODELS[name] || "" }))
-    .sort((a, b) => (PROVIDER_RANK[a.name] ?? 50) - (PROVIDER_RANK[b.name] ?? 50));
-}
-
-export async function getFreshProviders(): Promise<Array<{ name: string; apiKey: string; model: string }>> {
+/**
+ * Read the latest provider preference list (name + model) from storage.
+ *
+ * Never returns ``apiKey`` — that field stays in storage until the user
+ * runs the explicit migration on the Options page, after which it is
+ * stripped. Either way, callers of this function must never serialise
+ * the key into outbound API payloads.
+ */
+export async function getFreshProviders(): Promise<ProviderRef[]> {
   return new Promise((resolve) => {
     chrome.storage.local.get("providerConfigs", (data) => {
-      if (!data.providerConfigs) { resolve([]); return; }
-      resolve(
-        buildProviderList(
-          data.providerConfigs as Record<string, { enabled?: boolean; apiKey: string; model?: string }>
-        ) as Array<{ name: string; apiKey: string; model: string }>
-      );
+      if (!data.providerConfigs) {
+        resolve([]);
+        return;
+      }
+      resolve(buildProviderList(data.providerConfigs as ProvidersMap));
     });
   });
 }
@@ -69,11 +76,7 @@ export function useProviders(): UseProvidersResult {
     chrome.storage.local.get(["profile", "providerConfigs", "promptTemplates"], (data) => {
       if (data.profile) setProfile(data.profile as UserProfile);
       if (data.providerConfigs)
-        setProviders(
-          buildProviderList(
-            data.providerConfigs as Record<string, { enabled: boolean; apiKey: string; model: string }>
-          )
-        );
+        setProviders(buildProviderList(data.providerConfigs as ProvidersMap));
       if (data.promptTemplates) setPromptTemplates(data.promptTemplates as Record<string, string>);
       setProvidersLoaded(true);
     });
@@ -82,11 +85,7 @@ export function useProviders(): UseProvidersResult {
       if (area !== "local") return;
       if (changes.profile?.newValue) setProfile(changes.profile.newValue as UserProfile);
       if (changes.providerConfigs?.newValue)
-        setProviders(
-          buildProviderList(
-            changes.providerConfigs.newValue as Record<string, { enabled: boolean; apiKey: string; model: string }>
-          )
-        );
+        setProviders(buildProviderList(changes.providerConfigs.newValue as ProvidersMap));
       if (changes.promptTemplates?.newValue)
         setPromptTemplates(changes.promptTemplates.newValue as Record<string, string>);
     };

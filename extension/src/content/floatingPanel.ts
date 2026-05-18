@@ -9,6 +9,8 @@ import type { DetectedField, DetectedQuestion, FieldType, QuestionCategory } fro
 import { FIELD_PATTERNS, QUESTION_CATEGORY_PATTERNS } from "../shared/detection-patterns";
 import { isAllowedAtsOrigin, resolveIframeOrigin } from "../shared/ats-origins";
 import { getThresholdsCached, initThresholds } from "../shared/detection-thresholds";
+import { buildProviderList, type ProvidersMap } from "../shared/providerMigration";
+import { appendProvidersField } from "../shared/api";
 import { initAshbyApply } from "./ashbyApply";
 import { initBambooHRApply } from "./bamboohrApply";
 import { initGreenhouseApply } from "./greenhouseApply";
@@ -462,7 +464,9 @@ class FloatingPanel {
   private clerkUserId: string | null = null;
   private clerkToken: string | null = null;
   private clerkTokenExp: number = 0;
-  private providers: Array<{ name: string; api_key: string; model: string }> = [];
+  // P0 #198: provider list carries only {name, model}. The backend reads
+  // the encrypted key from user_provider_configs by user_id.
+  private providers: Array<{ name: string; model: string }> = [];
   private profile: Profile = {
     firstName: "", lastName: "", email: "", phone: "",
     city: "", state: "", zip: "", country: "United States",
@@ -526,11 +530,9 @@ class FloatingPanel {
     if (data.promptTemplates) this.promptTemplates = data.promptTemplates as Record<string, string>;
     if (data.categoryModelRoutes) this.categoryModelRoutes = data.categoryModelRoutes as Record<string, string>;
     if (data.providerConfigs) {
-      const RANK: Record<string, number> = { anthropic: 1, openai: 2, gemini: 3, groq: 4, perplexity: 5, kimi: 6 };
-      this.providers = Object.entries(data.providerConfigs as Record<string, { enabled: boolean; apiKey: string; model: string }>)
-        .filter(([, cfg]) => !!cfg.apiKey)  // enabled = has a key
-        .map(([name, cfg]) => ({ name, api_key: cfg.apiKey, model: cfg.model }))
-        .sort((a, b) => (RANK[a.name] ?? 50) - (RANK[b.name] ?? 50));
+      // P1-F: delegate to the canonical helper. Output is {name, model} only —
+      // never an apiKey — ordered by canonical provider rank.
+      this.providers = buildProviderList(data.providerConfigs as ProvidersMap);
     }
 
     // Fetch full work history text for LLM context
@@ -1077,7 +1079,9 @@ class FloatingPanel {
           if (preferred.length > 0) orderedProviders = [...preferred, ...rest];
         }
         state.loadingProvider = orderedProviders[0]?.name ?? "";
-        fd.append("providers_json", JSON.stringify(orderedProviders));
+        // P0 #197/#198: route through the shared helper so every site
+        // honours the ``providers`` wire-field contract identically.
+        appendProvidersField(fd, orderedProviders);
       }
       if (state.question.maxLength && state.question.maxLength > 0) {
         fd.append("max_length", String(state.question.maxLength));

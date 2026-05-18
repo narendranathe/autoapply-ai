@@ -7,6 +7,8 @@ GET    /api/v1/users/provider-configs          → List all provider configs (ke
 PUT    /api/v1/users/provider-configs/{name}   → Upsert a provider config (encrypt key)
 """
 
+import hashlib
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,6 +27,41 @@ from app.schemas.user import (
 from app.utils.encryption import decrypt_value, encrypt_value
 
 router = APIRouter()
+
+
+# ---------------------------------------------------------------------------
+# Fingerprint helper  (P0-A migration verification, issue #198 round 2)
+# ---------------------------------------------------------------------------
+
+
+def _key_fingerprint(plaintext_key: str | None) -> str | None:
+    """
+    Return the first 8 hex chars of ``sha256(plaintext_key)`` or ``None``
+    when no key is configured.
+
+    Truncating to 8 chars (32 bits) is a deliberate trade-off: it gives
+    the migration client a cheap collision-resistant check ("did the
+    server store the same key I PUT?") while leaking less than the full
+    hash. The plaintext key itself is high-entropy so even the truncated
+    form is not a credible secret.
+    """
+    if not plaintext_key:
+        return None
+    return hashlib.sha256(plaintext_key.encode("utf-8")).hexdigest()[:8]
+
+
+def _safe_decrypt(encrypted: str | None) -> str | None:
+    """
+    Best-effort decrypt for fingerprint computation. Returns ``None`` on
+    any failure — fingerprint then reads ``None`` and the migration
+    client treats it as "no key", which is the correct safe default.
+    """
+    if not encrypted:
+        return None
+    try:
+        return decrypt_value(encrypted)
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +182,7 @@ async def get_provider_configs(
         ProviderConfigResponse(
             provider_name=row.provider_name,
             has_key=bool(row.encrypted_api_key),
+            key_fingerprint=_key_fingerprint(_safe_decrypt(row.encrypted_api_key)),
             model_override=row.model_override,
             is_enabled=bool(row.encrypted_api_key),
         )
@@ -202,9 +240,15 @@ async def upsert_provider_config(
     await db.commit()
     await db.refresh(row)
 
+    # P0-A: fingerprint is computed from the *plaintext* the caller just
+    # PUT — we have it in scope (``payload.api_key``) so there is no need
+    # to round-trip through the encrypted column. The migration client
+    # compares this against the value GET returns to detect a stale row
+    # that some other client wrote behind our back.
     return ProviderConfigResponse(
         provider_name=row.provider_name,
         has_key=bool(row.encrypted_api_key),
+        key_fingerprint=_key_fingerprint(payload.api_key),
         model_override=row.model_override,
         is_enabled=bool(row.encrypted_api_key),
     )
