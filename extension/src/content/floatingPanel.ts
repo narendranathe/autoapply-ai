@@ -10,7 +10,7 @@ import { FIELD_PATTERNS, QUESTION_CATEGORY_PATTERNS } from "../shared/detection-
 import { isAllowedAtsOrigin, resolveIframeOrigin } from "../shared/ats-origins";
 import { getThresholdsCached, initThresholds } from "../shared/detection-thresholds";
 import { buildProviderList, type ProvidersMap } from "../shared/providerMigration";
-import { PROVIDERS_FORM_FIELD } from "../shared/api";
+import { appendProvidersField } from "../shared/api";
 import { initAshbyApply } from "./ashbyApply";
 import { initBambooHRApply } from "./bamboohrApply";
 import { initGreenhouseApply } from "./greenhouseApply";
@@ -1079,9 +1079,9 @@ class FloatingPanel {
           if (preferred.length > 0) orderedProviders = [...preferred, ...rest];
         }
         state.loadingProvider = orderedProviders[0]?.name ?? "";
-        // P0 #197/#198: canonical wire field name is ``providers`` (backend
-        // rejects ``providers_json`` with HTTP 422).
-        fd.append(PROVIDERS_FORM_FIELD, JSON.stringify(orderedProviders));
+        // P0 #197/#198: route through the shared helper so every site
+        // honours the ``providers`` wire-field contract identically.
+        appendProvidersField(fd, orderedProviders);
       }
       if (state.question.maxLength && state.question.maxLength > 0) {
         fd.append("max_length", String(state.question.maxLength));

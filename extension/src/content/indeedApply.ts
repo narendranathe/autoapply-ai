@@ -1,6 +1,6 @@
 import { AUTH_STORAGE_KEYS, buildAuthHeaders } from "./authHelper";
 import { buildProviderList, type ProvidersMap } from "../shared/providerMigration";
-import { PROVIDERS_FORM_FIELD } from "../shared/api";
+import { appendProvidersField } from "../shared/api";
 
 /**
  * indeedApply.ts
@@ -312,9 +312,9 @@ async function runFill(applyRoot: HTMLElement, btn: HTMLButtonElement): Promise<
         fd.append("question_category", "custom");
         fd.append("company_name", extractIndeedCompany());
         fd.append("jd_text", extractIndeedJd());
-        // P0 #197/#198: ``providers`` is the canonical wire field name; the
-        // backend rejects ``providers_json`` with HTTP 422.
-        if (providers.length > 0) fd.append(PROVIDERS_FORM_FIELD, JSON.stringify(providers));
+        // P0 #197/#198: route through the shared helper so every site
+        // honours the ``providers`` wire-field contract identically.
+        appendProvidersField(fd, providers);
         if (ta.maxLength > 0) fd.append("max_length", String(ta.maxLength));
         const resp = await fetch(`${apiBase}/vault/generate/answers`, {
           method: "POST",

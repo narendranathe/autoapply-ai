@@ -1,6 +1,6 @@
 import { AUTH_STORAGE_KEYS, buildAuthHeaders } from "./authHelper";
 import { buildProviderList, type ProvidersMap } from "../shared/providerMigration";
-import { PROVIDERS_FORM_FIELD } from "../shared/api";
+import { appendProvidersField } from "../shared/api";
 
 /**
  * leverApply.ts
@@ -239,9 +239,9 @@ async function runFill(btn: HTMLButtonElement): Promise<void> {
       fd.append("jd_text", jdText);
       fd.append("work_history_text", workHistoryText);
       if (ta.maxLength > 0) fd.append("max_length", String(ta.maxLength));
-      // P0 #197/#198: ``providers`` is the canonical wire field name; the
-      // backend rejects ``providers_json`` with HTTP 422.
-      if (providers.length > 0) fd.append(PROVIDERS_FORM_FIELD, JSON.stringify(providers));
+      // P0 #197/#198: route through the shared helper so every site
+      // honours the ``providers`` wire-field contract identically.
+      appendProvidersField(fd, providers);
 
       const headers = buildAuthHeaders(data);
       const r = await fetch(`${apiBase}/vault/generate/answers`, { method: "POST", headers, body: fd });
