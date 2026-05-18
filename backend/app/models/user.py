@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from app.models.application import Application
+    from app.models.subscription import Subscription
+    from app.models.usage_record import UsageRecord
     from app.models.user_provider_config import UserProviderConfig
 
 
@@ -48,8 +50,17 @@ class User(Base, TimestampMixin):
     salary: Mapped[str | None] = mapped_column(String(100))
     sponsorship: Mapped[str | None] = mapped_column(String(100))
 
+    # Billing
+    stripe_customer_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+
     # Relationships
     applications: Mapped[list["Application"]] = relationship(back_populates="user")
     provider_configs: Mapped[list["UserProviderConfig"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+    subscription: Mapped["Subscription | None"] = relationship(
+        back_populates="user", uselist=False, cascade="all, delete-orphan"
+    )
+    usage_records: Mapped[list["UsageRecord"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
