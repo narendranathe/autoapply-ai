@@ -320,3 +320,40 @@ export function stripLocalKey(configs: ProvidersMap, name: string): ProvidersMap
   next[name] = { ...existing, apiKey: "", enabled };
   return next;
 }
+
+/**
+ * Race-safe read-modify-write: re-read the freshest ``providerConfigs``
+ * from storage, strip the apiKey on ``name``, and write it back. Returns
+ * the merged map so callers can keep their local working copy in sync.
+ *
+ * P1-B (#198 round 2/3): ``chrome.storage.local.set`` is NOT atomic
+ * across tabs. If Tab A migrates ``anthropic`` and Tab B is editing
+ * ``openai`` at the same time, Tab A could clobber Tab B's edit if it
+ * wrote back a stale in-memory snapshot. The fix is to ``get()`` right
+ * before the ``set()`` and only carry our single intended mutation
+ * (stripping one apiKey) into the freshest snapshot.
+ *
+ * The helper takes ``getStorage`` / ``setStorage`` as injected callbacks
+ * so the race test can drive it with a fake without touching
+ * ``chrome.storage.local`` directly. The real call site in
+ * ``options.ts`` wires them to ``chrome.storage.local.get`` /
+ * ``chrome.storage.local.set``.
+ *
+ * @param getStorage   reads the persisted ``providerConfigs``
+ * @param setStorage   persists the merged ``providerConfigs``
+ * @param name         provider whose apiKey we just migrated to the server
+ * @param fallback     local working copy used when storage returned no row
+ * @returns            the merged map that was written
+ */
+export async function mergeAndStripLocalKey(
+  getStorage: () => Promise<ProvidersMap | undefined>,
+  setStorage: (next: ProvidersMap) => Promise<void>,
+  name: string,
+  fallback: ProvidersMap,
+): Promise<ProvidersMap> {
+  const fresh = await getStorage();
+  const latest = fresh ?? fallback;
+  const merged = stripLocalKey(latest, name);
+  await setStorage(merged);
+  return merged;
+}

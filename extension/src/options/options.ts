@@ -15,7 +15,7 @@ import {
   countUnmigratedKeys,
   unmigratedProviderNames,
   migrateProviderKey,
-  stripLocalKey,
+  mergeAndStripLocalKey,
   type ProvidersMap as MigrationProvidersMap,
 } from "../shared/providerMigration";
 import { AUTH_STORAGE_KEYS, buildAuthHeaders } from "../content/authHelper";
@@ -1300,22 +1300,24 @@ async function migrateProviderKeysOnClick(): Promise<void> {
         validateApiBase: validateApiBaseUrl,
       });
       if (res.ok) {
-        // P1-B (#198 round 2): two-tab race — chrome.storage.local.set is
-        // NOT atomic across tabs, and two Options tabs migrating
+        // P1-B (#198 round 2/3): two-tab race — chrome.storage.local.set
+        // is NOT atomic across tabs, and two Options tabs migrating
         // different providers in parallel could clobber each other's
-        // edits to other rows. Re-read storage immediately before the
-        // write, merge our strip into the freshest state, then persist.
-        // This is a "last-write-wins" read-modify-write — the only
-        // mutation we make here is clearing one specific apiKey, so any
-        // concurrent edit to other rows survives.
-        const fresh = await chrome.storage.local.get("providerConfigs");
-        const latest =
-          (fresh.providerConfigs as MigrationProvidersMap | undefined) ?? configs;
-        const merged = stripLocalKey(latest, name);
-        await chrome.storage.local.set({ providerConfigs: merged });
-        // Reflect the merge back into our local working copy so the
-        // next iteration sees the freshest state of every row.
-        configs = merged;
+        // edits to other rows. Delegate to the shared helper so the
+        // read-modify-write logic is a real exported function the race
+        // test can exercise (round 3: the round-2 test asserted on a
+        // local copy of the merge, not the real call site).
+        configs = await mergeAndStripLocalKey(
+          async () => {
+            const fresh = await chrome.storage.local.get("providerConfigs");
+            return fresh.providerConfigs as MigrationProvidersMap | undefined;
+          },
+          async (next) => {
+            await chrome.storage.local.set({ providerConfigs: next });
+          },
+          name,
+          configs,
+        );
         successes.push(name);
       } else {
         failures.push({ name, reason: res.reason });
