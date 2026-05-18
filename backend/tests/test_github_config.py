@@ -74,11 +74,16 @@ def test_no_vault_warning_in_any_environment(monkeypatch: pytest.MonkeyPatch) ->
     # vault-warning code path under test.
     for env in ("development", "staging", "production", "test"):
         monkeypatch.setenv("ENVIRONMENT", env)
+        # Production requires both CLERK_FRONTEND_API_URL (issue #90) and
+        # EXTENSION_ID (issue #92 fail-fast) — set dummies so Settings() can
+        # instantiate and we can observe vault-warning behaviour. Other envs
+        # leave both unset.
         if env == "production":
             monkeypatch.setenv("CLERK_FRONTEND_API_URL", "https://clerk.example.com")
             monkeypatch.setenv("EXTENSION_ID", "cccccccccccccccccccccccccccccccc")
         else:
             monkeypatch.delenv("CLERK_FRONTEND_API_URL", raising=False)
+            monkeypatch.delenv("EXTENSION_ID", raising=False)
         for key in ("GITHUB_TOKEN", "GITHUB_VAULT_OWNER", "GITHUB_VAULT_REPO"):
             monkeypatch.delenv(key, raising=False)
         with warnings.catch_warnings(record=True) as caught:
