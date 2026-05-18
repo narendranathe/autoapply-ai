@@ -72,6 +72,36 @@ from app.services.user_provider_configs import (  # noqa: E402
     resolve_user_providers,
 )
 
+
+@pytest.fixture(autouse=True)
+def _default_strict_legacy_rejection():
+    """Force ``ACCEPT_LEGACY_PROVIDERS_JSON`` to ``False`` (strict mode)
+    for every test in this module unless an individual test explicitly
+    flips it to ``True``.
+
+    The production default is now ``True`` (P0-G soft-reject — safe
+    deploy of #197), but the existing endpoint-level tests in this file
+    assert the strict ``422`` contract. Pinning the default to ``False``
+    here keeps the contract assertions meaningful without sprinkling a
+    ``_flip_accept_legacy_flag(False)`` call into every test body. The
+    handful of tests that want soft-reject mode call
+    ``_flip_accept_legacy_flag(True)`` explicitly and the autouse
+    fixture restores the strict default on teardown.
+    """
+    import app.config as _cfg_mod
+    import app.routers.vault._shared as _shared_mod
+
+    bindings = (_cfg_mod, _shared_mod)
+    saved = [(b, getattr(b.settings, "ACCEPT_LEGACY_PROVIDERS_JSON", True)) for b in bindings]
+    for b in bindings:
+        b.settings.ACCEPT_LEGACY_PROVIDERS_JSON = False
+    try:
+        yield
+    finally:
+        for b, prev in saved:
+            b.settings.ACCEPT_LEGACY_PROVIDERS_JSON = prev
+
+
 # ---------------------------------------------------------------------------
 # providers_json rejection (AC 1: 422 with clear error)
 # ---------------------------------------------------------------------------
@@ -812,18 +842,14 @@ async def test_resolve_providers_accept_legacy_flag_uses_legacy_payload():
 
 
 @pytest.mark.asyncio
-async def test_resolve_providers_strict_mode_default_rejects_legacy():
-    """P0-G default — flag off (default), legacy payload is rejected
-    with 422 just like before. We explicitly set the flag to False so
-    test ordering can't leave a previous flip dangling."""
+async def test_resolve_providers_strict_mode_rejects_legacy():
+    """P0-G strict mode — when the operator explicitly flips
+    ``ACCEPT_LEGACY_PROVIDERS_JSON`` to ``False`` (post-rollout), the
+    legacy payload is rejected with 422 just like the original #197
+    contract. The flag is set explicitly here because the default is
+    now ``True`` (soft-reject mode) so a naive deploy is safe."""
     restore_flag = _flip_accept_legacy_flag(False)
     try:
-        import app.routers.vault._shared as _shared_mod
-
-        # Default must be False — the assertion both documents the
-        # default and guards against operator misconfiguration.
-        assert _shared_mod.settings.ACCEPT_LEGACY_PROVIDERS_JSON is False
-
         user = MagicMock()
         user.id = uuid.uuid4()
         db = AsyncMock()
@@ -838,3 +864,19 @@ async def test_resolve_providers_strict_mode_default_rejects_legacy():
         assert exc_info.value.status_code == 422
     finally:
         restore_flag()
+
+
+def test_accept_legacy_providers_json_default_is_true():
+    """P0-G rollout safety — the default value of
+    ``ACCEPT_LEGACY_PROVIDERS_JSON`` MUST be ``True`` so deploying #197
+    does not break older Chrome Web Store installs that still POST the
+    legacy ``providers_json`` field. The operator flips it to ``False``
+    only once rollout adoption is >95%.
+
+    Loaded fresh from the real ``Settings`` class so test ordering /
+    SimpleNamespace stubs cannot mask a regression.
+    """
+    from app.config import Settings
+
+    fresh = Settings()
+    assert fresh.ACCEPT_LEGACY_PROVIDERS_JSON is True

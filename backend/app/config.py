@@ -128,13 +128,25 @@ class Settings(BaseSettings):
     #
     # During the Chrome Web Store rollout window, older installs still
     # POST the legacy ``providers_json`` field (which carried the keys).
-    # Setting this flag to ``True`` softens the rejection: the field is
-    # parsed for ``{name, model}`` only, the embedded ``api_key`` is
-    # stripped (the server resolves it anyway), and a WARN log records
-    # the offending user-agent so operators can track rollout progress.
-    # Default is ``False`` — once the new extension has propagated, set
-    # to ``False`` (or leave it) to enforce 422 again.
-    ACCEPT_LEGACY_PROVIDERS_JSON: bool = False
+    # When this flag is ``True`` (the default — soft-reject mode), the
+    # field is parsed for ``{name, model}`` only, the embedded
+    # ``api_key`` is stripped (the server resolves it anyway), and a
+    # WARN log records the offending user-agent so operators can track
+    # rollout progress.
+    #
+    # Default is ``True`` so a naive deploy of #197 is safe — older
+    # installs keep working until they auto-update from the Chrome Web
+    # Store. The intended rollout is:
+    #
+    #   1. Ship the backend with ``ACCEPT_LEGACY_PROVIDERS_JSON=True``
+    #      (the default). Legacy clients keep working; their UAs show up
+    #      in WARN logs.
+    #   2. Watch the Chrome Web Store rollout until the legacy-UA log
+    #      volume drops to <5% of generation traffic (>95% adoption).
+    #   3. The operator flips the flag to ``False`` via env var
+    #      (``ACCEPT_LEGACY_PROVIDERS_JSON=false``). The remaining
+    #      legacy installs now get HTTP 422 with a clear error.
+    ACCEPT_LEGACY_PROVIDERS_JSON: bool = True
 
     # ── CORS ──────────────────────────────────────────────
     # In production set EXTENSION_ID to your published Chrome extension ID
