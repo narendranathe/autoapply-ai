@@ -387,3 +387,100 @@ async def test_resolve_decrypted_key_isolates_users_in_real_sqlite_db():
         assert alice_key.expose() != bob_key.expose()
     finally:
         await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Issue #197 P2 round-4 — log sanitization for user-controlled provider
+# names. ``provider_name`` arrives via a request form field (or the
+# legacy ``providers_json`` payload) and is then interpolated into
+# structured log lines. A malicious value containing CRLF could forge a
+# second, attacker-shaped log line (CWE-117 "log forging"). The
+# ``sanitize_log_value`` helper escapes ``\r`` / ``\n`` to literal
+# two-character sequences and caps length at 200 chars. These tests pin
+# the contract using a loguru sink capture so a future refactor that
+# drops ``sanitize_log_value()`` fails loudly.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_resolve_decrypted_key_sanitizes_provider_name_in_decrypt_failure_log():
+    """Decrypt-failure path must escape CRLF in the logged provider name."""
+    from loguru import logger as _loguru_logger
+
+    user_id = uuid.uuid4()
+    row = MagicMock()
+    row.encrypted_api_key = "garbage-ciphertext"  # forces decrypt to fail
+    db = _mock_db_with_row(row)
+
+    captured: list[str] = []
+    sink_id = _loguru_logger.add(
+        lambda msg: captured.append(str(msg)),
+        level="WARNING",
+        format="{message}",
+    )
+    try:
+        malicious = "groq\r\nLevel:INFO Message:FAKE LOG"
+        key = await resolve_decrypted_key(user_id, malicious, db)
+    finally:
+        _loguru_logger.remove(sink_id)
+
+    assert key is None
+    joined = "\n".join(captured)
+    # Sanitized form is present.
+    assert "groq\\r\\nLevel:INFO Message:FAKE LOG" in joined
+    # And the raw CRLF never made it into the sink.
+    assert "groq\r\n" not in joined
+
+
+@pytest.mark.asyncio
+async def test_resolve_user_providers_sanitizes_provider_name_in_skip_log():
+    """``resolve_user_providers`` strict=False path must escape CRLF in
+    the ``provider_skipped`` log line."""
+    from loguru import logger as _loguru_logger
+
+    user_id = uuid.uuid4()
+    db = AsyncMock()
+    captured: list[str] = []
+    sink_id = _loguru_logger.add(
+        lambda msg: captured.append(str(msg)),
+        level="INFO",
+        format="{message}",
+    )
+    try:
+        malicious = "openai\r\nLevel:CRITICAL Message:pwned"
+        with patch(
+            "app.services.user_provider_configs.resolve_decrypted_key",
+            return_value=None,
+        ):
+            enriched = await resolve_user_providers(
+                user_id,
+                [{"name": malicious, "model": "gpt-4o"}],
+                db,
+                strict=False,
+            )
+    finally:
+        _loguru_logger.remove(sink_id)
+
+    assert enriched == []
+    joined = "\n".join(captured)
+    assert "openai\\r\\nLevel:CRITICAL Message:pwned" in joined
+    assert "openai\r\n" not in joined
+
+
+def test_sanitize_log_value_helper_contract():
+    """The shared util handles None, non-strings, CRLF, and long input."""
+    from app.utils.log_safety import sanitize_log_value
+
+    # None and empty → empty string.
+    assert sanitize_log_value(None) == ""
+    assert sanitize_log_value("") == ""
+
+    # Non-string types are coerced via str().
+    assert sanitize_log_value(42) == "42"
+
+    # CRLF escaped to literal two-character sequences.
+    assert sanitize_log_value("a\r\nb") == "a\\r\\nb"
+
+    # 200-char cap.
+    long = "x" * 500
+    assert len(sanitize_log_value(long)) == 200

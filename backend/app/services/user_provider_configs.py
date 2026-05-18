@@ -42,6 +42,7 @@ from sqlalchemy import select
 
 from app.models.user_provider_config import UserProviderConfig
 from app.utils.encryption import decrypt_value
+from app.utils.log_safety import sanitize_log_value
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -137,10 +138,13 @@ async def resolve_decrypted_key(
         # decrypt_value already logged the failure (without echoing the
         # ciphertext). Treat decryption failure as "no key" so the caller
         # falls through to other providers / keyword fallback.
+        # ``provider_name`` originates from a request form field (or the
+        # legacy ``providers_json`` payload) so it is attacker controlled.
+        # Sanitize CRLF + cap length to defuse log forging (CWE-117).
         logger.warning(
             "resolve_decrypted_key: decrypt failed for user={} provider={}",
             user_id,
-            provider_name,
+            sanitize_log_value(provider_name),
         )
         return None
     if not plaintext:
@@ -215,10 +219,12 @@ async def resolve_user_providers(
                 raise ProviderNotConfiguredError(name)
             # Promoted from DEBUG → INFO so the silent drop is visible at
             # the default log level (Issue #197 P1-F observability gap).
+            # ``name`` comes from the client payload — sanitize before
+            # interpolating to defuse CRLF log forging (CWE-117).
             logger.info(
                 "provider_skipped user={} provider={} reason=no_server_key",
                 user_id,
-                name,
+                sanitize_log_value(name),
             )
             continue
         enriched.append({"name": name, "model": model, "api_key": key})

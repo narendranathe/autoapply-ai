@@ -22,6 +22,7 @@ from app.services.user_provider_configs import (
     resolve_decrypted_key,
     resolve_user_providers,
 )
+from app.utils.log_safety import sanitize_log_value as _sanitize_log_value
 
 # ── Singletons ─────────────────────────────────────────────────────────────
 
@@ -38,23 +39,6 @@ _PROVIDERS_JSON_REJECT_MSG = (
     "`providers` as a JSON list of {name, model} objects; API keys are "
     "resolved server-side from the user's provider configs (Issue #197)."
 )
-
-
-def _sanitize_log_value(v: str | None) -> str:
-    """Escape CRLF and cap length on a value before it is interpolated
-    into a log line.
-
-    Issue #197 P2 (round-3) — the ``User-Agent`` header is attacker
-    controlled. A malicious client can send
-    ``User-Agent: foo\\r\\nLevel:INFO Message:fake`` to inject a
-    second, attacker-shaped log line ("log forging"). We escape
-    ``\\r`` and ``\\n`` to literal two-character sequences and cap the
-    result at 200 chars so a pathological 64KB header cannot blow up
-    the log pipeline either.
-    """
-    if not v:
-        return ""
-    return v.replace("\r", "\\r").replace("\n", "\\n")[:200]
 
 
 def _reject_providers_json(
@@ -268,10 +252,12 @@ async def _resolve_providers(
         if key is None:
             # Promoted from DEBUG → INFO so the silent drop is visible at
             # the default log level (Issue #197 P1-F observability gap).
+            # ``row.provider_name`` was user-supplied at the time the row
+            # was written — sanitize defensively (CWE-117 belt-and-braces).
             logger.info(
                 "provider_skipped user={} provider={} reason=decrypt_failed_or_empty",
                 user.id,
-                row.provider_name,
+                _sanitize_log_value(row.provider_name),
             )
             continue
         enriched.append(
