@@ -11,7 +11,7 @@ This file exists so AutoApply AI sessions have local access to resume context.
 
 ## Quick Reference — Key Metrics
 
-- ExponentHR: ~40% ticket reduction, 12s→4s query, 3mo→14d deployments, 30min→8min ETL, 67% compute cost reduction
+- ExponentHR: 3mo→14d deployments, 30min→8min ETL, 67% compute cost reduction, 20+ daily refreshes automated
 - Missouri S&T: 95%+ anomaly accuracy, 1:5→1:1.2 signal-to-noise, 20 nodes→4-8 nodes, $3,200/mo Azure savings
 - Zomato: 9% market share gain, 80% support ticket reduction, 100K+ doc search engine
 - Fraud Detection: 100+ TPS, sub-ms latency
@@ -21,10 +21,11 @@ This file exists so AutoApply AI sessions have local access to resume context.
 
 | Key | Target Role |
 |-----|-------------|
-| `_DE` / `_data` | Senior Data Engineer |
-| `_ML` | ML Engineer / MLOps |
-| `_AI` | AI/ML Platform Engineer |
-| `_AE` | Analytics Engineer |
+| `_AIP` / `_ai_platform` | AI Platform Engineer |
+| `_AAI` / `_applied_ai` | Applied AI Engineer |
+| `_ML` | ML Platform / ML Engineer |
+| `_DE` / `_data` | Data Platform / Senior Data Engineer |
+| `_AE` | Analytics / Semantic Layer Engineer |
 | `_{Company}_{Role}` | Company-specific |
 
 ## Personal Contact

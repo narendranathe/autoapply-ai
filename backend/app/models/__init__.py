@@ -6,6 +6,8 @@ from app.models.offer_evaluation import OfferEvaluation
 from app.models.portal_scan import PortalScanCache
 from app.models.resume import ApplicationAnswer, Resume, ResumeUsage
 from app.models.story import StoryEntry
+from app.models.subscription import Plan, Subscription, SubscriptionStatus
+from app.models.usage_record import UsageRecord
 from app.models.user import User
 from app.models.user_provider_config import UserProviderConfig
 from app.models.work_history import WorkHistoryEntry
@@ -27,4 +29,8 @@ __all__ = [
     "UserProviderConfig",
     "WorkHistoryEntry",
     "StoryEntry",
+    "Subscription",
+    "Plan",
+    "SubscriptionStatus",
+    "UsageRecord",
 ]

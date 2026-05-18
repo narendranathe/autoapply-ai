@@ -1,4 +1,6 @@
 import { AUTH_STORAGE_KEYS, buildAuthHeaders } from "./authHelper";
+import { buildProviderList, type ProvidersMap } from "../shared/providerMigration";
+import { appendProvidersField } from "../shared/api";
 
 /**
  * linkedinEasyApply.ts
@@ -264,9 +266,9 @@ async function fillCurrentStep(modal: HTMLElement, btn: HTMLButtonElement): Prom
 
   const apiBase = storageData.apiBaseUrl || "https://autoapply-ai-api.fly.dev/api/v1";
   const providerConfigs = storageData.providerConfigs ?? {};
-  const providers = Object.entries(providerConfigs)
-    .filter(([, cfg]) => !!cfg.apiKey)
-    .map(([name, cfg]) => ({ name, api_key: cfg.apiKey, model: cfg.model }));
+  // P0 #198 + P1-F (#198 round 2): canonical {name, model}-only list,
+  // produced by the shared helper — no apiKey ever in the output.
+  const providers = buildProviderList(providerConfigs as ProvidersMap | undefined);
 
   // Find form root (current step content)
   const formRoot =
@@ -349,7 +351,9 @@ async function fillCurrentStep(modal: HTMLElement, btn: HTMLButtonElement): Prom
         fd.append("question_category", "custom");
         fd.append("company_name", extractCompanyName());
         fd.append("jd_text", extractJdSummary());
-        if (providers.length > 0) fd.append("providers_json", JSON.stringify(providers));
+        // P0 #197/#198: route through the shared helper so every site
+        // honours the ``providers`` wire-field contract identically.
+        appendProvidersField(fd, providers);
         if (el.maxLength > 0) fd.append("max_length", String(el.maxLength));
 
         const resp = await fetch(`${apiBase}/vault/generate/answers`, {

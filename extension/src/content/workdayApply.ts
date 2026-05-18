@@ -12,6 +12,8 @@
  */
 
 import { AUTH_STORAGE_KEYS, buildAuthHeaders } from "./authHelper";
+import { buildProviderList, type ProvidersMap } from "../shared/providerMigration";
+import { appendProvidersField } from "../shared/api";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -288,11 +290,9 @@ async function runFill(btn: HTMLButtonElement): Promise<void> {
   }
 
   const apiBase = data.apiBaseUrl || "https://autoapply-ai-api.fly.dev/api/v1";
-  const providers: Array<{ name: string; api_key: string; model: string }> = Object.entries(
-    data.providerConfigs ?? {}
-  )
-    .filter(([, cfg]) => cfg.enabled && cfg.apiKey)
-    .map(([name, cfg]) => ({ name, api_key: cfg.apiKey, model: cfg.model }));
+  // P0 #198 + P1-F (#198 round 2): canonical {name, model}-only list,
+  // produced by the shared helper — no apiKey ever in the output.
+  const providers = buildProviderList(data.providerConfigs as ProvidersMap | undefined);
 
   const root = getFormRoot();
   if (!root) {
@@ -380,7 +380,9 @@ async function runFill(btn: HTMLButtonElement): Promise<void> {
       fd.append("jd_text", jdText);
       fd.append("work_history_text", workHistoryText);
       if (maxLen) fd.append("max_length", String(maxLen));
-      if (providers.length > 0) fd.append("providers_json", JSON.stringify(providers));
+      // P0 #197/#198: route through the shared helper so every site
+      // honours the ``providers`` wire-field contract identically.
+      appendProvidersField(fd, providers);
 
       const headers = buildAuthHeaders(data);
 

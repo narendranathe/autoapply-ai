@@ -2,21 +2,124 @@
 Tests for health check endpoints.
 """
 
+import asyncio
+from unittest.mock import AsyncMock
+
 import pytest
+
+from app.dependencies import get_db, get_redis
 
 
 @pytest.mark.asyncio
-async def test_health_returns_alive(client):
-    response = await client.get("/health")
+async def test_health_returns_ok_when_db_and_redis_healthy(client):
+    fake_redis = AsyncMock()
+    fake_redis.ping.return_value = True
+    client._transport.app.dependency_overrides[get_redis] = lambda: fake_redis
+
+    try:
+        response = await client.get("/health")
+    finally:
+        client._transport.app.dependency_overrides.pop(get_redis, None)
+
     assert response.status_code == 200
-    data = response.json()
-    assert data["status"] == "alive"
+    assert response.json() == {"status": "ok", "db": "ok", "redis": "ok"}
 
 
 @pytest.mark.asyncio
 async def test_health_has_request_id_header(client):
-    response = await client.get("/health")
+    fake_redis = AsyncMock()
+    fake_redis.ping.return_value = True
+    client._transport.app.dependency_overrides[get_redis] = lambda: fake_redis
+
+    try:
+        response = await client.get("/health")
+    finally:
+        client._transport.app.dependency_overrides.pop(get_redis, None)
+
     assert "x-request-id" in response.headers
+
+
+@pytest.mark.asyncio
+async def test_health_returns_503_when_db_down(client):
+    failing_db = AsyncMock()
+    failing_db.execute.side_effect = RuntimeError("connection refused")
+    fake_redis = AsyncMock()
+    fake_redis.ping.return_value = True
+
+    async def override_get_db():
+        yield failing_db
+
+    app = client._transport.app
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_redis] = lambda: fake_redis
+
+    try:
+        response = await client.get("/health")
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        app.dependency_overrides.pop(get_redis, None)
+
+    assert response.status_code == 503
+    data = response.json()
+    assert data["status"] == "degraded"
+    assert data["db"].startswith("error:")
+    # Sanitized response: only the exception class name, NOT the raw message.
+    assert data["db"] == "error: RuntimeError"
+    assert "connection refused" not in data["db"]
+    assert data["redis"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_health_returns_503_when_redis_down(client):
+    failing_redis = AsyncMock()
+    failing_redis.ping.side_effect = RuntimeError("redis unreachable")
+    client._transport.app.dependency_overrides[get_redis] = lambda: failing_redis
+
+    try:
+        response = await client.get("/health")
+    finally:
+        client._transport.app.dependency_overrides.pop(get_redis, None)
+
+    assert response.status_code == 503
+    data = response.json()
+    assert data["status"] == "degraded"
+    assert data["db"] == "ok"
+    assert data["redis"].startswith("error:")
+    # Sanitized response: only the exception class name, NOT the raw message.
+    assert data["redis"] == "error: RuntimeError"
+    assert "redis unreachable" not in data["redis"]
+
+
+@pytest.mark.asyncio
+async def test_health_returns_503_when_db_times_out(client):
+    """A hung DB checkout must trip the 2s timeout and surface TimeoutError."""
+
+    async def hang(*_args, **_kwargs):
+        await asyncio.sleep(5)
+
+    hanging_db = AsyncMock()
+    hanging_db.execute.side_effect = hang
+    fake_redis = AsyncMock()
+    fake_redis.ping.return_value = True
+
+    async def override_get_db():
+        yield hanging_db
+
+    app = client._transport.app
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_redis] = lambda: fake_redis
+
+    try:
+        response = await client.get("/health")
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        app.dependency_overrides.pop(get_redis, None)
+
+    assert response.status_code == 503
+    data = response.json()
+    assert data["status"] == "degraded"
+    assert "TimeoutError" in data["db"]
+    assert data["redis"] == "ok"
 
 
 @pytest.mark.asyncio

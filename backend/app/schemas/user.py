@@ -23,6 +23,37 @@ class UserCreate(BaseModel):
     email: str = Field(..., description="Used only for hashing, never stored raw")
 
 
+class RegisterRequest(BaseModel):
+    """
+    Body for POST /api/v1/auth/register.
+
+    SECURITY: ``clerk_id`` is intentionally NOT part of this schema. It is
+    derived server-side from the validated Clerk JWT (or the
+    ``X-Clerk-User-Id`` header in dev / extension mode) — never from the
+    request body. Accepting a body-supplied ``clerk_id`` would allow any
+    unauthenticated caller to create or overwrite any user.
+
+    ``model_config`` forbids unknown fields, so a stray ``clerk_id`` key
+    in the body is rejected with 422 rather than silently ignored.
+    """
+
+    # ``email_hash`` is a SHA-256 hex digest: exactly 64 lowercase hex chars.
+    # The DB column is ``String(64)`` — bounding both ends here prevents a
+    # 65-128 char value from passing Pydantic and then failing the DB write
+    # with a 500. The hex regex also rules out non-hex payloads (which would
+    # never collide with a real digest anyway).
+    email_hash: str = Field(
+        ...,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-fA-F]{64}$",
+        description="SHA-256 hex digest of the user's email (64 hex chars).",
+    )
+    github_username: str = Field(default="", max_length=255)
+
+    model_config = {"extra": "forbid"}
+
+
 class UserSetupGitHub(BaseModel):
     """Schema for connecting GitHub account."""
 
@@ -61,8 +92,8 @@ class ProviderConfigUpsert(BaseModel):
     Upserts a single provider entry for the authenticated user.
     The ``api_key`` field accepts the *plaintext* key — the server
     encrypts it with Fernet before persisting.  Pass an empty string
-    to clear an existing key while keeping the row (set enabled=False
-    instead if you want to temporarily disable the provider).
+    to clear an existing key (which effectively disables the provider,
+    since enabled state is derived from key presence).
     """
 
     api_key: str = Field(
@@ -74,20 +105,43 @@ class ProviderConfigUpsert(BaseModel):
         max_length=100,
         description="Optional model ID override, e.g. 'gpt-4o-mini'.",
     )
-    is_enabled: bool = Field(True, description="Whether this provider is active.")
 
 
 class ProviderConfigResponse(BaseModel):
     """
     Safe representation of a single UserProviderConfig row.
 
-    The raw API key is never returned; only a ``has_key`` boolean.
+    The raw API key is never returned; only a ``has_key`` boolean and a
+    ``key_fingerprint`` — the first 8 chars of ``sha256(plaintext_key)``.
+
+    The fingerprint lets the migration client compare the value it PUT
+    against the value the server actually stored, without exposing the
+    plaintext. It is not a secret (truncated hash of a high-entropy
+    input), but it is unique enough that the client can detect:
+
+    - a stale server-side key that was already there (PUT happened to
+      be a no-op because some other client wrote first) — fingerprints
+      will differ.
+    - a partial PUT that silently dropped the body — fingerprint will
+      be empty / different.
+
+    ``is_enabled`` is derived server-side from ``has_key``.
     """
 
     provider_name: str
     has_key: bool
+    key_fingerprint: str | None = Field(
+        default=None,
+        description=(
+            "First 8 hex chars of sha256(plaintext_key). Null when no key "
+            "is configured. Used by the migration client to verify the "
+            "server actually stored the key it PUT."
+        ),
+    )
     model_override: str | None
-    is_enabled: bool
+    is_enabled: bool = Field(
+        description="Derived: true iff an api key is configured for this provider.",
+    )
 
     model_config = {"from_attributes": True}
 

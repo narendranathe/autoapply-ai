@@ -79,11 +79,14 @@ async def evaluate_offer(
         from app.models.user_provider_config import UserProviderConfig
         from app.utils.encryption import decrypt_value
 
+        # Note: ``is_enabled`` column was dropped on main (migration
+        # b7c2d4e6f8a1); a config is considered enabled iff it has an
+        # ``encrypted_api_key``. Filter on that directly instead.
         key_res = await db.execute(
             select(UserProviderConfig).where(
                 UserProviderConfig.user_id == user.id,
                 UserProviderConfig.provider_name == "anthropic",
-                UserProviderConfig.is_enabled.is_(True),
+                UserProviderConfig.encrypted_api_key.isnot(None),
             )
         )
         cfg = key_res.scalar_one_or_none()

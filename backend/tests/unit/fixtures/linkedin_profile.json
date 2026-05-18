@@ -1,0 +1,34 @@
+{
+  "firstName": "Test",
+  "lastName": "User",
+  "positions": [
+    {
+      "title": "Staff Software Engineer",
+      "companyName": "Acme Corporation",
+      "startedOn": {"year": 2023, "month": 4},
+      "finishedOn": null,
+      "description": "Led the platform team.\nMigrated services to Kubernetes.\nMentored 4 junior engineers.",
+      "location": "Remote"
+    },
+    {
+      "title": "Senior Software Engineer",
+      "companyName": "MidCo",
+      "startedOn": {"year": 2020, "month": 7},
+      "finishedOn": {"year": 2023, "month": 3},
+      "description": "Built the billing system from scratch.",
+      "location": "New York, NY"
+    },
+    {
+      "title": "Software Engineer",
+      "companyName": "StartupX",
+      "startedOn": {"year": 2018, "month": 6},
+      "finishedOn": {"year": 2020, "month": 6},
+      "description": "Full-stack web work.",
+      "location": "San Francisco, CA"
+    },
+    {
+      "title": "",
+      "companyName": ""
+    }
+  ]
+}

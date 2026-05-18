@@ -9,6 +9,8 @@ Endpoints:
   GET    /api/v1/work-history/text               Formatted text block for LLM injection
   POST   /api/v1/work-history/seed               Bulk-create entries (idempotent on company+role)
   POST   /api/v1/work-history/import-from-resume Parse resume PDF/DOCX → auto-create entries
+  POST   /api/v1/work-history/import/github      Import public repos from GitHub
+  POST   /api/v1/work-history/import/linkedin    Import positions from LinkedIn Profile.json
 """
 
 import json
@@ -19,6 +21,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, s
 from loguru import logger
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_current_user, get_db
@@ -32,6 +35,19 @@ from app.services.resume_generator import (
     _call_openai,
 )
 from app.services.resume_parser import ResumeParser
+from app.services.work_history_import import (
+    MAX_LINKEDIN_FILE_BYTES,
+    MAX_LINKEDIN_POSITIONS,
+    WorkHistoryAuthError,
+    WorkHistoryImportError,
+    WorkHistoryPermissionError,
+    WorkHistoryRateLimitError,
+    dedupe_github,
+    dedupe_linkedin,
+    fetch_github_repos,
+    parse_linkedin_positions,
+    repo_to_entry_kwargs,
+)
 
 _resume_parser = ResumeParser()
 
@@ -480,3 +496,188 @@ async def import_work_history_from_resume(
         "provider_used": used_provider,
         "detected_profile": contact_info,  # extension can pre-fill profile fields
     }
+
+
+# ── Import from GitHub ─────────────────────────────────────────────────────
+
+
+@router.post("/import/github", status_code=status.HTTP_201_CREATED)
+async def import_work_history_from_github(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Import the authenticated user's public repositories from GitHub.
+
+    Each repo becomes a ``WorkHistoryEntry(source='github')`` with the repo
+    name as the title and the description + primary language as bullets.
+    Deduplication key is the repo ``html_url`` stored in ``source_url`` —
+    re-running the endpoint is a no-op once a repo is imported.
+
+    Error mapping:
+      * 401 — token invalid/expired (re-auth)
+      * 403 — true permission denied (token lacks ``repo`` scope, etc.)
+      * 429 — GitHub rate limit; ``Retry-After`` header is set
+      * 502 — any other upstream failure
+    """
+    if not user.encrypted_github_token:
+        raise HTTPException(
+            status_code=400,
+            detail="No GitHub token configured. Add your token via /api/v1/users/github-token.",
+        )
+
+    try:
+        repos = await fetch_github_repos(user.encrypted_github_token)
+    except WorkHistoryAuthError as exc:
+        logger.warning(f"[import/github] user={user.id} auth failed: {exc}")
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except WorkHistoryRateLimitError as exc:
+        logger.warning(
+            f"[import/github] user={user.id} rate-limited, retry_after={exc.retry_after}s"
+        )
+        # FastAPI forwards the ``headers`` kwarg straight to the response.
+        raise HTTPException(
+            status_code=429,
+            detail=str(exc),
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
+    except WorkHistoryPermissionError as exc:
+        logger.warning(f"[import/github] user={user.id} permission denied: {exc}")
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except WorkHistoryImportError as exc:
+        logger.warning(f"[import/github] user={user.id} fetch failed: {exc}")
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    # Existing dedupe set: any github-sourced row this user already has
+    stmt = select(WorkHistoryEntry.source_url).where(
+        WorkHistoryEntry.user_id == user.id,
+        WorkHistoryEntry.source == "github",
+        WorkHistoryEntry.source_url.is_not(None),
+    )
+    result = await db.execute(stmt)
+    existing_urls = {row[0] for row in result.all() if row[0]}
+
+    candidates = [repo_to_entry_kwargs(r) for r in repos]
+    new_entries, skipped = dedupe_github(candidates, existing_urls)
+
+    for kwargs in new_entries:
+        db.add(WorkHistoryEntry(user_id=user.id, **kwargs))
+
+    # Two concurrent calls can both pass the dedupe check above (e.g. a double-click)
+    # and try to insert the same (user_id, source_url) row. The partial unique index
+    # added in migration ``b7c1d2e3f4a5`` makes the second commit fail with
+    # IntegrityError — treat it as "another concurrent call already created it"
+    # and report all candidates as skipped.
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        logger.info(
+            f"[import/github] user={user.id} concurrent insert hit unique index; "
+            f"treating as skipped ({exc.__class__.__name__})"
+        )
+        skipped += len(new_entries)
+        new_entries = []
+
+    logger.info(
+        f"[import/github] user={user.id} created={len(new_entries)} skipped={skipped} "
+        f"total_repos={len(repos)}"
+    )
+    return {"created": len(new_entries), "skipped": skipped}
+
+
+# ── Import from LinkedIn ───────────────────────────────────────────────────
+
+
+@router.post("/import/linkedin", status_code=status.HTTP_201_CREATED)
+async def import_work_history_from_linkedin(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Import positions from a LinkedIn ``Profile.json`` export.
+
+    Each entry in ``positions[]`` becomes a ``WorkHistoryEntry(source='linkedin')``.
+    Dedupe key: (company_name, role_title, start_date) — case-insensitive.
+
+    Upload limits (anti-DoS):
+      * file size <= ``MAX_LINKEDIN_FILE_BYTES`` (5 MB)
+      * positions count <= ``MAX_LINKEDIN_POSITIONS`` (500)
+    Anything larger is rejected with 413.
+    """
+    # Read with a hard cap (one byte over the limit so we can detect overflow
+    # without slurping arbitrarily large bodies into memory).
+    raw = await file.read(MAX_LINKEDIN_FILE_BYTES + 1)
+    if len(raw) > MAX_LINKEDIN_FILE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Profile.json too large; LinkedIn exports are typically <1 MB.",
+        )
+    if not raw:
+        raise HTTPException(status_code=400, detail="Empty file upload.")
+    try:
+        profile = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not parse Profile.json: {exc}",
+        ) from exc
+
+    if not isinstance(profile, dict):
+        raise HTTPException(status_code=400, detail="Profile.json must be a JSON object.")
+
+    raw_positions = profile.get("positions") or profile.get("Positions") or []
+    if isinstance(raw_positions, list) and len(raw_positions) > MAX_LINKEDIN_POSITIONS:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=(
+                f"Profile contains too many positions "
+                f"(>{MAX_LINKEDIN_POSITIONS}); please split the import."
+            ),
+        )
+
+    candidates = parse_linkedin_positions(profile)
+    if not candidates:
+        return {"created": 0, "skipped": 0}
+
+    # Existing dedupe set: every (company, title, start) the user has, lower-cased
+    stmt = select(
+        WorkHistoryEntry.company_name,
+        WorkHistoryEntry.role_title,
+        WorkHistoryEntry.start_date,
+    ).where(WorkHistoryEntry.user_id == user.id)
+    result = await db.execute(stmt)
+    existing_keys = {
+        (
+            (row.company_name or "").strip().lower(),
+            (row.role_title or "").strip().lower(),
+            (row.start_date or "").strip().lower(),
+        )
+        for row in result.all()
+    }
+
+    new_entries, skipped = dedupe_linkedin(candidates, existing_keys)
+
+    for kwargs in new_entries:
+        db.add(WorkHistoryEntry(user_id=user.id, **kwargs))
+
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        # LinkedIn entries don't carry a source_url so the partial unique index
+        # rarely fires here, but a future migration adding a (user, company,
+        # role, start) constraint would surface the same race. Swallow it.
+        await db.rollback()
+        logger.info(
+            f"[import/linkedin] user={user.id} concurrent insert hit unique index; "
+            f"treating as skipped ({exc.__class__.__name__})"
+        )
+        skipped += len(new_entries)
+        new_entries = []
+
+    logger.info(
+        f"[import/linkedin] user={user.id} created={len(new_entries)} skipped={skipped} "
+        f"total_positions={len(candidates)}"
+    )
+    return {"created": len(new_entries), "skipped": skipped}

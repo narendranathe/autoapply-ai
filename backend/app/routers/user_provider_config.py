@@ -37,7 +37,6 @@ class ProviderConfigIn(BaseModel):
     api_key: str = Field(
         ..., description="Plaintext API key (encrypted at rest). Empty string to clear."
     )
-    enabled: bool = Field(True, description="Whether this provider is active.")
 
 
 class ProviderConfigOut(BaseModel):
@@ -46,7 +45,9 @@ class ProviderConfigOut(BaseModel):
     id: str
     name: str
     model: str | None
-    enabled: bool
+    enabled: bool = Field(
+        description="Derived: true iff an api key is configured for this provider.",
+    )
 
     model_config = {"from_attributes": False}
 
@@ -90,13 +91,11 @@ async def upsert_provider_config(
             provider_name=payload.name,
             encrypted_api_key=encrypted_key,
             model_override=payload.model or None,
-            is_enabled=payload.enabled,
         )
         db.add(row)
     else:
         row.encrypted_api_key = encrypted_key
         row.model_override = payload.model or None
-        row.is_enabled = payload.enabled
 
     await db.commit()
     await db.refresh(row)
@@ -105,7 +104,7 @@ async def upsert_provider_config(
         id=str(row.id),
         name=row.provider_name,
         model=row.model_override,
-        enabled=row.is_enabled,
+        enabled=bool(row.encrypted_api_key),
     )
 
 
@@ -133,7 +132,7 @@ async def list_provider_configs(
                 id=str(r.id),
                 name=r.provider_name,
                 model=r.model_override,
-                enabled=r.is_enabled,
+                enabled=bool(r.encrypted_api_key),
             )
             for r in rows
         ],

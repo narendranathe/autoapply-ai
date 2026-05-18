@@ -7,6 +7,10 @@
 
 import type { DetectedField, DetectedQuestion, FieldType, QuestionCategory } from "../shared/types";
 import { FIELD_PATTERNS, QUESTION_CATEGORY_PATTERNS } from "../shared/detection-patterns";
+import { isAllowedAtsOrigin, resolveIframeOrigin } from "../shared/ats-origins";
+import { getThresholdsCached, initThresholds } from "../shared/detection-thresholds";
+import { buildProviderList, type ProvidersMap } from "../shared/providerMigration";
+import { appendProvidersField } from "../shared/api";
 import { initAshbyApply } from "./ashbyApply";
 import { initBambooHRApply } from "./bamboohrApply";
 import { initGreenhouseApply } from "./greenhouseApply";
@@ -460,7 +464,9 @@ class FloatingPanel {
   private clerkUserId: string | null = null;
   private clerkToken: string | null = null;
   private clerkTokenExp: number = 0;
-  private providers: Array<{ name: string; api_key: string; model: string }> = [];
+  // P0 #198: provider list carries only {name, model}. The backend reads
+  // the encrypted key from user_provider_configs by user_id.
+  private providers: Array<{ name: string; model: string }> = [];
   private profile: Profile = {
     firstName: "", lastName: "", email: "", phone: "",
     city: "", state: "", zip: "", country: "United States",
@@ -512,6 +518,9 @@ class FloatingPanel {
   }
 
   async init(): Promise<void> {
+    // Warm the threshold cache so the SPAResizeObserver and autofill gate read
+    // the user's saved values rather than the in-memory defaults on first fire.
+    void initThresholds();
     const data = await chrome.storage.local.get(["apiBaseUrl", "clerkUserId", "clerkToken", "clerkTokenExp", "profile", "providerConfigs", "promptTemplates", "categoryModelRoutes"]);
     if (data.apiBaseUrl) this.apiBase = data.apiBaseUrl as string;
     if (data.clerkUserId) this.clerkUserId = data.clerkUserId as string;
@@ -521,11 +530,9 @@ class FloatingPanel {
     if (data.promptTemplates) this.promptTemplates = data.promptTemplates as Record<string, string>;
     if (data.categoryModelRoutes) this.categoryModelRoutes = data.categoryModelRoutes as Record<string, string>;
     if (data.providerConfigs) {
-      const RANK: Record<string, number> = { anthropic: 1, openai: 2, gemini: 3, groq: 4, perplexity: 5, kimi: 6 };
-      this.providers = Object.entries(data.providerConfigs as Record<string, { enabled: boolean; apiKey: string; model: string }>)
-        .filter(([, cfg]) => !!cfg.apiKey)  // enabled = has a key
-        .map(([name, cfg]) => ({ name, api_key: cfg.apiKey, model: cfg.model }))
-        .sort((a, b) => (RANK[a.name] ?? 50) - (RANK[b.name] ?? 50));
+      // P1-F: delegate to the canonical helper. Output is {name, model} only —
+      // never an apiKey — ordered by canonical provider rank.
+      this.providers = buildProviderList(data.providerConfigs as ProvidersMap);
     }
 
     // Fetch full work history text for LLM context
@@ -563,6 +570,7 @@ class FloatingPanel {
 
     // IframeFieldBridge: listen for field scan results from same-origin iframes
     window.addEventListener("message", (e: MessageEvent) => {
+      if (!isAllowedAtsOrigin(e.origin)) return;
       if (e.data?.type === "AAP_FIELDS_RESULT" && Array.isArray(e.data.fields)) {
         const iframeFields = e.data.fields as import("../shared/types").DetectedField[];
         // Find the source iframe
@@ -977,7 +985,9 @@ class FloatingPanel {
   }
 
   private maybeAutoFill(): void {
-    if (this.atsScore === null || this.atsScore < 0.75) return;
+    // Strategy C threshold — user-tunable via Options → Advanced Detection Settings.
+    const { atsAutofillMin } = getThresholdsCached();
+    if (this.atsScore === null || this.atsScore < atsAutofillMin) return;
     if (this.fields.length === 0) return;
     const dismissKey = `aap_autofill_dismissed_${this.company.toLowerCase().replace(/\s+/g, "_")}`;
     if (sessionStorage.getItem(dismissKey)) return;
@@ -1011,9 +1021,19 @@ class FloatingPanel {
       });
       if (!resp.ok) return;
       const json = await resp.json() as { answers?: Array<{ answer_text: string; similarity_score: number; reward_score: number }> };
+      // Strategy C thresholds — user-tunable via Options → Advanced Detection Settings.
+      // ragRewardWeight blends RAG similarity (weight w) with RL reward (1 − w);
+      // missing reward_score is treated as 0 so unrated answers still rank by similarity.
+      const { vaultSimilarityFloor, ragRewardWeight } = getThresholdsCached();
+      const rlWeight = 1 - ragRewardWeight;
       const vaultDrafts = (json.answers ?? [])
-        .filter(a => a.similarity_score >= 0.25)
-        .map(a => ({ text: a.answer_text, source: "vault" as const, similarityScore: a.similarity_score }));
+        .filter(a => a.similarity_score >= vaultSimilarityFloor)
+        .map(a => {
+          const reward = typeof a.reward_score === "number" ? a.reward_score : 0;
+          const composite = ragRewardWeight * a.similarity_score + rlWeight * reward;
+          return { text: a.answer_text, source: "vault" as const, similarityScore: a.similarity_score, composite };
+        })
+        .sort((a, b) => b.composite - a.composite);
       if (vaultDrafts.length === 0) return;
       // Re-check index is still valid (page may have navigated)
       const currentState = this.questionStates[stateIndex];
@@ -1059,7 +1079,9 @@ class FloatingPanel {
           if (preferred.length > 0) orderedProviders = [...preferred, ...rest];
         }
         state.loadingProvider = orderedProviders[0]?.name ?? "";
-        fd.append("providers_json", JSON.stringify(orderedProviders));
+        // P0 #197/#198: route through the shared helper so every site
+        // honours the ``providers`` wire-field contract identically.
+        appendProvidersField(fd, orderedProviders);
       }
       if (state.question.maxLength && state.question.maxLength > 0) {
         fd.append("max_length", String(state.question.maxLength));
@@ -1123,7 +1145,9 @@ class FloatingPanel {
   private fillFieldSmart(fieldId: string, value: string): void {
     const sourceIframe = this._iframeMap.get(fieldId);
     if (sourceIframe) {
-      sourceIframe.contentWindow?.postMessage({ type: "AAP_FILL_FIELD", fieldId, value }, "*");
+      const origin = resolveIframeOrigin(sourceIframe);
+      if (!origin || !isAllowedAtsOrigin(origin)) return;
+      sourceIframe.contentWindow?.postMessage({ type: "AAP_FILL_FIELD", fieldId, value }, origin);
     } else {
       fillDomField(fieldId, value);
     }
@@ -1181,12 +1205,12 @@ class FloatingPanel {
   private scanIframes(): void {
     const iframes = Array.from(document.querySelectorAll("iframe")) as HTMLIFrameElement[];
     for (const iframe of iframes) {
+      const origin = resolveIframeOrigin(iframe);
+      if (!origin || !isAllowedAtsOrigin(origin)) continue;
       try {
-        // Test same-origin access
-        void iframe.contentWindow?.location.href;
-        iframe.contentWindow?.postMessage({ type: "AAP_SCAN_FIELDS" }, "*");
+        iframe.contentWindow?.postMessage({ type: "AAP_SCAN_FIELDS" }, origin);
       } catch {
-        // Cross-origin — skip silently
+        // Cross-origin or detached frame — skip silently
       }
     }
   }
@@ -1200,12 +1224,15 @@ class FloatingPanel {
     let spaResizeTimer: ReturnType<typeof setTimeout> | null = null;
     const prevHeights = new Map<Element, number>();
     const observer = new ResizeObserver((entries) => {
+      // Strategy C threshold — user-tunable via Options → Advanced Detection Settings.
+      // Read on each fire so changes via the Options page take effect live.
+      const { resizeDeltaPx } = getThresholdsCached();
       let significantChange = false;
       for (const entry of entries) {
         const newH = entry.contentRect.height;
         const oldH = prevHeights.get(entry.target) ?? newH;
         prevHeights.set(entry.target, newH);
-        if (Math.abs(newH - oldH) > 50) significantChange = true;
+        if (Math.abs(newH - oldH) > resizeDeltaPx) significantChange = true;
       }
       if (!significantChange) return;
       if (spaResizeTimer !== null) clearTimeout(spaResizeTimer);

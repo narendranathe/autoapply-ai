@@ -116,11 +116,10 @@
       {Data Engineer}{July 2024 -- Present}
       {ExponentHR}{Dallas, TX}
       \resumeItemListStart
-        \resumeItem{Architected governed semantic layer on Microsoft Fabric with DAX metrics and AI agents translating business questions to SQL, cutting support tickets by \textasciitilde40\% and query response from 12s to under 4s}
         \resumeItem{Compressed deployment cycles from 3 months to 14 days by owning CI/CD end-to-end through Azure DevOps, restructuring cross-team handoffs that accounted for 11 weeks of idle time}
         \resumeItem{Reengineered CDC-based ETL from full-table reloads to incremental capture with merge upserts, cutting batch runtime from \textasciitilde30 min to under 8 min and compute costs by \textasciitilde67\% by eliminating full-table I/O and data shuffling}
         \resumeItem{Engineered one-click Azure DevOps pipeline with idempotent provisioning for Contained AAG databases (restore, security, recovery, listener validation, CDC), eliminating \textasciitilde1 hour per request across 20+ daily copy-downs}
-        \resumeItem{Owned payroll-critical database recovery using containerized AAG failover, maintaining 98\% uptime SLA with sub-hour restore targets including CDC capture job recovery after failover events}
+        \resumeItem{Owned production recovery for payroll-critical databases using containerized AAG failover, restoring CDC-dependent workloads with tighter operational playbooks and sub-hour targets}
       \resumeItemListEnd
 
     \resumeSubheading
@@ -154,6 +153,12 @@
             \resumeItem{Implemented Prometheus + Grafana observability with Airflow-orchestrated training/inference in fully Dockerized infrastructure}
           \resumeItemListEnd
       \resumeProjectHeading
+          {\textbf{AutoApply AI --- Multi-LLM Job Application Platform} $|$ \emph{FastAPI, Claude Sonnet, FAISS, pgvector, Chrome MV3}}{2025--2026}
+          \resumeItemListStart
+            \resumeItem{Built multi-LLM cascade (Claude Sonnet$\to$GPT-4o$\to$Kimi$\to$Ollama) routing by question type across 11 ATS adapters; RAG pipeline with pgvector + TF-IDF grounds answers in 95+ tailored resumes for context-accurate auto-fill}
+            \resumeItem{Engineered Shadow DOM Chrome extension with MutationObserver field detection and offline queue; shipped via Claude Code agentic development (custom skills, MCP integrations, context-retention hooks, recall-stack session memory)}
+          \resumeItemListEnd
+      \resumeProjectHeading
           {\textbf{JobScout --- AI Job Discovery \& Auto-Apply Agent} $|$ \emph{Python, LangChain, RAG, FastAPI, React}}{2025}
           \resumeItemListStart
             \resumeItem{Built production LLM app scraping 109 career pages with multi-signal relevance scoring, TF-IDF resume matching across 95+ PDFs, and instant alerts via Discord/Telegram webhooks}
@@ -175,9 +180,9 @@
 \section{Technical Skills}
  \begin{itemize}[leftmargin=0.15in, label={}]
     \small{\item{
-     \textbf{Languages \& ML}{: Python, SQL, Bash, Pytest, MLflow, Airflow, Feature Engineering, Model Serving, LangChain, RAG} \\
-     \textbf{Data \& Cloud}{: Spark, Kafka, Databricks, Delta Lake, PostgreSQL, ETL/ELT, Data Modeling, Azure (AKS, DevOps), AWS (S3), Microsoft Fabric, Docker, Kubernetes} \\
-     \textbf{Tools}{: FastAPI, Streamlit, Elasticsearch, Power BI, DAX, Git, CI/CD, Prometheus, Grafana, Swagger/OpenAPI} \\
+     \textbf{Languages \& ML}{: Python, SQL, Bash, Pytest, MLflow, Airflow, Feature Engineering, Model Serving, LangChain, RAG, LLM Integration, Vector Search} \\
+     \textbf{Data \& Cloud}{: Spark, Kafka, Databricks, Delta Lake, PostgreSQL, SQL Server, ETL/ELT, Data Modeling, Azure (AKS, DevOps), AWS (S3), Docker, Kubernetes} \\
+     \textbf{Tools}{: FastAPI, Streamlit, Elasticsearch, pgvector, Git, CI/CD, Prometheus, Grafana, Swagger/OpenAPI, Claude API} \\
     }}
  \end{itemize}
 
