@@ -122,6 +122,33 @@ class Settings(BaseSettings):
     # ── Ollama ────────────────────────────────────────────
     OLLAMA_BASE_URL: str = "http://localhost:11434"
 
+    # ── Issue #197 transition ────────────────────────────
+    # Issue #197 removed the contract where the extension transmitted
+    # decrypted provider API keys on every generation request. The
+    # backend now resolves keys from ``user_provider_configs``.
+    #
+    # During the Chrome Web Store rollout window, older installs still
+    # POST the legacy ``providers_json`` field (which carried the keys).
+    # When this flag is ``True`` (the default — soft-reject mode), the
+    # field is parsed for ``{name, model}`` only, the embedded
+    # ``api_key`` is stripped (the server resolves it anyway), and a
+    # WARN log records the offending user-agent so operators can track
+    # rollout progress.
+    #
+    # Default is ``True`` so a naive deploy of #197 is safe — older
+    # installs keep working until they auto-update from the Chrome Web
+    # Store. The intended rollout is:
+    #
+    #   1. Ship the backend with ``ACCEPT_LEGACY_PROVIDERS_JSON=True``
+    #      (the default). Legacy clients keep working; their UAs show up
+    #      in WARN logs.
+    #   2. Watch the Chrome Web Store rollout until the legacy-UA log
+    #      volume drops to <5% of generation traffic (>95% adoption).
+    #   3. The operator flips the flag to ``False`` via env var
+    #      (``ACCEPT_LEGACY_PROVIDERS_JSON=false``). The remaining
+    #      legacy installs now get HTTP 422 with a clear error.
+    ACCEPT_LEGACY_PROVIDERS_JSON: bool = True
+
     # ── Stripe ────────────────────────────────────────────
     # STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET are required for billing
     # to function. STRIPE_PRICE_PRO / STRIPE_PRICE_TEAM are the price IDs
