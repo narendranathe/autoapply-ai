@@ -40,6 +40,23 @@ _PROVIDERS_JSON_REJECT_MSG = (
 )
 
 
+def _sanitize_log_value(v: str | None) -> str:
+    """Escape CRLF and cap length on a value before it is interpolated
+    into a log line.
+
+    Issue #197 P2 (round-3) — the ``User-Agent`` header is attacker
+    controlled. A malicious client can send
+    ``User-Agent: foo\\r\\nLevel:INFO Message:fake`` to inject a
+    second, attacker-shaped log line ("log forging"). We escape
+    ``\\r`` and ``\\n`` to literal two-character sequences and cap the
+    result at 200 chars so a pathological 64KB header cannot blow up
+    the log pipeline either.
+    """
+    if not v:
+        return ""
+    return v.replace("\r", "\\r").replace("\n", "\\n")[:200]
+
+
 def _reject_providers_json(
     value: str,
     *,
@@ -71,7 +88,8 @@ def _reject_providers_json(
     if not value or not value.strip():
         return
 
-    ua = request.headers.get("user-agent", "<unknown>") if request is not None else "<unknown>"
+    raw_ua = request.headers.get("user-agent", "<unknown>") if request is not None else "<unknown>"
+    ua = _sanitize_log_value(raw_ua)
     if settings.ACCEPT_LEGACY_PROVIDERS_JSON:
         # Transition window — log and let the caller strip api_key.
         logger.warning(

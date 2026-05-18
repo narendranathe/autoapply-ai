@@ -880,3 +880,121 @@ def test_accept_legacy_providers_json_default_is_true():
 
     fresh = Settings()
     assert fresh.ACCEPT_LEGACY_PROVIDERS_JSON is True
+
+
+# ---------------------------------------------------------------------------
+# P2 (round-3) — User-Agent log CRLF sanitization
+# ---------------------------------------------------------------------------
+
+
+def test_sanitize_log_value_escapes_crlf_and_caps_length():
+    """A malicious ``User-Agent`` like ``foo\\r\\nLevel:INFO ...`` must not
+    produce a second physical log line. ``_sanitize_log_value`` escapes
+    CR/LF to literal two-character sequences and caps at 200 chars."""
+    from app.routers.vault._shared import _sanitize_log_value
+
+    # Empty / None pass through.
+    assert _sanitize_log_value(None) == ""
+    assert _sanitize_log_value("") == ""
+
+    # CR / LF / CRLF all escaped to literal backslash sequences.
+    assert _sanitize_log_value("a\nb") == "a\\nb"
+    assert _sanitize_log_value("a\rb") == "a\\rb"
+    assert (
+        _sanitize_log_value("foo\r\nLevel:INFO Message:fake") == "foo\\r\\nLevel:INFO Message:fake"
+    )
+
+    # Length cap at 200.
+    blob = "x" * 500
+    out = _sanitize_log_value(blob)
+    assert len(out) == 200
+    assert out == "x" * 200
+
+
+def test_reject_providers_json_strict_log_sanitizes_user_agent():
+    """P2 (round-3) — when a legacy client sends a CRLF-laced
+    ``User-Agent``, the strict-mode WARN log line must contain the
+    escaped form (``\\r\\n``) and MUST NOT contain a real newline +
+    "Level:INFO" prefix that loguru would render as a second line.
+    """
+    restore_flag = _flip_accept_legacy_flag(False)
+    sink, restore_log = _install_fresh_loguru_sink()
+    try:
+        user_id = uuid.uuid4()
+        request = MagicMock()
+        request.headers = {"user-agent": "evil\r\nLevel:INFO Message:injected"}
+
+        with pytest.raises(HTTPException):
+            _reject_providers_json(
+                '[{"name":"groq","api_key":"gsk_x"}]',
+                user_id=user_id,
+                request=request,
+            )
+
+        log_output = sink.getvalue()
+    finally:
+        restore_log()
+        restore_flag()
+
+    assert "legacy_providers_json_rejected" in log_output
+    # Escaped form is present.
+    assert "evil\\r\\nLevel:INFO Message:injected" in log_output
+    # And the raw injection sequence (real newline followed by "Level:INFO")
+    # is NOT present anywhere in the captured output.
+    assert "evil\r\nLevel:INFO" not in log_output
+
+
+def test_reject_providers_json_accept_flag_log_sanitizes_user_agent():
+    """P2 (round-3) — same sanitization for the soft-reject (accept)
+    log line so an attacker can't forge a fake log entry through the
+    transition window either."""
+    restore_flag = _flip_accept_legacy_flag(True)
+    sink, restore_log = _install_fresh_loguru_sink()
+    try:
+        user_id = uuid.uuid4()
+        request = MagicMock()
+        request.headers = {"user-agent": "evil\r\nLevel:ERROR Message:fake"}
+
+        # Soft mode — must not raise.
+        _reject_providers_json(
+            '[{"name":"groq","api_key":"gsk_x"}]',
+            user_id=user_id,
+            request=request,
+        )
+
+        log_output = sink.getvalue()
+    finally:
+        restore_log()
+        restore_flag()
+
+    assert "legacy_providers_json_accepted" in log_output
+    assert "evil\\r\\nLevel:ERROR Message:fake" in log_output
+    assert "evil\r\nLevel:ERROR" not in log_output
+
+
+def test_reject_providers_json_caps_oversized_user_agent_in_log():
+    """A pathological multi-kilobyte User-Agent should be capped at 200
+    chars in the log line so the log pipeline can't be DoS'd."""
+    restore_flag = _flip_accept_legacy_flag(False)
+    sink, restore_log = _install_fresh_loguru_sink()
+    try:
+        user_id = uuid.uuid4()
+        request = MagicMock()
+        request.headers = {"user-agent": "A" * 5000}
+
+        with pytest.raises(HTTPException):
+            _reject_providers_json(
+                '[{"name":"groq","api_key":"gsk_x"}]',
+                user_id=user_id,
+                request=request,
+            )
+
+        log_output = sink.getvalue()
+    finally:
+        restore_log()
+        restore_flag()
+
+    # The capped 200-char "A" run is present...
+    assert "A" * 200 in log_output
+    # ...but not the full 5000-char one.
+    assert "A" * 201 not in log_output
