@@ -17,6 +17,7 @@ from app.middleware.request_id import RequestIDMiddleware
 from app.routers import (
     applications,
     auth,
+    billing,
     health,
     reflect,
     resume,
@@ -92,5 +93,6 @@ def create_app() -> FastAPI:
     app.include_router(user_provider_config.router, prefix="/api/v1/users", tags=["Users"])
     app.include_router(work_history.router, prefix="/api/v1/work-history", tags=["Work History"])
     app.include_router(reflect.router, prefix="/api/v1", tags=["Reflect"])
+    app.include_router(billing.router, prefix="/api/v1/billing", tags=["Billing"])
 
     return app

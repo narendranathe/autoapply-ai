@@ -31,7 +31,13 @@ from app.dependencies import get_current_user
 def test_settings_rejects_dev_test_user_id_in_production():
     """ENVIRONMENT=production with a non-empty DEV_TEST_USER_ID must fail validation."""
     with pytest.raises(ValidationError) as exc_info:
-        Settings(ENVIRONMENT="production", DEV_TEST_USER_ID="user_leaks_into_prod")
+        # EXTENSION_ID set so we exercise the DEV_TEST_USER_ID validator,
+        # not the (newer) EXTENSION_ID-required-in-production validator.
+        Settings(
+            ENVIRONMENT="production",
+            EXTENSION_ID="test-extension-id",
+            DEV_TEST_USER_ID="user_leaks_into_prod",
+        )
 
     assert "DEV_TEST_USER_ID" in str(exc_info.value)
 
@@ -48,12 +54,14 @@ def test_settings_allows_empty_dev_test_user_id_in_production():
 
     Issue #90 added an unrelated production guard that requires
     CLERK_FRONTEND_API_URL — supply a dummy value so this test isolates the
-    DEV_TEST_USER_ID code path.
+    DEV_TEST_USER_ID code path. Issue #92 added EXTENSION_ID as a required
+    field in production — supply a dummy value for the same reason.
     """
     s = Settings(
         ENVIRONMENT="production",
         DEV_TEST_USER_ID="",
         CLERK_FRONTEND_API_URL="https://clerk.example.com",
+        EXTENSION_ID="test-extension-id",
     )
     assert s.DEV_TEST_USER_ID == ""
     assert s.is_production is True
