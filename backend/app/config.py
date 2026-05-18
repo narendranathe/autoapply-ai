@@ -122,6 +122,18 @@ class Settings(BaseSettings):
     # ── Ollama ────────────────────────────────────────────
     OLLAMA_BASE_URL: str = "http://localhost:11434"
 
+    # ── Stripe ────────────────────────────────────────────
+    # STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET are required for billing
+    # to function. STRIPE_PRICE_PRO / STRIPE_PRICE_TEAM are the price IDs
+    # for each subscription tier (from the Stripe dashboard).
+    STRIPE_SECRET_KEY: str = ""
+    STRIPE_WEBHOOK_SECRET: str = ""
+    STRIPE_PRICE_PRO: str = ""
+    STRIPE_PRICE_TEAM: str = ""
+    STRIPE_BILLING_PORTAL_RETURN_URL: str = "http://localhost:5173/billing"
+    STRIPE_CHECKOUT_SUCCESS_URL: str = "http://localhost:5173/billing?status=success"
+    STRIPE_CHECKOUT_CANCEL_URL: str = "http://localhost:5173/billing?status=cancel"
+
     # ── CORS ──────────────────────────────────────────────
     # In production EXTENSION_ID is REQUIRED — Settings() will refuse to
     # instantiate (and the process refuses to start) when
