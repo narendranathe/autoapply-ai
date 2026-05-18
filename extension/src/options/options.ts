@@ -1,6 +1,15 @@
 // Options page script — module scripts run after DOM is parsed, no DOMContentLoaded needed
 
 import { vaultApi, workHistoryApi, profileApi, type WorkHistoryEntry } from "../shared/api";
+import {
+  DEFAULT_THRESHOLDS,
+  THRESHOLD_RANGES,
+  loadThresholds,
+  saveThresholds,
+  resetThresholds,
+} from "../shared/detection-thresholds";
+import type { DetectionThresholds } from "../shared/types";
+import { validateApiBaseUrl } from "../background/offlineQueue";
 
 const API_DEFAULT = "https://autoapply-ai-api.fly.dev/api/v1";
 
@@ -16,7 +25,7 @@ function getSelect(id: string): HTMLSelectElement {
   return document.getElementById(id) as HTMLSelectElement;
 }
 
-function showStatus(elId: string, msg: string, type: "ok" | "err" | "info") {
+function showStatus(elId: string, msg: string, type: "ok" | "err" | "info" | "warn") {
   const el = get(elId);
   if (!el) return;
   el.textContent = msg;
@@ -183,10 +192,19 @@ async function saveAuth() {
       const email = profile.email || `${userId}@autoapply.local`;
       // Simple deterministic hash for email_hash (not sensitive — just a DB key)
       const emailHash = btoa(email).replace(/[^a-zA-Z0-9]/g, "").slice(0, 32);
+      const githubUsername = (profile.githubUsername || "").trim();
 
+      // SECURITY (#89): clerk_id is sourced server-side from authHdrs
+      // (Bearer JWT or X-Clerk-User-Id). The body intentionally omits clerk_id.
+      const registerBody: Record<string, string> = { email_hash: emailHash };
+      if (githubUsername) registerBody.github_username = githubUsername;
       const registerResp = await fetch(
-        `${apiBase}/auth/register?clerk_id=${encodeURIComponent(userId)}&email_hash=${encodeURIComponent(emailHash)}`,
-        { method: "POST" }
+        `${apiBase}/auth/register`,
+        {
+          method: "POST",
+          headers: { ...authHdrs, "Content-Type": "application/json" },
+          body: JSON.stringify(registerBody),
+        }
       );
 
       if (registerResp.ok) {
@@ -231,6 +249,23 @@ async function testApi() {
 
 async function saveApi() {
   const url = getInput("api-base").value.trim();
+  // Empty input clears the configured URL — that's an explicit user action
+  // and is allowed. The drain will then fall back per resolveDrainEndpoint().
+  if (url) {
+    // Vite replaces import.meta.env.DEV at build time. Same gate the worker uses
+    // for resolveDrainEndpoint so the UI rejects the exact set of URLs the drain
+    // would refuse — no silently-saved bad URLs (#91).
+    const isDev = Boolean((import.meta as { env?: { DEV?: boolean } }).env?.DEV);
+    const validation = validateApiBaseUrl(url, isDev);
+    if (!validation.ok) {
+      showStatus(
+        "api-status",
+        `Rejected: ${validation.reason}. Use https:// (or http://localhost in dev).`,
+        "err",
+      );
+      return;
+    }
+  }
   await chrome.storage.local.set({ apiBaseUrl: url || "" });
   showStatus("api-status", "Saved.", "ok");
   loadSettings();
@@ -1018,6 +1053,112 @@ function wireResumeSyncPanel() {
   });
 }
 
+// ── Offline Queue Status ─────────────────────────────────────────────────────
+
+const OFFLINE_QUEUE_KEY = "offline_queue";
+const OFFLINE_QUEUE_FAILED_KEY = "offline_queue_failed";
+
+async function loadOfflineQueueStatus() {
+  const data = await chrome.storage.local.get([OFFLINE_QUEUE_KEY, OFFLINE_QUEUE_FAILED_KEY]);
+  const pendingAll = (data[OFFLINE_QUEUE_KEY] as Array<{ synced?: boolean }> | undefined) ?? [];
+  const failed = (data[OFFLINE_QUEUE_FAILED_KEY] as unknown[] | undefined) ?? [];
+  const pending = pendingAll.filter((e) => !e?.synced).length;
+  const failedCount = failed.length;
+  showStatus(
+    "offline-queue-status",
+    `${pending} pending · ${failedCount} dead-lettered`,
+    failedCount > 0 ? "warn" : "info",
+  );
+  const clearBtn = document.getElementById("offline-queue-clear-btn") as HTMLButtonElement | null;
+  if (clearBtn) clearBtn.disabled = failedCount === 0;
+}
+
+async function clearFailedOfflineQueue() {
+  await chrome.storage.local.set({ [OFFLINE_QUEUE_FAILED_KEY]: [] });
+  await loadOfflineQueueStatus();
+  showStatus("offline-queue-status", "Failed queue cleared.", "ok");
+}
+
+// ── Detection Thresholds (Strategy C — issue #109) ──────────────────────────
+
+const DT_INPUT_IDS: Record<keyof DetectionThresholds, string> = {
+  atsAutofillMin: "dt-ats-autofill-min",
+  vaultSimilarityFloor: "dt-vault-similarity-floor",
+  resizeDeltaPx: "dt-resize-delta-px",
+  ragRewardWeight: "dt-rag-reward-weight",
+};
+
+function formatThreshold(key: keyof DetectionThresholds, value: number): string {
+  // Integer pixels for resize; 2-decimal float for the 0–1 ratios.
+  return key === "resizeDeltaPx" ? String(Math.round(value)) : value.toFixed(2);
+}
+
+function syncThresholdDisplay(key: keyof DetectionThresholds, value: number): void {
+  const display = document.getElementById(`${DT_INPUT_IDS[key]}-display`);
+  if (display) display.textContent = formatThreshold(key, value);
+}
+
+function applyThresholdsToUi(thresholds: DetectionThresholds): void {
+  (Object.keys(DT_INPUT_IDS) as Array<keyof DetectionThresholds>).forEach((key) => {
+    const input = document.getElementById(DT_INPUT_IDS[key]) as HTMLInputElement | null;
+    if (input) input.value = String(thresholds[key]);
+    syncThresholdDisplay(key, thresholds[key]);
+  });
+}
+
+function readThresholdsFromUi(): DetectionThresholds {
+  const read = (key: keyof DetectionThresholds): number => {
+    const input = document.getElementById(DT_INPUT_IDS[key]) as HTMLInputElement | null;
+    const parsed = input ? parseFloat(input.value) : NaN;
+    return Number.isFinite(parsed) ? parsed : DEFAULT_THRESHOLDS[key];
+  };
+  return {
+    atsAutofillMin: read("atsAutofillMin"),
+    vaultSimilarityFloor: read("vaultSimilarityFloor"),
+    resizeDeltaPx: read("resizeDeltaPx"),
+    ragRewardWeight: read("ragRewardWeight"),
+  };
+}
+
+async function loadDetectionThresholdsUi(): Promise<void> {
+  const t = await loadThresholds();
+  applyThresholdsToUi(t);
+}
+
+function wireDetectionThresholds(): void {
+  // Live numeric readout — updates while dragging, before save.
+  (Object.keys(DT_INPUT_IDS) as Array<keyof DetectionThresholds>).forEach((key) => {
+    const input = document.getElementById(DT_INPUT_IDS[key]) as HTMLInputElement | null;
+    if (!input) return;
+    const range = THRESHOLD_RANGES[key];
+    // Defensive: enforce the documented range on the DOM input.
+    input.min = String(range.min);
+    input.max = String(range.max);
+    input.step = String(range.step);
+    input.addEventListener("input", () => {
+      const parsed = parseFloat(input.value);
+      if (Number.isFinite(parsed)) syncThresholdDisplay(key, parsed);
+    });
+  });
+
+  const saveBtn = document.getElementById("dt-save-btn");
+  if (saveBtn) {
+    saveBtn.addEventListener("click", async () => {
+      const next = await saveThresholds(readThresholdsFromUi());
+      applyThresholdsToUi(next); // re-sync after normalisation/clamping
+      showStatus("dt-status", "Thresholds saved.", "ok");
+    });
+  }
+  const resetBtn = document.getElementById("dt-reset-btn");
+  if (resetBtn) {
+    resetBtn.addEventListener("click", async () => {
+      const next = await resetThresholds();
+      applyThresholdsToUi(next);
+      showStatus("dt-status", "Reset to defaults.", "info");
+    });
+  }
+}
+
 // Auto-update filename when doc type changes
 (document.getElementById("rag-doc-type") as HTMLSelectElement).addEventListener("change", (e) => {
   const type = (e.target as HTMLSelectElement).value;
@@ -1051,3 +1192,8 @@ get("save-model-routes").addEventListener("click", saveModelRoutes);
 get("rag-upload-btn").addEventListener("click", uploadRagDocument);
 get("github-save-btn").addEventListener("click", saveGitHubConfig);
 get("github-remove-btn").addEventListener("click", removeGitHubToken);
+loadOfflineQueueStatus();
+get("offline-queue-refresh-btn").addEventListener("click", loadOfflineQueueStatus);
+get("offline-queue-clear-btn").addEventListener("click", clearFailedOfflineQueue);
+wireDetectionThresholds();
+loadDetectionThresholdsUi();

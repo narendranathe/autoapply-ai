@@ -42,7 +42,7 @@ from ._shared import (  # noqa: F401
     _resume_to_dict,
     _retrieval_agent,
 )
-from .answers import _compute_reward, _levenshtein  # noqa: F401
+from .answers import _compute_reward, _levenshtein, _levenshtein_ratio  # noqa: F401
 from .answers import router as answers_router
 from .documents import router as documents_router
 from .generate import (  # noqa: F401

@@ -32,6 +32,9 @@ from app.routers import (
 async def lifespan(app: FastAPI):
     """Application startup and shutdown events."""
     logger.info(f"Starting {settings.APP_NAME} (env={settings.ENVIRONMENT})")
+    # Force re-evaluation of fail-fast config properties at boot so a misconfigured
+    # production deploy crashes here rather than serving the first request.
+    _ = settings.cors_origins
     yield
     logger.info(f"Shutting down {settings.APP_NAME}")
 
@@ -48,6 +51,8 @@ def create_app() -> FastAPI:
         )
         logger.info("Sentry initialized")
 
+    cors_origins = settings.cors_origins
+
     # Create app
     app = FastAPI(
         title=settings.APP_NAME,
@@ -61,7 +66,7 @@ def create_app() -> FastAPI:
     # Middleware
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.cors_origins,
+        allow_origins=cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

@@ -3,10 +3,13 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "vite build --watch",
-    "build": "vite build && node build-content.mjs",
+    "dev": "vite build --watch --mode development",
+    "build": "vite build && node build-content.mjs && node scripts/verify-manifest.mjs",
+    "build:dev": "vite build --mode development && node build-content.mjs",
     "build:content": "node build-content.mjs",
-    "preview": "vite preview"
+    "verify:manifest": "node scripts/verify-manifest.mjs",
+    "preview": "vite preview",
+    "test": "node --test --experimental-strip-types --no-warnings src/**/__tests__/*.test.mjs"
   },
   "dependencies": {
     "@clerk/clerk-js": "^6.3.1",

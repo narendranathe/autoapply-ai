@@ -103,13 +103,15 @@ jobs:
           file: backend/coverage.xml
           flags: backend
 
-  # ── Extension: typecheck + build ──────────────────────────────────────────
+  # ── Extension: typecheck + build + unit tests ─────────────────────────────
   extension:
     name: Extension (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node-version: ["20"]
+        # Node 22 required for `--experimental-strip-types` used by `npm test`
+        # to load .ts modules directly without a separate build step.
+        node-version: ["22"]
 
     steps:
       - uses: actions/checkout@v4
@@ -133,6 +135,10 @@ jobs:
         working-directory: extension
         run: npm run build
 
+      - name: Unit tests
+        working-directory: extension
+        run: npm test
+
       - name: Upload extension artifact
         if: github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v4
@@ -140,6 +146,38 @@ jobs:
           name: extension-dist
           path: extension/dist/
           retention-days: 30
+
+  # ── Dashboard: lint + typecheck + build ───────────────────────────────────
+  dashboard:
+    name: Dashboard (Node 20)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: ESLint
+        # TODO: remove once dashboard lint baseline is clean (see follow-up issue)
+        continue-on-error: true
+        run: npm run lint
+
+      - name: Build dashboard
+        run: npm run build
+        env:
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.VITE_CLERK_PUBLISHABLE_KEY_TEST }}
+          VITE_API_URL: https://autoapply-ai-api.fly.dev/api/v1
 
   # ── Docker build check ────────────────────────────────────────────────────
   docker:

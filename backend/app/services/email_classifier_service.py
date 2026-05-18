@@ -6,7 +6,7 @@ Classifies an email body into one of the 8 application statuses:
 
 Strategy:
   1. Strip HTML from email body
-  2. Try LLM (provider from llm_service.PROVIDERS) — expects JSON response
+  2. Try LLM (provider from llm_gateway.PROVIDERS) — expects JSON response
   3. Fall back to keyword matching if LLM fails or returns invalid JSON
 
 LLM prompt returns JSON: {"status": "...", "confidence": 0.0-1.0, "reasoning": "..."}
@@ -20,7 +20,7 @@ import re
 from loguru import logger
 
 from app.schemas.application import ParseEmailResponse
-from app.services.llm_service import PROVIDERS, InvalidAPIKeyError, RateLimitError
+from app.services.llm_gateway import PROVIDERS, InvalidAPIKeyError, RateLimitError
 
 # ── Valid statuses ────────────────────────────────────────────────────────────
 
@@ -214,6 +214,15 @@ async def classify_email_status(
     )
 
     # Step 3: try LLM
+    #
+    # NOTE (Issue #107 / Phase 2): this call site intentionally keeps the
+    # ``PROVIDERS[provider].complete()`` abstraction rather than going
+    # through ``LLMGateway.generate()``. The provider classes already wrap
+    # their HTTP calls in the in-process ``llm_circuit`` decorator, and
+    # routing through the gateway would require updating every existing
+    # test that patches ``PROVIDERS`` to instead patch the gateway's
+    # internal ``_call_*`` helpers — far more invasive than the value
+    # added here. Tracked as a follow-up for a dedicated migration PR.
     llm_provider = PROVIDERS.get(provider, PROVIDERS.get("fallback"))
     if llm_provider is None:
         logger.warning(f"Unknown LLM provider '{provider}' — using keyword fallback")

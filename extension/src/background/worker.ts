@@ -8,7 +8,13 @@
  * 4. Drain the offline sync queue when connectivity is restored
  */
 
-import type { Message, PageContext } from "../shared/types";
+import type { Message, OfflineEdit, PageContext } from "../shared/types";
+import {
+  OFFLINE_QUEUE_FAILED_KEY,
+  OFFLINE_QUEUE_KEY,
+  processOfflineQueue,
+  resolveDrainEndpoint,
+} from "./offlineQueue";
 
 // Open sidepanel when user clicks the toolbar icon (required for MV3)
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
@@ -405,42 +411,84 @@ self.addEventListener("online", () => {
 });
 
 async function drainOfflineQueue(): Promise<void> {
-  const result = await chrome.storage.local.get("offline_queue");
-  const queue: Array<{
-    id: string;
-    versionTag: string;
-    markdownContent: string;
-    timestamp: number;
-    synced: boolean;
-  }> = result.offline_queue || [];
+  // Read the queue + the configured API base ONCE per drain (not per fetch —
+  // every entry in this batch hits the same endpoint). We deliberately do NOT
+  // read OFFLINE_QUEUE_FAILED_KEY here — see below for the race-narrowing
+  // rationale.
+  const stored = await chrome.storage.local.get([OFFLINE_QUEUE_KEY, "apiBaseUrl"]);
+  const queue: OfflineEdit[] = stored[OFFLINE_QUEUE_KEY] || [];
 
   const pending = queue.filter((e) => !e.synced);
   if (pending.length === 0) return;
 
-  console.log(`[AutoApply] Draining ${pending.length} offline edits...`);
+  // Vite replaces import.meta.env.DEV at build time → true for `vite build
+  // --mode development`, false for production builds. In a Chrome MV3 service
+  // worker this constant survives the bundle as a plain boolean.
+  const isDev = Boolean((import.meta as { env?: { DEV?: boolean } }).env?.DEV);
+  const resolved = resolveDrainEndpoint(stored.apiBaseUrl as string | undefined, isDev);
 
-  for (const entry of pending) {
-    try {
-      const fd = new FormData();
-      fd.append("version_tag", entry.versionTag);
-      fd.append("markdown_content", entry.markdownContent);
-      fd.append("timestamp", String(entry.timestamp));
-
-      const resp = await fetch("http://localhost:8000/api/v1/vault/sync-markdown", {
-        method: "POST",
-        body: fd,
-      });
-
-      if (resp.ok) {
-        entry.synced = true;
-        console.log(`[AutoApply] Synced edit for ${entry.versionTag}`);
-      }
-    } catch {
-      // Stay pending — will retry on next online event
-    }
+  if (!resolved.ok) {
+    // Production build with no apiBaseUrl configured. Skipping the drain is
+    // the SAFE choice — we'd previously default to localhost, silently
+    // dropping every queued edit. The queue is left untouched so a future
+    // drain (after the user configures the API URL in options) can succeed.
+    console.error(
+      "[AutoApply] Skipping offline drain: no apiBaseUrl configured in production. " +
+        `Preserving ${pending.length} pending edit(s) for retry once the API URL is set.`,
+    );
+    return;
   }
 
-  await chrome.storage.local.set({ offline_queue: queue });
+  if (resolved.usedFallback) {
+    console.warn(
+      `[AutoApply] No apiBaseUrl configured; using dev localhost fallback for ${pending.length} edit(s).`,
+    );
+  }
+
+  // Build auth headers ONCE per drain. /vault/sync-markdown is guarded by
+  // get_current_user on the backend, so an unauthenticated POST returns 401
+  // and the drain would dead-letter every edit (issue #91 round-2 P1).
+  // We use the same JWT/X-Clerk-User-Id helper every other authenticated
+  // worker fetch uses, so token refresh & dev-mode fallback behave identically.
+  const authHdrs = await workerBuildAuthHeaders();
+  if (Object.keys(authHdrs).length === 0) {
+    console.warn(
+      `[AutoApply] Skipping offline drain: no auth credentials available. ` +
+        `Preserving ${pending.length} pending edit(s) for retry once the user signs in.`,
+    );
+    return;
+  }
+
+  console.log(`[AutoApply] Draining ${pending.length} offline edits...`);
+
+  const { active, newlyDeadLettered, syncedCount } = await processOfflineQueue(
+    queue,
+    fetch,
+    resolved.endpoint,
+    authHdrs,
+  );
+
+  if (syncedCount > 0) {
+    console.log(`[AutoApply] Synced ${syncedCount} offline edit(s).`);
+  }
+  if (newlyDeadLettered.length > 0) {
+    console.warn(
+      `[AutoApply] Dead-lettered ${newlyDeadLettered.length} offline edit(s) after ${
+        newlyDeadLettered[0]?.failureCount ?? 0
+      } retries.`,
+    );
+  }
+
+  // Narrow the race window with the Clear-Failed-Queue button: re-read the
+  // current dead-letter list IMMEDIATELY before the final write, so that if
+  // the user clicked Clear during our async drain we only re-add what's new.
+  const updates: Record<string, unknown> = { [OFFLINE_QUEUE_KEY]: active };
+  if (newlyDeadLettered.length > 0) {
+    const fresh = await chrome.storage.local.get([OFFLINE_QUEUE_FAILED_KEY]);
+    const existingFailed: OfflineEdit[] = fresh[OFFLINE_QUEUE_FAILED_KEY] || [];
+    updates[OFFLINE_QUEUE_FAILED_KEY] = [...existingFailed, ...newlyDeadLettered];
+  }
+  await chrome.storage.local.set(updates);
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────

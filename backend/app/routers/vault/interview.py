@@ -12,13 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.dependencies import get_current_user, get_db
 from app.models.user import User
 from app.models.work_history import WorkHistoryEntry
-from app.services.resume_generator import (
-    _call_anthropic,
-    _call_gemini,
-    _call_groq,
-    _call_kimi,
-    _call_openai,
-)
+from app.services.llm_gateway import LLMGateway
 
 router = APIRouter()
 
@@ -95,26 +89,22 @@ Generate 10 interview questions + suggested answers as described."""
     questions: list[dict] = []
 
     if providers_list:
+        # Issue #107 — route every provider through LLMGateway (uniform
+        # circuit-breaker, metrics, and cascade behaviour).
+        gateway = LLMGateway()
         for prov in providers_list:
             name = prov.get("name", "")
             api_key = prov.get("api_key", "")
-            model = prov.get("model", "")
+            if not name or not api_key:
+                continue
             try:
-                if name == "anthropic":
-                    raw = await _call_anthropic(_INTERVIEW_SYSTEM, user_prompt, api_key)
-                elif name == "openai":
-                    raw = await _call_openai(_INTERVIEW_SYSTEM, user_prompt, api_key)
-                elif name == "groq":
-                    raw = await _call_groq(
-                        _INTERVIEW_SYSTEM, user_prompt, api_key, model or "llama-3.3-70b-versatile"
-                    )
-                elif name == "gemini":
-                    raw = await _call_gemini(
-                        _INTERVIEW_SYSTEM, user_prompt, api_key, model or "gemini-1.5-flash"
-                    )
-                elif name == "kimi":
-                    raw = await _call_kimi(_INTERVIEW_SYSTEM, user_prompt, api_key)
-                else:
+                raw, _provider_used = await gateway.generate(
+                    system_prompt=_INTERVIEW_SYSTEM,
+                    user_prompt=user_prompt,
+                    provider=name,
+                    api_key=api_key,
+                )
+                if not raw:
                     continue
                 parsed = _json.loads(raw.strip())
                 if isinstance(parsed, list) and len(parsed) > 0:

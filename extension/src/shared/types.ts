@@ -101,6 +101,24 @@ export type Message =
   | { type: "EMAIL_STATUS_DETECTED"; payload: Array<{ subject: string; sender: string; status: string; company: string; confidence: number }> }
   | { type: "JOB_PAGE_DETECTED"; context: PageContext };
 
+/**
+ * Tunable detection thresholds (Strategy C) exposed via the Options page.
+ *
+ * All four values were previously hardcoded inline at their call sites — see
+ * `shared/detection-thresholds.ts` for the defaults and the load/save helpers
+ * that read/write them from `chrome.storage.local["detectionThresholds"]`.
+ */
+export interface DetectionThresholds {
+  /** Minimum ATS Score (0–1) to trigger the autofill banner. */
+  atsAutofillMin: number;
+  /** Minimum cosine similarity (0–1) to surface a Vault recall as a draft. */
+  vaultSimilarityFloor: number;
+  /** Minimum pixel delta in the SPAResizeObserver before redetect fires. */
+  resizeDeltaPx: number;
+  /** Weight (0–1) on RAG/similarity signal in answer ranking; RL weight = 1 − this. */
+  ragRewardWeight: number;
+}
+
 // Offline sync queue entry
 export interface OfflineEdit {
   id: string;
@@ -108,4 +126,6 @@ export interface OfflineEdit {
   markdownContent: string;
   timestamp: number;
   synced: boolean;
+  failureCount?: number;
+  lastError?: string;
 }

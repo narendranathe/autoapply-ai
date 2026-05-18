@@ -45,13 +45,13 @@ async def get_user_providers(
         [{"name": "anthropic", "api_key": "<decrypted>", "model": "<override|default>"}]
 
     Providers are sorted by their name so the order is deterministic.
-    Only enabled rows with a non-empty encrypted key are included.
+    A provider is considered enabled iff its ``encrypted_api_key`` is non-empty.
     """
     stmt = (
         select(UserProviderConfig)
         .where(
             UserProviderConfig.user_id == user.id,
-            UserProviderConfig.is_enabled.is_(True),
+            UserProviderConfig.encrypted_api_key != "",
         )
         .order_by(UserProviderConfig.provider_name)
     )
@@ -146,7 +146,7 @@ async def get_provider_configs(
             provider_name=row.provider_name,
             has_key=bool(row.encrypted_api_key),
             model_override=row.model_override,
-            is_enabled=row.is_enabled,
+            is_enabled=bool(row.encrypted_api_key),
         )
         for row in rows
     ]
@@ -193,13 +193,11 @@ async def upsert_provider_config(
             provider_name=provider_name,
             encrypted_api_key=encrypted_key,
             model_override=payload.model_override,
-            is_enabled=payload.is_enabled,
         )
         db.add(row)
     else:
         row.encrypted_api_key = encrypted_key
         row.model_override = payload.model_override
-        row.is_enabled = payload.is_enabled
 
     await db.commit()
     await db.refresh(row)
@@ -208,5 +206,5 @@ async def upsert_provider_config(
         provider_name=row.provider_name,
         has_key=bool(row.encrypted_api_key),
         model_override=row.model_override,
-        is_enabled=row.is_enabled,
+        is_enabled=bool(row.encrypted_api_key),
     )
