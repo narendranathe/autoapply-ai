@@ -171,15 +171,21 @@
              verified success is the local key stripped.
 
              P1-G (#198 round 2): the banner is a screen-reader live region.
-             ``role=alert`` + ``aria-live=assertive`` so the count text is
-             announced when the banner appears or its message changes
-             (e.g. after a partial-success migration). The status line
-             below the button uses ``role=status`` + ``aria-live=polite``
-             — non-interrupting announcements while the loop runs. -->
+             P2-B (#198 round 3): downgraded from ``role=alert`` /
+             ``aria-live=assertive`` to ``role=status`` /
+             ``aria-live=polite``. During a 6-provider migration the
+             banner text refreshes after each provider completes; with
+             ``assertive`` that produced 6 interruptions of the user's
+             screen-reader output. ``polite`` queues the announcements
+             instead of preempting, which matches the semantics of a
+             progress indicator (the banner is informational, not a
+             time-critical alert). The status line below the button is
+             already ``role=status`` / ``aria-live=polite`` for the
+             same reason. -->
         <div
           id="provider-migrate-banner"
-          role="alert"
-          aria-live="assertive"
+          role="status"
+          aria-live="polite"
           aria-atomic="true"
           style="display:none;background:#332b00;border:1px solid #b45309;border-radius:8px;padding:10px 12px;margin-bottom:14px;color:#fde68a;font-size:13px;"
         >

@@ -1,5 +1,6 @@
 /**
- * Tests for the migration-banner accessibility markup (P1-G, #198 round 2).
+ * Tests for the migration-banner accessibility markup (P1-G, #198
+ * round 2; P2-B, #198 round 3).
  *
  * Screen-reader announcements
  * ---------------------------
@@ -8,15 +9,20 @@
  * without the user having to navigate to it. Two ARIA contracts back
  * that up:
  *
- *   - Banner container: ``role="alert"`` (assertive announcement of
- *     the count + provider list when it first appears) +
- *     ``aria-live="assertive"`` + ``aria-atomic="true"`` so the entire
- *     message is re-announced when it updates.
+ *   - Banner container: ``role="status"`` + ``aria-live="polite"`` +
+ *     ``aria-atomic="true"`` so the entire message is queued and
+ *     re-announced when it updates without interrupting the user.
+ *
+ *     Round 2 used ``role=alert`` + ``aria-live=assertive`` which
+ *     produced 6 interruptions during a 6-provider migration (banner
+ *     text refreshes after each provider completes). Round 3
+ *     downgrades to ``polite`` — the banner is informational, not a
+ *     time-critical alert, so progress-style announcements should
+ *     queue, not preempt.
  *
  *   - Status line below the button: ``role="status"`` +
- *     ``aria-live="polite"`` so per-step migration progress (e.g.
- *     "Migrated anthropic, openai") doesn't interrupt the user
- *     mid-keystroke.
+ *     ``aria-live="polite"`` (unchanged) so per-step migration
+ *     progress doesn't interrupt the user mid-keystroke.
  *
  * These tests scan the static HTML for those attributes.
  */
@@ -44,16 +50,22 @@ function extractElementById(html, id) {
   return html.slice(tagStart, tagEnd + 1);
 }
 
-test("P1-G: banner has role=alert", () => {
+test("P2-B: banner has role=status (non-interruptive)", () => {
   const tag = extractElementById(html, "provider-migrate-banner");
   assert.ok(tag, "banner element must exist");
-  assert.match(tag, /role="alert"/);
+  assert.match(tag, /role="status"/);
+  // Regression: must not be ``role=alert``. ``alert`` is assertive by
+  // default and would interrupt the user once per banner refresh.
+  assert.doesNotMatch(tag, /role="alert"/);
 });
 
-test("P1-G: banner has aria-live=assertive", () => {
+test("P2-B: banner has aria-live=polite (queues, does not preempt)", () => {
   const tag = extractElementById(html, "provider-migrate-banner");
   assert.ok(tag);
-  assert.match(tag, /aria-live="assertive"/);
+  assert.match(tag, /aria-live="polite"/);
+  // Regression: must not be ``aria-live=assertive`` — that produced
+  // 6 interruptions during a 6-provider migration.
+  assert.doesNotMatch(tag, /aria-live="assertive"/);
 });
 
 test("P1-G: banner has aria-atomic=true so updates re-announce", () => {
