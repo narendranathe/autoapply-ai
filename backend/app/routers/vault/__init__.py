@@ -18,6 +18,9 @@ Sub-modules (route order matters — FastAPI first-match wins):
   github    — github/versions
   documents — documents/upload-md, documents, documents/{filename}, documents/retrieve
   interview — interview-prep
+  stories   — stories, stories/match, stories/import, stories/{story_id}
+  offer     — offer/evaluate
+  portal    — portal/scan
 """
 
 from fastapi import APIRouter
@@ -56,6 +59,8 @@ from .generate import router as generate_router
 from .github import router as github_router
 from .history import router as history_router
 from .interview import router as interview_router
+from .offer import router as offer_router
+from .portal import router as portal_router
 from .resumes import (  # noqa: F401
     delete_resume,
     download_resume_file,
@@ -70,6 +75,7 @@ from .resumes import router as resumes_router
 # Re-export endpoint functions so tests can import them directly from app.routers.vault
 from .retrieve import _single_retrieve, ats_score, batch_retrieve, retrieve_resumes  # noqa: F401
 from .retrieve import router as retrieve_router
+from .stories import router as stories_router
 
 router = APIRouter()
 router.include_router(resumes_router)
@@ -80,5 +86,8 @@ router.include_router(history_router)
 router.include_router(github_router)
 router.include_router(documents_router)
 router.include_router(interview_router)
+router.include_router(stories_router)
+router.include_router(offer_router)
+router.include_router(portal_router)
 
 __all__ = ["router"]

@@ -108,3 +108,4 @@ class CircuitBreaker:
 github_circuit = CircuitBreaker(name="github_api", failure_threshold=3, recovery_timeout=60)
 llm_circuit = CircuitBreaker(name="llm_provider", failure_threshold=2, recovery_timeout=30)
 pdf_circuit = CircuitBreaker(name="pdf_service", failure_threshold=3, recovery_timeout=120)
+portal_circuit = CircuitBreaker(name="portal_scanner", failure_threshold=3, recovery_timeout=120)

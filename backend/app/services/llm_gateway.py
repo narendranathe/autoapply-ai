@@ -192,7 +192,15 @@ class LLMProvider(ABC):
 # separate symbol used by ``tailor_resume`` through the provider registry.
 
 
-async def _call_anthropic(system: str, user: str, api_key: str) -> str:
+async def _call_anthropic(
+    system: str, user: str, api_key: str, model: str = "claude-sonnet-4-6"
+) -> str:
+    """Call Anthropic Messages API.
+
+    PR #150 — added optional ``model`` parameter so callers like
+    ``offer_scoring_service`` can route to claude-haiku for cost efficiency
+    without breaking existing callers.
+    """
     async with httpx.AsyncClient(timeout=120.0) as client:
         response = await client.post(
             "https://api.anthropic.com/v1/messages",
@@ -202,7 +210,7 @@ async def _call_anthropic(system: str, user: str, api_key: str) -> str:
                 "content-type": "application/json",
             },
             json={
-                "model": "claude-sonnet-4-6",
+                "model": model,
                 "max_tokens": 4096,
                 "system": system,
                 "messages": [{"role": "user", "content": user}],

@@ -2128,6 +2128,25 @@ pytest = ">=6.2.5"
 testing = ["fields", "hunter", "process-tests", "pytest-xdist", "virtualenv"]
 
 [[package]]
+name = "pytest-httpx"
+version = "0.35.0"
+description = "Send responses to httpx."
+optional = false
+python-versions = ">=3.9"
+groups = ["dev"]
+files = [
+    {file = "pytest_httpx-0.35.0-py3-none-any.whl", hash = "sha256:ee11a00ffcea94a5cbff47af2114d34c5b231c326902458deed73f9c459fd744"},
+    {file = "pytest_httpx-0.35.0.tar.gz", hash = "sha256:d619ad5d2e67734abfbb224c3d9025d64795d4b8711116b1a13f72a251ae511f"},
+]
+
+[package.dependencies]
+httpx = "==0.28.*"
+pytest = "==8.*"
+
+[package.extras]
+testing = ["pytest-asyncio (==0.24.*)", "pytest-cov (==6.*)"]
+
+[[package]]
 name = "python-dateutil"
 version = "2.9.0.post0"
 description = "Extensions to the standard Python datetime module"
@@ -3307,4 +3326,4 @@ pinecone = ["pinecone-client"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.12"
-content-hash = "28caeb7e010839d158f57ff839ec772fd13d2c82b12102925712221469d00395"
+content-hash = "9010e25b78e060b93676f7a8aaffe20601ec64113b7a6581b5b6323f4ac5e9c8"

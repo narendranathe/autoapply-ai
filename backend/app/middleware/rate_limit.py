@@ -31,6 +31,10 @@ _LLM_PATHS = {
     "/api/v1/vault/generate/answers/trim",
     "/api/v1/vault/interview-prep",
     "/api/v1/work-history/import-from-resume",
+    "/api/v1/vault/offer/evaluate",
+    "/api/v1/vault/offer/negotiate",
+    "/api/v1/vault/stories/match",
+    "/api/v1/vault/portal/scan",
 }
 _LLM_RPM = 10  # 10 LLM calls per minute per user
 
